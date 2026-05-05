@@ -5,9 +5,11 @@
 //! and skip the `oxideav-core` dependency entirely.
 //!
 //! The module exposes:
-//! * [`register`] / [`register_codecs`] — the `CodecRegistry` entry
-//!   point the umbrella `oxideav` crate calls during framework
-//!   initialisation.
+//! * [`register`] — the unified `RuntimeContext` entry point the
+//!   umbrella `oxideav` crate calls during framework initialisation.
+//!   Internally calls [`register_codecs`] and [`register_containers`].
+//! * [`register_codecs`] — registers the DDS codec (decoder + encoder)
+//!   into a [`CodecRegistry`].
 //! * [`register_containers`] — registers the `.dds` file extension
 //!   into the [`oxideav_core::ContainerRegistry`] so CLI tools can
 //!   resolve `.dds` outputs by extension. The actual demuxer / muxer
@@ -27,7 +29,8 @@ use std::collections::VecDeque;
 use oxideav_core::frame::VideoPlane;
 use oxideav_core::{
     CodecCapabilities, CodecId, CodecInfo, CodecParameters, CodecRegistry, ContainerRegistry,
-    Decoder, Encoder, Error, Frame, MediaType, Packet, PixelFormat, Result, TimeBase, VideoFrame,
+    Decoder, Encoder, Error, Frame, MediaType, Packet, PixelFormat, Result, RuntimeContext,
+    TimeBase, VideoFrame,
 };
 
 use crate::decoder::{make_decoder, parse_dds};
@@ -106,13 +109,6 @@ pub fn register_codecs(reg: &mut CodecRegistry) {
     );
 }
 
-/// Backward-compatible shim. Every other crate's umbrella registration
-/// uses `register(&mut CodecRegistry)`; mirror that here so the
-/// umbrella `oxideav` crate can call us by the same name.
-pub fn register(reg: &mut CodecRegistry) {
-    register_codecs(reg);
-}
-
 // ---- ContainerRegistry entry points -----------------------------------
 
 /// Register the `.dds` file extension into the supplied
@@ -126,6 +122,13 @@ pub fn register(reg: &mut CodecRegistry) {
 /// directly. Round 2 will add the still-image container demuxer/muxer.
 pub fn register_containers(reg: &mut ContainerRegistry) {
     reg.register_extension("dds", "dds");
+}
+
+/// Unified entry point: install every codec and container provided by
+/// `oxideav-dds` into a [`RuntimeContext`].
+pub fn register(ctx: &mut RuntimeContext) {
+    register_codecs(&mut ctx.codecs);
+    register_containers(&mut ctx.containers);
 }
 
 // ---- Decoder trait impl ------------------------------------------------
@@ -294,5 +297,20 @@ mod tests {
 
         // Unrelated extensions still miss.
         assert_eq!(reg.container_for_extension("png"), None);
+    }
+
+    #[test]
+    fn register_via_runtime_context_installs_factories() {
+        let mut ctx = RuntimeContext::new();
+        register(&mut ctx);
+        assert!(
+            ctx.codecs.decoder_ids().next().is_some(),
+            "register(ctx) should install codec decoder factories"
+        );
+        assert_eq!(
+            ctx.containers.container_for_extension("dds"),
+            Some("dds"),
+            "register(ctx) should install .dds extension hint"
+        );
     }
 }
