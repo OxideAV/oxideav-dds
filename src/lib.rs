@@ -89,4 +89,4 @@ pub use types::{
 };
 
 #[cfg(feature = "registry")]
-pub use registry::{register, register_codecs};
+pub use registry::{register, register_codecs, register_containers};

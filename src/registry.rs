@@ -7,8 +7,13 @@
 //! The module exposes:
 //! * [`register`] / [`register_codecs`] — the `CodecRegistry` entry
 //!   point the umbrella `oxideav` crate calls during framework
-//!   initialisation. There is no [`ContainerRegistry`] entry yet —
-//!   round 2 will add a `.dds` still-image container.
+//!   initialisation.
+//! * [`register_containers`] — registers the `.dds` file extension
+//!   into the [`oxideav_core::ContainerRegistry`] so CLI tools can
+//!   resolve `.dds` outputs by extension. The actual demuxer / muxer
+//!   for the `.dds` still-image container lands in round 2; the
+//!   extension entry alone is enough for `cli-convert` to pick the
+//!   right codec name from the central registry.
 //! * The `From<DdsError> for oxideav_core::Error` conversion that lets
 //!   the trait-side `Decoder` / `Encoder` impls bubble bitstream
 //!   errors up through the framework error type.
@@ -21,8 +26,8 @@ use std::collections::VecDeque;
 
 use oxideav_core::frame::VideoPlane;
 use oxideav_core::{
-    CodecCapabilities, CodecId, CodecInfo, CodecParameters, CodecRegistry, Decoder, Encoder, Error,
-    Frame, MediaType, Packet, PixelFormat, Result, TimeBase, VideoFrame,
+    CodecCapabilities, CodecId, CodecInfo, CodecParameters, CodecRegistry, ContainerRegistry,
+    Decoder, Encoder, Error, Frame, MediaType, Packet, PixelFormat, Result, TimeBase, VideoFrame,
 };
 
 use crate::decoder::{make_decoder, parse_dds};
@@ -106,6 +111,21 @@ pub fn register_codecs(reg: &mut CodecRegistry) {
 /// umbrella `oxideav` crate can call us by the same name.
 pub fn register(reg: &mut CodecRegistry) {
     register_codecs(reg);
+}
+
+// ---- ContainerRegistry entry points -----------------------------------
+
+/// Register the `.dds` file extension into the supplied
+/// [`ContainerRegistry`] so CLI tools (and any caller using
+/// [`ContainerRegistry::container_for_extension`]) can resolve a
+/// `.dds` output path to the `dds` codec name.
+///
+/// No demuxer or muxer is registered here — round 1 surfaces only the
+/// codec, and consumers that want a one-frame-per-file `.dds` stream
+/// drive [`crate::parse_dds`] / [`crate::encode_dds_uncompressed`]
+/// directly. Round 2 will add the still-image container demuxer/muxer.
+pub fn register_containers(reg: &mut ContainerRegistry) {
+    reg.register_extension("dds", "dds");
 }
 
 // ---- Decoder trait impl ------------------------------------------------
@@ -251,5 +271,28 @@ impl Encoder for DdsEncoder {
     fn flush(&mut self) -> Result<()> {
         self.eof = true;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn register_containers_resolves_dds_extension_case_insensitive() {
+        let mut reg = ContainerRegistry::new();
+        register_containers(&mut reg);
+
+        // Canonical lowercase lookup resolves to the codec name.
+        assert_eq!(reg.container_for_extension("dds"), Some("dds"));
+
+        // Lookups are case-insensitive — uppercase + mixed case both
+        // resolve via the lowercase-keyed extension table.
+        assert_eq!(reg.container_for_extension("DDS"), Some("dds"));
+        assert_eq!(reg.container_for_extension("Dds"), Some("dds"));
+        assert_eq!(reg.container_for_extension("dDs"), Some("dds"));
+
+        // Unrelated extensions still miss.
+        assert_eq!(reg.container_for_extension("png"), None);
     }
 }
