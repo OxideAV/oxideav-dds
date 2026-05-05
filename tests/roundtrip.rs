@@ -156,8 +156,8 @@ fn roundtrip_one_pixel() {
 /// pointing at `four_cc`, an arbitrary-but-well-formed surface size,
 /// and `block_payload` bytes for the pixel data.
 fn build_fourcc_dds(four_cc: u32, w: u32, h: u32, block_bytes: u32) -> Vec<u8> {
-    let bw = (w + 3) / 4;
-    let bh = (h + 3) / 4;
+    let bw = w.div_ceil(4);
+    let bh = h.div_ceil(4);
     let surface = (bw * bh * block_bytes) as usize;
     let payload: Vec<u8> = (0..surface).map(|i| (i & 0xff) as u8).collect();
 
