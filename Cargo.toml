@@ -1,0 +1,32 @@
+[package]
+name = "oxideav-dds"
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT"
+repository = "https://github.com/OxideAV/oxideav-dds"
+homepage = "https://github.com/OxideAV/oxideav-dds"
+authors = ["Mark Karpeles"]
+description = "Pure-Rust DDS (DirectDraw Surface) reader/writer for oxideav — uncompressed RGBA/RGB/luminance roundtrip plus block-compressed (DXT1/3/5, BC4/5/6H/7) pass-through"
+readme = "README.md"
+keywords = ["multimedia", "image", "dds", "texture", "pure-rust"]
+categories = ["multimedia::encoding", "multimedia::images"]
+
+[dependencies]
+# `oxideav-core` is gated behind the default-on `registry` feature so
+# image-library consumers can depend on `oxideav-dds` with
+# `default-features = false` and avoid the framework dependency tree
+# entirely. Without `registry` the crate exposes the standalone
+# `parse_dds` / `encode_dds_uncompressed` API plus crate-local
+# `DdsImage` / `DdsError` / `DdsPixelFormat` types and never references
+# `oxideav-core`.
+oxideav-core = { version = "0.1", optional = true }
+
+[features]
+default = ["registry"]
+
+# Wires up the codec / encoder / decoder trait implementations against
+# `oxideav-core` so the crate can plug into the `oxideav` framework
+# registry. Default-on; turn off for image-library use-cases that just
+# want the standalone `parse_dds` API.
+registry = ["dep:oxideav-core"]
