@@ -126,10 +126,17 @@ pub fn register_containers(reg: &mut ContainerRegistry) {
 
 /// Unified entry point: install every codec and container provided by
 /// `oxideav-dds` into a [`RuntimeContext`].
+///
+/// Also auto-registered into [`oxideav_core::REGISTRARS`] via the
+/// [`oxideav_core::register!`] macro below so consumers calling
+/// [`oxideav_core::RuntimeContext::with_all_features`] pick DDS up
+/// without any explicit umbrella plumbing.
 pub fn register(ctx: &mut RuntimeContext) {
     register_codecs(&mut ctx.codecs);
     register_containers(&mut ctx.containers);
 }
+
+oxideav_core::register!("dds", register);
 
 // ---- Decoder trait impl ------------------------------------------------
 
