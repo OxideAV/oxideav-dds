@@ -14,7 +14,7 @@
 //! `four_cc == "DX10"`), and the raw pixel array (or block-compressed
 //! block array) for one or more mip levels.
 //!
-//! Coverage as of round 2:
+//! Coverage as of round 3:
 //!
 //! * Header parsing — magic + `DDS_HEADER` (124 bytes) + optional
 //!   `DDS_HEADER_DXT10` (20 bytes).
@@ -25,10 +25,13 @@
 //! * Block-compressed pass-through — recognises BC1..BC7 from the
 //!   legacy four-cc or the DX10 `dxgi_format` and exposes the raw
 //!   block bytes through `DdsImage::planes` / `DdsImage::surfaces`.
-//! * **BC1..BC5 decompression** to RGBA8 / R8 / RG8 via
+//! * **BC1..BC5 + BC7 decompression** to RGBA8 / R8 / RG8 via
 //!   [`decode_bc1`], [`decode_bc2`], [`decode_bc3`],
 //!   [`decode_bc4_unorm`], [`decode_bc4_snorm`], [`decode_bc5_unorm`],
-//!   and [`decode_bc5_snorm`].
+//!   [`decode_bc5_snorm`], and [`decode_bc7`].
+//! * **BC1 (DXT1) encoder** via [`encode_bc1`] — compresses an RGBA8
+//!   surface into 8-byte / 4×4-block BC1 with a furthest-point
+//!   endpoint heuristic.
 //! * **Mipmap chain + cubemap faces + DX10 texture arrays** — every
 //!   on-disk surface is parsed into [`DdsImage::surfaces`] in
 //!   Microsoft's mandated order (array slice → face → mip).
@@ -36,16 +39,20 @@
 //!   (1..=132) is enumerated in [`DxgiFormat`] for lossless
 //!   round-trip; consumers can drop unsupported variants without
 //!   losing the original integer code.
+//! * **`.dds` still-image container demuxer + muxer** (round-3 lift
+//!   over the round-2 extension-only registration). The framework
+//!   `ContainerRegistry` now carries probe + demuxer + muxer entries
+//!   for `.dds` so CLI tools can read / write DDS files end-to-end
+//!   through the pipeline.
 //!
 //! Still deferred (followups):
 //!
-//! * BC6H + BC7 decompression to RGBA — recognised pass-through,
-//!   not decompressed yet (these require multi-mode partition tables
-//!   too large to land alongside BC1..BC5).
-//! * Encoding side stays uncompressed-only; emitting BCn-compressed
-//!   surfaces requires an encoder, not a decoder.
-//! * The `.dds` still-image container demuxer / muxer (probe by
-//!   magic, expose as a single-frame stream).
+//! * BC6H decompression to RGBA half-float — recognised pass-through,
+//!   not decompressed yet. The 14-mode bit-interleaved layout (with a
+//!   separate signed vs unsigned float-endpoint promotion path) needs
+//!   a per-mode bit-table that doesn't fit alongside the BC7 work.
+//! * BC2/BC3/BC4/BC5/BC7 encoders — only BC1 ships in round 3.
+//! * Mipmap-chain emission from the encoder (still single-level).
 //!
 //! ## Standalone vs registry-integrated
 //!
@@ -69,7 +76,11 @@
 //! `texconv`) are used only as black-box validators when generating
 //! test fixtures, not as a source of constants or layout.
 
+pub mod bc7;
 pub mod bcn;
+pub mod bcn_enc;
+#[cfg(feature = "registry")]
+pub mod container;
 pub mod decoder;
 pub mod encoder;
 pub mod error;
@@ -82,10 +93,12 @@ pub mod registry;
 /// Codec id for DDS image frames.
 pub const CODEC_ID_STR: &str = "dds";
 
+pub use bc7::decode_bc7;
 pub use bcn::{
     decode_bc1, decode_bc2, decode_bc3, decode_bc4_snorm, decode_bc4_unorm, decode_bc5_snorm,
     decode_bc5_unorm,
 };
+pub use bcn_enc::encode_bc1;
 pub use decoder::parse_dds;
 pub use encoder::encode_dds_uncompressed;
 pub use error::{DdsError, Result};

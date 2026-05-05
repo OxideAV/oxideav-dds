@@ -9,16 +9,28 @@ single-format codec crates.
 
 ## Status
 
-Coverage as of round 2:
+Coverage as of round 3:
 
 - `DDS_HEADER` (124 bytes) + optional `DDS_HEADER_DXT10` (20 bytes) parser.
 - Bit-exact round-trip of every common uncompressed surface layout:
   A8R8G8B8, X8R8G8B8, A8B8G8R8 (DXGI `R8G8B8A8_UNORM`), R5G6B5,
   A1R5G5B5, A4R4G4B4, R8G8B8, A8L8, L8, A8.
-- **BC1..BC5 decompression** to RGBA8 / R8 / RG8 via `decode_bc1`,
-  `decode_bc2`, `decode_bc3`, `decode_bc4_unorm`, `decode_bc4_snorm`,
-  `decode_bc5_unorm`, `decode_bc5_snorm`. Cross-validated against
-  ImageMagick's DXT1 decoder.
+- **BC1..BC5 + BC7 decompression** to RGBA8 / R8 / RG8 via
+  `decode_bc1`, `decode_bc2`, `decode_bc3`, `decode_bc4_unorm`,
+  `decode_bc4_snorm`, `decode_bc5_unorm`, `decode_bc5_snorm`,
+  `decode_bc7`. BC7 covers all 8 modes (single-, dual- and
+  three-subset partitions, p-bits, channel rotation, secondary
+  alpha index plane).
+- **BC1 encoder.** New `encode_bc1` entry point compresses an RGBA8
+  surface to BC1 (DXT1) using a furthest-point endpoint heuristic
+  (no PCA / cluster fit / refinement — bit-exact roundtrip on solid
+  blocks, "good enough" on photographic content). Honours
+  punchthrough alpha when requested.
+- **`.dds` container demuxer + muxer.** Round-3 lift over the
+  round-2 extension-only entry: the framework-side `ContainerRegistry`
+  now installs probe + demuxer + muxer + extension table entries via
+  `register_containers`, so CLI tools (such as `cli-convert`) can
+  open / write `.dds` files without touching the codec API directly.
 - **Mipmap chain + cubemap faces + DX10 texture arrays.** Every
   on-disk surface is parsed into `DdsImage::surfaces` in Microsoft's
   mandated order (array slice → face → mip), tagged with
@@ -30,23 +42,25 @@ Coverage as of round 2:
   palette formats are recognised but produce
   `DdsError::Unsupported` from the layout resolver.
 - Block-compressed pass-through. BC1..BC7 raw block bytes are
-  surfaced through `DdsImage::surfaces[i].plane.data`; BC1..BC5 also
-  decompress to RGBA / R / RG via the dedicated `decode_bc*` entry
-  points.
+  surfaced through `DdsImage::surfaces[i].plane.data`; BC1..BC5 +
+  BC7 also decompress to RGBA / R / RG via the dedicated `decode_bc*`
+  entry points.
 - Standalone-friendly via the default-on `registry` Cargo feature.
   Disable it (`default-features = false`) to drop the `oxideav-core`
   dependency tree entirely; the crate then exposes only the
-  framework-free `parse_dds` / `encode_dds_uncompressed` API plus
-  crate-local `DdsImage` / `DdsPixelFormat` / `DdsError` types built
-  on `std`.
+  framework-free `parse_dds` / `encode_dds_uncompressed` /
+  `decode_bc1..bc5,bc7` / `encode_bc1` API plus crate-local
+  `DdsImage` / `DdsPixelFormat` / `DdsError` types built on `std`.
 
 Still deferred (followups):
 
-- BC6H + BC7 decompression to RGBA — recognised pass-through, not
-  decompressed yet (multi-mode partition tables too large to land
-  alongside BC1..BC5).
-- BCn-encoder side — the encoder stays uncompressed-only.
-- The `.dds` still-image container demuxer / muxer.
+- BC6H decompression — recognised pass-through, not decompressed
+  yet. The 14-mode bit-interleaved layout (with a separate signed
+  vs unsigned float-endpoint promotion path) needs a per-mode
+  bit-table that doesn't fit alongside the BC1..BC5 + BC7 work.
+- BC2/BC3/BC4/BC5/BC7 encoders — only BC1 ships in round 3.
+- Mipmap-chain emission from the encoder (still a single-level
+  surface).
 
 ## Quickstart
 
@@ -83,17 +97,36 @@ std::fs::write("output.dds", out).unwrap();
 For block-compressed input the same `parse_dds` returns an image whose
 `pixel_format` is one of the `Bc*` variants and whose
 `surfaces[i].plane.data` holds the raw 4x4-block byte array. For
-BC1..BC5 you can call the matching `decode_bc*` helper to expand it
-into RGBA8 / R8 / RG8:
+BC1..BC5 + BC7 you can call the matching `decode_bc*` helper to expand
+it into RGBA8 / R8 / RG8:
 
 ```rust
-use oxideav_dds::{decode_bc1, parse_dds};
+use oxideav_dds::{decode_bc1, decode_bc7, parse_dds, DdsPixelFormat};
 
 let dds = std::fs::read("texture.dds").unwrap();
 let img = parse_dds(&dds).unwrap();
 let mut rgba = vec![0u8; (img.width * img.height * 4) as usize];
-decode_bc1(&img.surfaces[0].plane.data, img.width, img.height, &mut rgba)
-    .unwrap();
+match img.pixel_format {
+    DdsPixelFormat::Bc1 => {
+        decode_bc1(&img.surfaces[0].plane.data, img.width, img.height, &mut rgba).unwrap();
+    }
+    DdsPixelFormat::Bc7Unorm | DdsPixelFormat::Bc7UnormSrgb => {
+        decode_bc7(&img.surfaces[0].plane.data, img.width, img.height, &mut rgba).unwrap();
+    }
+    _ => { /* see decode_bc2..bc5 helpers */ }
+}
+```
+
+To encode an RGBA8 surface to BC1 (DXT1) on disk:
+
+```rust
+use oxideav_dds::encode_bc1;
+
+let rgba: Vec<u8> = vec![0xff; 16 * 16 * 4];
+let mut bc1 = vec![0u8; (16 / 4) * (16 / 4) * 8];
+encode_bc1(&rgba, 16, 16, /* punchthrough_alpha = */ false, &mut bc1).unwrap();
+// `bc1` now holds the raw block bytes; wrap them in a DDS file with
+// FOURCC_DXT1 to write a valid texture.
 ```
 
 For mipmapped or cubemap textures iterate `img.surfaces` directly:

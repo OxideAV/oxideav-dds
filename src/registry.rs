@@ -111,17 +111,21 @@ pub fn register_codecs(reg: &mut CodecRegistry) {
 
 // ---- ContainerRegistry entry points -----------------------------------
 
-/// Register the `.dds` file extension into the supplied
-/// [`ContainerRegistry`] so CLI tools (and any caller using
-/// [`ContainerRegistry::container_for_extension`]) can resolve a
-/// `.dds` output path to the `dds` codec name.
+/// Register the `.dds` still-image container demuxer + muxer + probe
+/// + extension into the supplied [`ContainerRegistry`].
 ///
-/// No demuxer or muxer is registered here — round 1 surfaces only the
-/// codec, and consumers that want a one-frame-per-file `.dds` stream
-/// drive [`crate::parse_dds`] / [`crate::encode_dds_uncompressed`]
-/// directly. Round 2 will add the still-image container demuxer/muxer.
+/// The demuxer slurps the entire DDS file and emits exactly one packet
+/// on stream 0 (single-frame-per-file convention shared with every
+/// other still-image container in the workspace — `oxideav-bmp`,
+/// `oxideav-tga`, `oxideav-jpegxl`'s container surface). The muxer
+/// writes a single packet's bytes verbatim to its output stream.
+///
+/// The probe scores `MAX_PROBE_SCORE` (100) on any input whose first
+/// 4 bytes are the ASCII `"DDS "` magic, falls back to
+/// `PROBE_SCORE_EXTENSION` (25) for `.dds` extension hint, and zero
+/// otherwise.
 pub fn register_containers(reg: &mut ContainerRegistry) {
-    reg.register_extension("dds", "dds");
+    crate::container::register(reg);
 }
 
 /// Unified entry point: install every codec and container provided by

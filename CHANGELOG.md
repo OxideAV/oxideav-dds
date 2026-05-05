@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **BC7 decompression** to RGBA8 via new public entry point
+  `decode_bc7`. Covers all 8 modes (single-, dual- and three-subset
+  partitions; 2/3/4-bit primary indices + optional 2/3-bit secondary
+  alpha index plane; channel rotation in modes 4 and 5; per-endpoint
+  and shared-per-subset p-bits). Partition tables for the 64 two-
+  subset and 64 three-subset patterns plus the per-partition anchor
+  index tables are clean-room transcribed from the public Khronos
+  Data Format specification (the same numeric tables Microsoft
+  mandates Direct3D 11 hardware to use); no DirectXTex / NVTT /
+  bc7enc / ISPC / basisu source was consulted.
+- **BC1 (DXT1) encoder** via new public entry point `encode_bc1`.
+  Compresses an RGBA8 surface into 8-byte / 4×4-block BC1 with a
+  furthest-point endpoint heuristic (no PCA, no cluster fit, no
+  endpoint refinement). Supports the 4-colour layout (opaque) and
+  the 3-colour-plus-transparent layout (1-bit punchthrough alpha,
+  enabled per-call). Bit-exact roundtrip on solid blocks; "good
+  enough" approximation on photographic content.
+- **`.dds` still-image container demuxer + muxer**. Round-3 lift
+  over the round-2 extension-only registration: the framework-side
+  `ContainerRegistry` now installs probe + demuxer + muxer +
+  extension entries via `register_containers`, so CLI tools (like
+  `cli-convert`) can open / write `.dds` files end-to-end without
+  touching the codec API directly. Probe scores `MAX_PROBE_SCORE`
+  (100) on the `"DDS "` magic.
 - **BC1..BC5 decompression** to RGBA8 / R8 / RG8 via new public
   entry points `decode_bc1`, `decode_bc2`, `decode_bc3`,
   `decode_bc4_unorm`, `decode_bc4_snorm`, `decode_bc5_unorm`,
@@ -41,13 +65,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Round-trip through `DxgiFormat::from_u32` ↔ `to_u32` is lossless;
   formats without a layout this crate can interpret produce
   `DdsError::Unsupported` rather than `Unknown`.
-- `register_containers(&mut ContainerRegistry)` entry point that
-  registers the `.dds` file extension into the central
-  `oxideav_core::ContainerRegistry`, allowing CLI tools (such as
-  `cli-convert`) to resolve `.dds` outputs to the `dds` codec by
-  extension. The actual demuxer / muxer for the `.dds` still-image
-  container remains a followup; the extension table entry alone is
-  what `cli-convert` needs.
+- `register_containers(&mut ContainerRegistry)` now installs the
+  full demuxer + muxer + probe + extension surface for the `.dds`
+  still-image container (round-3 lift over round-2's extension-only
+  entry).
 
 ## [0.0.2](https://github.com/OxideAV/oxideav-dds/compare/v0.0.1...v0.0.2) - 2026-05-05
 
