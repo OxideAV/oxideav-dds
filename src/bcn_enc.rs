@@ -31,6 +31,7 @@
 //! NOT competitive with DirectXTex or ISPC encoders for visual
 //! quality on photographic content.
 
+use crate::bcn::rgb565_to_rgb888;
 use crate::error::{DdsError, Result};
 
 #[inline]
@@ -51,18 +52,6 @@ fn rgb_to_565(r: u8, g: u8, b: u8) -> u16 {
     let g6 = ((g as u16) >> 2) & 0x3f;
     let b5 = ((b as u16) >> 3) & 0x1f;
     (r5 << 11) | (g6 << 5) | b5
-}
-
-/// Expand RGB565 back to 8-bit (Microsoft bit-replication rule).
-#[inline]
-fn rgb565_to_rgb888(c: u16) -> (u8, u8, u8) {
-    let r5 = ((c >> 11) & 0x1f) as u8;
-    let g6 = ((c >> 5) & 0x3f) as u8;
-    let b5 = (c & 0x1f) as u8;
-    let r = (r5 << 3) | (r5 >> 2);
-    let g = (g6 << 2) | (g6 >> 4);
-    let b = (b5 << 3) | (b5 >> 2);
-    (r, g, b)
 }
 
 /// Compute squared Euclidean RGB distance between two pixels.
@@ -96,26 +85,20 @@ fn encode_bc1_block(pixels_rgba: &[[u8; 4]; 16], accept_punchthrough_alpha: bool
     // RGB space (squared Euclidean). With 16 pixels per block this is
     // 16*15/2 = 120 distance computations — trivial. Skip transparent
     // pixels in 3-colour mode.
-    let mut visible: [Option<usize>; 16] = [None; 16];
-    for (i, p) in pixels_rgba.iter().enumerate() {
-        if !three_colour_mode || p[3] >= 128 {
-            visible[i] = Some(i);
-        }
-    }
-    let visible: Vec<usize> = visible.iter().filter_map(|x| *x).collect();
-    if visible.is_empty() {
-        // Every pixel transparent — emit a fully-transparent block.
-        let c0 = 0u16;
-        let c1 = 0u16;
-        let indices = 0xffff_ffffu32;
-        return pack_bc1(c0, c1, indices);
-    }
+    let is_visible = |p: &[u8; 4]| !three_colour_mode || p[3] >= 128;
     let mut best_d = 0u32;
-    let mut best_i = visible[0];
-    let mut best_j = visible[0];
-    for &i in visible.iter() {
-        for &j in visible.iter() {
-            if i >= j {
+    let mut best_i: Option<usize> = None;
+    let mut best_j: Option<usize> = None;
+    for i in 0..16 {
+        if !is_visible(&pixels_rgba[i]) {
+            continue;
+        }
+        // Track at least one visible pixel so the all-transparent
+        // branch below can still seed a valid endpoint pair.
+        best_i.get_or_insert(i);
+        best_j.get_or_insert(i);
+        for j in (i + 1)..16 {
+            if !is_visible(&pixels_rgba[j]) {
                 continue;
             }
             let pi = pixels_rgba[i];
@@ -123,11 +106,16 @@ fn encode_bc1_block(pixels_rgba: &[[u8; 4]; 16], accept_punchthrough_alpha: bool
             let d = sq_dist([pi[0], pi[1], pi[2]], [pj[0], pj[1], pj[2]]);
             if d > best_d {
                 best_d = d;
-                best_i = i;
-                best_j = j;
+                best_i = Some(i);
+                best_j = Some(j);
             }
         }
     }
+    let (best_i, best_j) = match (best_i, best_j) {
+        (Some(i), Some(j)) => (i, j),
+        // Every pixel transparent — emit a fully-transparent block.
+        _ => return pack_bc1(0, 0, 0xffff_ffffu32),
+    };
     let mut e0 = [
         pixels_rgba[best_i][0],
         pixels_rgba[best_i][1],
@@ -186,7 +174,8 @@ fn encode_bc1_block(pixels_rgba: &[[u8; 4]; 16], accept_punchthrough_alpha: bool
         for ch in 0..3 {
             palette[2][ch] = ((e0[ch] as u32 + e1[ch] as u32) / 2) as u8;
         }
-        palette[3] = [0, 0, 0]; // transparent — mark separately below.
+        // palette[3] in 3-colour mode is the transparent slot; we
+        // assign index 3 directly without consulting palette[3].
     }
 
     // Quantise each pixel to the nearest palette entry. For 3-colour

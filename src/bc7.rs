@@ -520,34 +520,35 @@ pub(crate) fn decode_bc7_block(block: &[u8; 16]) -> [[u8; 4]; 16] {
 
     // ---- Colour endpoints: subsets * 2 endpoints * 3 channels (R, G, B),
     //      stored channel-major (all R values first, then all G, then all B).
+    //      Max 6 endpoint slots (3-subset modes), max 6 p-bits.
     let n_endpoints = mi.subsets as usize * 2;
-    let mut raw_r = vec![0u32; n_endpoints];
-    let mut raw_g = vec![0u32; n_endpoints];
-    let mut raw_b = vec![0u32; n_endpoints];
-    let mut raw_a = vec![0u32; n_endpoints];
-    for slot in raw_r.iter_mut() {
+    let mut raw_r = [0u32; 6];
+    let mut raw_g = [0u32; 6];
+    let mut raw_b = [0u32; 6];
+    let mut raw_a = [0u32; 6];
+    for slot in raw_r[..n_endpoints].iter_mut() {
         *slot = br.read(mi.colour_bits);
     }
-    for slot in raw_g.iter_mut() {
+    for slot in raw_g[..n_endpoints].iter_mut() {
         *slot = br.read(mi.colour_bits);
     }
-    for slot in raw_b.iter_mut() {
+    for slot in raw_b[..n_endpoints].iter_mut() {
         *slot = br.read(mi.colour_bits);
     }
     if mi.alpha_bits > 0 {
-        for slot in raw_a.iter_mut() {
+        for slot in raw_a[..n_endpoints].iter_mut() {
             *slot = br.read(mi.alpha_bits);
         }
     }
 
     // ---- P-bits.
-    let mut p_bits = vec![0u32; mi.p_bits as usize];
-    for slot in p_bits.iter_mut() {
+    let mut p_bits = [0u32; 6];
+    for slot in p_bits[..mi.p_bits as usize].iter_mut() {
         *slot = br.read(1);
     }
 
     // ---- Build 8-bit endpoints with p-bit append + bit-replication.
-    let mut endpoints = vec![Endpoints::default(); mi.subsets as usize];
+    let mut endpoints = [Endpoints::default(); 3];
     for s in 0..mi.subsets as usize {
         let i0 = s * 2;
         let i1 = s * 2 + 1;

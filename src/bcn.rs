@@ -62,7 +62,7 @@ pub(crate) fn rg8_surface_bytes(width: u32, height: u32) -> usize {
 /// replicated into the LSBs so the endpoint range covers the full
 /// 0..=255).
 #[inline]
-fn rgb565_to_rgb888(c: u16) -> (u8, u8, u8) {
+pub(crate) fn rgb565_to_rgb888(c: u16) -> (u8, u8, u8) {
     let r5 = ((c >> 11) & 0x1f) as u8;
     let g6 = ((c >> 5) & 0x3f) as u8;
     let b5 = (c & 0x1f) as u8;
