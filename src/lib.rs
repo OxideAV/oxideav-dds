@@ -14,7 +14,7 @@
 //! `four_cc == "DX10"`), and the raw pixel array (or block-compressed
 //! block array) for one or more mip levels.
 //!
-//! Round 1 covers:
+//! Coverage as of round 2:
 //!
 //! * Header parsing — magic + `DDS_HEADER` (124 bytes) + optional
 //!   `DDS_HEADER_DXT10` (20 bytes).
@@ -22,28 +22,30 @@
 //!   [`parse_dds`] + [`encode_dds_uncompressed`]: A8R8G8B8, X8R8G8B8,
 //!   A8B8G8R8 (DXGI `R8G8B8A8_UNORM`), R5G6B5, A1R5G5B5, A4R4G4B4,
 //!   R8G8B8, A8L8, L8, A8.
-//! * Block-compressed pass-through — recognises BC1 / BC2 / BC3 (the
-//!   classic DXT1 / DXT3 / DXT5), BC4 unorm + snorm (`BC4U` /
-//!   `ATI1` / `BC4S`), BC5 unorm + snorm (`BC5U` / `ATI2` / `BC5S`),
-//!   BC6H (UF16 + SF16), and BC7 (UNORM + SRGB) from either the
-//!   legacy four-cc or the DX10 `dxgi_format`. The raw block bytes are
-//!   exposed through [`DdsImage::planes`] but not decoded into RGB(A)
-//!   in round 1 — that's round 2, and the BC6H/BC7 decoders are
-//!   substantial enough to deserve their own commits.
+//! * Block-compressed pass-through — recognises BC1..BC7 from the
+//!   legacy four-cc or the DX10 `dxgi_format` and exposes the raw
+//!   block bytes through `DdsImage::planes` / `DdsImage::surfaces`.
+//! * **BC1..BC5 decompression** to RGBA8 / R8 / RG8 via
+//!   [`decode_bc1`], [`decode_bc2`], [`decode_bc3`],
+//!   [`decode_bc4_unorm`], [`decode_bc4_snorm`], [`decode_bc5_unorm`],
+//!   and [`decode_bc5_snorm`].
+//! * **Mipmap chain + cubemap faces + DX10 texture arrays** — every
+//!   on-disk surface is parsed into [`DdsImage::surfaces`] in
+//!   Microsoft's mandated order (array slice → face → mip).
+//! * **Full DXGI format table** — every value Microsoft assigns
+//!   (1..=132) is enumerated in [`DxgiFormat`] for lossless
+//!   round-trip; consumers can drop unsupported variants without
+//!   losing the original integer code.
 //!
-//! Out of scope for round 1 (planned for round 2):
+//! Still deferred (followups):
 //!
-//! * BC1..BC7 decompression.
-//! * Mipmap-chain extraction (the parser surfaces only mip-0; it
-//!   reads `mip_map_count` from the header but does not return the
-//!   higher levels yet).
-//! * Cubemap face surfaces and DX10 texture arrays.
-//! * The full DXGI format table — round 1 enumerates only the BC*
-//!   family plus the few uncompressed RGBA / luminance formats it
-//!   needs to reconstruct from a DX10 header.
+//! * BC6H + BC7 decompression to RGBA — recognised pass-through,
+//!   not decompressed yet (these require multi-mode partition tables
+//!   too large to land alongside BC1..BC5).
+//! * Encoding side stays uncompressed-only; emitting BCn-compressed
+//!   surfaces requires an encoder, not a decoder.
 //! * The `.dds` still-image container demuxer / muxer (probe by
-//!   magic, expose as a single-frame stream) — once landed it will
-//!   plug into the framework via `register_containers`.
+//!   magic, expose as a single-frame stream).
 //!
 //! ## Standalone vs registry-integrated
 //!
@@ -67,6 +69,7 @@
 //! `texconv`) are used only as black-box validators when generating
 //! test fixtures, not as a source of constants or layout.
 
+pub mod bcn;
 pub mod decoder;
 pub mod encoder;
 pub mod error;
@@ -79,10 +82,14 @@ pub mod registry;
 /// Codec id for DDS image frames.
 pub const CODEC_ID_STR: &str = "dds";
 
+pub use bcn::{
+    decode_bc1, decode_bc2, decode_bc3, decode_bc4_snorm, decode_bc4_unorm, decode_bc5_snorm,
+    decode_bc5_unorm,
+};
 pub use decoder::parse_dds;
 pub use encoder::encode_dds_uncompressed;
 pub use error::{DdsError, Result};
-pub use image::{DdsImage, DdsPixelFormat, DdsPlane};
+pub use image::{CubemapFace, DdsImage, DdsPixelFormat, DdsPlane, DdsSurface};
 pub use types::{
     DdsHeader, DdsHeaderDxt10, DdsPixelFormatHeader, DxgiFormat, DDS_HEADER_DXT10_SIZE,
     DDS_HEADER_SIZE, DDS_MAGIC, DDS_PIXELFORMAT_SIZE,

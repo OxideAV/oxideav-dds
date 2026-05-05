@@ -9,13 +9,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **BC1..BC5 decompression** to RGBA8 / R8 / RG8 via new public
+  entry points `decode_bc1`, `decode_bc2`, `decode_bc3`,
+  `decode_bc4_unorm`, `decode_bc4_snorm`, `decode_bc5_unorm`,
+  `decode_bc5_snorm`. Implementations follow Microsoft's public
+  "BC1, BC2 and BC3" / "BC4" / "BC5" pages on learn.microsoft.com;
+  no DirectXTex / NVTT / libsquish source consulted. Cross-validated
+  against ImageMagick 7.1.2's DXT1 decoder via baked-in fixture
+  files under `tests/fixtures/`.
+- **Mipmap chain + cubemap face + DX10 texture array surface
+  exposure.** `DdsImage` now carries a `surfaces: Vec<DdsSurface>`
+  field that holds every (array_slice, face, mip_level) triple in
+  the on-disk order Microsoft mandates (outer slice → middle face →
+  inner mip). Each `DdsSurface` is tagged with its own
+  `(width, height, mip_level, array_slice, face)` so callers can
+  pick the level they want. Legacy callers still see
+  `planes[0]` mirroring `surfaces[0].plane.data`.
+- `CubemapFace` enum (`PositiveX..NegativeZ`) with a `::ALL`
+  constant for the standard PX/NX/PY/NY/PZ/NZ ordering.
+- `DdsSurface` struct exposing one (face, slice, mip) entry from
+  the new `DdsImage::surfaces` field.
+- `DdsImage::is_cubemap` and `DdsImage::array_size` fields.
+- Per-face cubemap presence-bit constants
+  (`DDSCAPS2_CUBEMAP_POSITIVEX`, ..., `DDSCAPS2_CUBEMAP_NEGATIVEZ`).
+- **Full DXGI format table.** `DxgiFormat` now enumerates every
+  value Microsoft assigns under `DXGI_FORMAT` (1..=132), covering
+  HDR floats (R32G32B32A32_FLOAT, BC6H_UF16/SF16), integer formats
+  (R8_UINT/SINT, R16_UINT, ...), depth/stencil (D32_FLOAT,
+  D24_UNORM_S8_UINT, ...), YUV planar (NV12, P010, YUY2, ...), and
+  the typeless variants (`Bc1Typeless`, `R8G8B8A8Typeless`, ...).
+  Round-trip through `DxgiFormat::from_u32` ↔ `to_u32` is lossless;
+  formats without a layout this crate can interpret produce
+  `DdsError::Unsupported` rather than `Unknown`.
 - `register_containers(&mut ContainerRegistry)` entry point that
   registers the `.dds` file extension into the central
   `oxideav_core::ContainerRegistry`, allowing CLI tools (such as
   `cli-convert`) to resolve `.dds` outputs to the `dds` codec by
   extension. The actual demuxer / muxer for the `.dds` still-image
-  container remains a round-2 followup; the extension table entry
-  alone is what `cli-convert` needs.
+  container remains a followup; the extension table entry alone is
+  what `cli-convert` needs.
 
 ## [0.0.2](https://github.com/OxideAV/oxideav-dds/compare/v0.0.1...v0.0.2) - 2026-05-05
 

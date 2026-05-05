@@ -36,7 +36,7 @@ use oxideav_core::{
 use crate::decoder::{make_decoder, parse_dds};
 use crate::encoder::{encode_dds_uncompressed, make_encoder};
 use crate::error::DdsError;
-use crate::image::{DdsImage, DdsPixelFormat, DdsPlane};
+use crate::image::{DdsImage, DdsPixelFormat, DdsPlane, DdsSurface};
 use crate::CODEC_ID_STR;
 
 // ---- Error / pixel-format / frame conversions --------------------------
@@ -252,18 +252,29 @@ impl Encoder for DdsEncoder {
             return Err(Error::invalid("DDS encoder: empty frame plane"));
         }
         let plane = &vf.planes[0];
+        let dds_plane = DdsPlane {
+            stride: plane.stride,
+            data: plane.data.clone(),
+        };
         let img = DdsImage {
             width: self.width,
             height: self.height,
             pixel_format: self.pix,
-            planes: vec![DdsPlane {
-                stride: plane.stride,
-                data: plane.data.clone(),
+            planes: vec![dds_plane.clone()],
+            surfaces: vec![DdsSurface {
+                width: self.width,
+                height: self.height,
+                mip_level: 0,
+                array_slice: 0,
+                face: None,
+                plane: dds_plane,
             }],
             pts: vf.pts,
             mip_map_count: 1,
             has_dxt10_header: false,
             dxgi_format: None,
+            is_cubemap: false,
+            array_size: 1,
         };
         let bytes = encode_dds_uncompressed(&img)?;
         let mut pkt = Packet::new(0, self.time_base, bytes);

@@ -9,38 +9,44 @@ single-format codec crates.
 
 ## Status
 
-Round 1 (this release):
+Coverage as of round 2:
 
 - `DDS_HEADER` (124 bytes) + optional `DDS_HEADER_DXT10` (20 bytes) parser.
 - Bit-exact round-trip of every common uncompressed surface layout:
   A8R8G8B8, X8R8G8B8, A8B8G8R8 (DXGI `R8G8B8A8_UNORM`), R5G6B5,
   A1R5G5B5, A4R4G4B4, R8G8B8, A8L8, L8, A8.
-- Block-compressed pass-through. The reader recognises BC1 / BC2 / BC3
-  (the classic DXT1 / DXT3 / DXT5), BC4 unorm + snorm (`BC4U` / `ATI1` /
-  `BC4S`), BC5 unorm + snorm (`BC5U` / `ATI2` / `BC5S`), BC6H (UF16 +
-  SF16), and BC7 (UNORM + SRGB) from either the legacy four-cc or the
-  DX10 `dxgi_format`. The raw block bytes are exposed through
-  `DdsImage::planes` but the decompressed RGB(A) pixels are not produced
-  yet — that is round 2.
+- **BC1..BC5 decompression** to RGBA8 / R8 / RG8 via `decode_bc1`,
+  `decode_bc2`, `decode_bc3`, `decode_bc4_unorm`, `decode_bc4_snorm`,
+  `decode_bc5_unorm`, `decode_bc5_snorm`. Cross-validated against
+  ImageMagick's DXT1 decoder.
+- **Mipmap chain + cubemap faces + DX10 texture arrays.** Every
+  on-disk surface is parsed into `DdsImage::surfaces` in Microsoft's
+  mandated order (array slice → face → mip), tagged with
+  `mip_level` / `array_slice` / `face`. `DdsImage::planes[0]` still
+  mirrors the base level for callers that don't care.
+- **Full DXGI format table** — every `DXGI_FORMAT` value Microsoft
+  assigns (1..=132) is enumerated by name in `DxgiFormat` for
+  lossless round-trip; HDR-float, integer, depth/stencil, YUV, and
+  palette formats are recognised but produce
+  `DdsError::Unsupported` from the layout resolver.
+- Block-compressed pass-through. BC1..BC7 raw block bytes are
+  surfaced through `DdsImage::surfaces[i].plane.data`; BC1..BC5 also
+  decompress to RGBA / R / RG via the dedicated `decode_bc*` entry
+  points.
 - Standalone-friendly via the default-on `registry` Cargo feature.
   Disable it (`default-features = false`) to drop the `oxideav-core`
   dependency tree entirely; the crate then exposes only the
   framework-free `parse_dds` / `encode_dds_uncompressed` API plus
-  crate-local `DdsImage` / `DdsPixelFormat` / `DdsError` types built on
-  `std`.
+  crate-local `DdsImage` / `DdsPixelFormat` / `DdsError` types built
+  on `std`.
 
-Out of scope for round 1 (planned for round 2):
+Still deferred (followups):
 
-- BC1..BC7 decompression to RGB(A).
-- Mipmap-chain extraction (the parser surfaces only mip-0; it reads
-  `mip_map_count` from the header but does not return the higher
-  levels yet).
-- Cubemap face surfaces and DX10 texture arrays.
-- The full DXGI `DXGI_FORMAT` table — round 1 enumerates only the BC*
-  family plus the few uncompressed RGBA / luminance formats it needs
-  to reconstruct from a DX10 header.
-- The `.dds` still-image container demuxer / muxer (probe by magic,
-  expose as a single-frame stream).
+- BC6H + BC7 decompression to RGBA — recognised pass-through, not
+  decompressed yet (multi-mode partition tables too large to land
+  alongside BC1..BC5).
+- BCn-encoder side — the encoder stays uncompressed-only.
+- The `.dds` still-image container demuxer / muxer.
 
 ## Quickstart
 
@@ -75,9 +81,24 @@ std::fs::write("output.dds", out).unwrap();
 ```
 
 For block-compressed input the same `parse_dds` returns an image whose
-`pixel_format` is one of the `Bc*` variants and whose `planes[0].data`
-holds the raw 4x4-block byte array. Round 2 will add helpers that
-decompress those into RGB(A).
+`pixel_format` is one of the `Bc*` variants and whose
+`surfaces[i].plane.data` holds the raw 4x4-block byte array. For
+BC1..BC5 you can call the matching `decode_bc*` helper to expand it
+into RGBA8 / R8 / RG8:
+
+```rust
+use oxideav_dds::{decode_bc1, parse_dds};
+
+let dds = std::fs::read("texture.dds").unwrap();
+let img = parse_dds(&dds).unwrap();
+let mut rgba = vec![0u8; (img.width * img.height * 4) as usize];
+decode_bc1(&img.surfaces[0].plane.data, img.width, img.height, &mut rgba)
+    .unwrap();
+```
+
+For mipmapped or cubemap textures iterate `img.surfaces` directly:
+each entry carries its own `mip_level`, `array_slice`, `face`, and
+`(width, height)`.
 
 ## Clean-room provenance
 

@@ -7,7 +7,7 @@
 //! No DirectXTex / D3DX / NVTT / squish / `dds.h` source consulted or
 //! paraphrased.
 //!
-//! Round 1 covers:
+//! Round 2 covers:
 //!
 //! * Magic + `DDS_HEADER` (124 bytes) + optional `DDS_HEADER_DXT10`
 //!   (20 bytes) parsing.
@@ -16,10 +16,16 @@
 //! * Block-compressed pass-through: DXT1/3/5 + BC4/5/6H/7. The reader
 //!   recognises the format (legacy FourCC or DX10 dxgiFormat), computes
 //!   the surface size from `ceil(w/4) × ceil(h/4) × block_bytes`, and
-//!   hands the raw block bytes back via [`DdsImage::planes`].
+//!   hands the raw block bytes back via [`DdsImage::surfaces`].
+//! * **Mipmap chain + cubemap faces + DX10 texture arrays** — every
+//!   on-disk surface is parsed in Microsoft's mandated order
+//!   (array slice → face → mip) and surfaced via
+//!   [`DdsImage::surfaces`].
+//! * Full DXGI format table — `DXGI_FORMAT` values 1..=132 are
+//!   enumerated by name in [`DxgiFormat`] for lossless round-trip.
 
 use crate::error::{DdsError, Result};
-use crate::image::{DdsImage, DdsPixelFormat, DdsPlane};
+use crate::image::{CubemapFace, DdsImage, DdsPixelFormat, DdsPlane, DdsSurface};
 use crate::types::*;
 
 // ---- Byte readers --------------------------------------------------------
@@ -227,34 +233,52 @@ fn pixel_format_from_legacy(p: &DdsPixelFormatHeader) -> Option<DdsPixelFormat> 
     None
 }
 
-/// Resolve a DX10 `DXGI_FORMAT` into a [`DdsPixelFormat`].
+/// Resolve a DX10 `DXGI_FORMAT` into a [`DdsPixelFormat`]. Returns
+/// `None` for any DXGI format the round-2 reader does not know how to
+/// lay out as one of the [`DdsPixelFormat`] variants (HDR floats,
+/// integer formats, depth/stencil, YUV planar, palette-8, ...).
 fn pixel_format_from_dxgi(d: DxgiFormat) -> Option<DdsPixelFormat> {
+    // The DXGI naming convention swaps the apparent channel order
+    // relative to the legacy D3D9 names: `R8G8B8A8_UNORM` is RGBA
+    // bytes on disk, `B8G8R8A8_UNORM` is BGRA on disk. So R8G8B8A8
+    // matches our crate-local A8B8G8R8 (RGBA on disk) and B8G8R8A8
+    // matches A8R8G8B8 (BGRA on disk).
     Some(match d {
-        // The DXGI naming convention swaps the apparent channel order
-        // relative to the legacy D3D9 names: `R8G8B8A8_UNORM` is RGBA
-        // bytes on disk, `B8G8R8A8_UNORM` is BGRA on disk. So R8G8B8A8
-        // matches our crate-local A8B8G8R8 (RGBA on disk) and
-        // B8G8R8A8 matches A8R8G8B8 (BGRA on disk).
-        DxgiFormat::R8G8B8A8Unorm | DxgiFormat::R8G8B8A8UnormSrgb => DdsPixelFormat::A8B8G8R8,
-        DxgiFormat::B8G8R8A8Unorm => DdsPixelFormat::A8R8G8B8,
-        DxgiFormat::B8G8R8X8Unorm => DdsPixelFormat::X8R8G8B8,
+        DxgiFormat::R8G8B8A8Unorm
+        | DxgiFormat::R8G8B8A8UnormSrgb
+        | DxgiFormat::R8G8B8A8Typeless => DdsPixelFormat::A8B8G8R8,
+        DxgiFormat::B8G8R8A8Unorm
+        | DxgiFormat::B8G8R8A8Typeless
+        | DxgiFormat::B8G8R8A8UnormSrgb => DdsPixelFormat::A8R8G8B8,
+        DxgiFormat::B8G8R8X8Unorm
+        | DxgiFormat::B8G8R8X8Typeless
+        | DxgiFormat::B8G8R8X8UnormSrgb => DdsPixelFormat::X8R8G8B8,
         DxgiFormat::B5G6R5Unorm => DdsPixelFormat::R5G6B5,
         DxgiFormat::B5G5R5A1Unorm => DdsPixelFormat::A1R5G5B5,
         DxgiFormat::B4G4R4A4Unorm => DdsPixelFormat::A4R4G4B4,
-        DxgiFormat::R8Unorm => DdsPixelFormat::L8,
-        DxgiFormat::R8G8Unorm => DdsPixelFormat::A8L8,
-        DxgiFormat::Bc1Unorm | DxgiFormat::Bc1UnormSrgb => DdsPixelFormat::Bc1,
-        DxgiFormat::Bc2Unorm | DxgiFormat::Bc2UnormSrgb => DdsPixelFormat::Bc2,
-        DxgiFormat::Bc3Unorm | DxgiFormat::Bc3UnormSrgb => DdsPixelFormat::Bc3,
-        DxgiFormat::Bc4Unorm => DdsPixelFormat::Bc4Unorm,
+        DxgiFormat::R8Unorm | DxgiFormat::R8Typeless => DdsPixelFormat::L8,
+        DxgiFormat::A8Unorm => DdsPixelFormat::A8,
+        DxgiFormat::R8G8Unorm | DxgiFormat::R8G8Typeless => DdsPixelFormat::A8L8,
+        DxgiFormat::Bc1Unorm | DxgiFormat::Bc1UnormSrgb | DxgiFormat::Bc1Typeless => {
+            DdsPixelFormat::Bc1
+        }
+        DxgiFormat::Bc2Unorm | DxgiFormat::Bc2UnormSrgb | DxgiFormat::Bc2Typeless => {
+            DdsPixelFormat::Bc2
+        }
+        DxgiFormat::Bc3Unorm | DxgiFormat::Bc3UnormSrgb | DxgiFormat::Bc3Typeless => {
+            DdsPixelFormat::Bc3
+        }
+        DxgiFormat::Bc4Unorm | DxgiFormat::Bc4Typeless => DdsPixelFormat::Bc4Unorm,
         DxgiFormat::Bc4Snorm => DdsPixelFormat::Bc4Snorm,
-        DxgiFormat::Bc5Unorm => DdsPixelFormat::Bc5Unorm,
+        DxgiFormat::Bc5Unorm | DxgiFormat::Bc5Typeless => DdsPixelFormat::Bc5Unorm,
         DxgiFormat::Bc5Snorm => DdsPixelFormat::Bc5Snorm,
-        DxgiFormat::Bc6hUf16 => DdsPixelFormat::Bc6hUf16,
+        DxgiFormat::Bc6hUf16 | DxgiFormat::Bc6hTypeless => DdsPixelFormat::Bc6hUf16,
         DxgiFormat::Bc6hSf16 => DdsPixelFormat::Bc6hSf16,
-        DxgiFormat::Bc7Unorm => DdsPixelFormat::Bc7Unorm,
+        DxgiFormat::Bc7Unorm | DxgiFormat::Bc7Typeless => DdsPixelFormat::Bc7Unorm,
         DxgiFormat::Bc7UnormSrgb => DdsPixelFormat::Bc7UnormSrgb,
-        DxgiFormat::Unknown(_) => return None,
+        // Everything else (HDR float, integer, depth/stencil, YUV
+        // planar, palette-8) has no [`DdsPixelFormat`] mapping yet.
+        _ => return None,
     })
 }
 
@@ -279,11 +303,10 @@ fn surface_stride_bytes(pix: DdsPixelFormat, width: u32) -> usize {
 
 /// Parse a complete DDS byte stream.
 ///
-/// The returned [`DdsImage`] always carries the mip-0 surface in a
-/// single plane. Additional mip levels, cubemap faces, and texture
-/// arrays are not surfaced in round 1 (the on-disk bytes for those are
-/// preserved if the caller round-trips through [`crate::encode_dds_uncompressed`],
-/// but the higher-level API does not expose them yet).
+/// The returned [`DdsImage`] carries every (array_slice, face,
+/// mip_level) surface declared by the file in [`DdsImage::surfaces`].
+/// `planes[0]` mirrors `surfaces[0].plane` for callers that just want
+/// the base level of a non-array, non-cubemap texture.
 pub fn parse_dds(bytes: &[u8]) -> Result<DdsImage> {
     if bytes.len() < 4 + DDS_HEADER_SIZE {
         return Err(DdsError::invalid(format!(
@@ -350,38 +373,148 @@ pub fn parse_dds(bytes: &[u8]) -> Result<DdsImage> {
         })?;
     }
 
-    let surface_bytes = surface_size_bytes(pix, width, height);
-    let want_end = pixel_data_off as u64 + surface_bytes;
-    if (bytes.len() as u64) < want_end {
-        return Err(DdsError::invalid(format!(
-            "DDS pixel data truncated: file has {} bytes, mip-0 surface needs {} bytes (offset {pixel_data_off})",
-            bytes.len(),
-            surface_bytes,
-        )));
-    }
-
-    let stride = surface_stride_bytes(pix, width);
-    let plane_bytes = surface_bytes as usize;
-    let plane = DdsPlane {
-        stride,
-        data: bytes[pixel_data_off..pixel_data_off + plane_bytes].to_vec(),
-    };
-
-    let mip = if header.flags & DDSD_MIPMAPCOUNT != 0 {
+    let mip_count = if header.flags & DDSD_MIPMAPCOUNT != 0 {
         header.mip_map_count.max(1)
     } else {
         1
     };
 
+    // Cubemap detection: legacy header sets DDSCAPS2_CUBEMAP plus the
+    // six per-face presence bits; DX10 header sets
+    // DDS_RESOURCE_MISC_TEXTURECUBE in misc_flag.
+    let mut is_cubemap = header.caps2 & DDSCAPS2_CUBEMAP != 0;
+    let mut present_faces_mask = if is_cubemap {
+        // Microsoft notes that since D3D9 every cubemap face must be
+        // present; a `DDSCAPS2_CUBEMAP` header without per-face bits
+        // is interpreted as "all six faces present".
+        if header.caps2 & DDSCAPS2_CUBEMAP_ALL_FACES == 0 {
+            DDSCAPS2_CUBEMAP_ALL_FACES
+        } else {
+            header.caps2 & DDSCAPS2_CUBEMAP_ALL_FACES
+        }
+    } else {
+        0
+    };
+
+    let mut array_size: u32 = 1;
+    if has_dxt10 {
+        // Re-read the parsed dxt10 to apply cubemap / array adjustments.
+        let dxt10 = parse_dxt10(bytes, 4 + DDS_HEADER_SIZE).expect("already parsed once above");
+        if dxt10.misc_flag & DDS_RESOURCE_MISC_TEXTURECUBE != 0 {
+            is_cubemap = true;
+            present_faces_mask = DDSCAPS2_CUBEMAP_ALL_FACES;
+        }
+        array_size = dxt10.array_size.max(1);
+    }
+
+    // Order Microsoft mandates for cubemap faces (PX, NX, PY, NY,
+    // PZ, NZ). Skip faces whose presence bit is clear.
+    let face_indices: Vec<CubemapFace> = if is_cubemap {
+        let bits_in_order = [
+            (DDSCAPS2_CUBEMAP_POSITIVEX, CubemapFace::PositiveX),
+            (DDSCAPS2_CUBEMAP_NEGATIVEX, CubemapFace::NegativeX),
+            (DDSCAPS2_CUBEMAP_POSITIVEY, CubemapFace::PositiveY),
+            (DDSCAPS2_CUBEMAP_NEGATIVEY, CubemapFace::NegativeY),
+            (DDSCAPS2_CUBEMAP_POSITIVEZ, CubemapFace::PositiveZ),
+            (DDSCAPS2_CUBEMAP_NEGATIVEZ, CubemapFace::NegativeZ),
+        ];
+        bits_in_order
+            .iter()
+            .filter(|(b, _)| present_faces_mask & b != 0)
+            .map(|(_, f)| *f)
+            .collect()
+    } else {
+        vec![]
+    };
+
+    // Pre-compute (width, height) for each mip level.
+    let mip_dims: Vec<(u32, u32)> = (0..mip_count)
+        .map(|m| ((width >> m).max(1), (height >> m).max(1)))
+        .collect();
+
+    let surfaces_per_slice = if face_indices.is_empty() {
+        mip_count as usize
+    } else {
+        face_indices.len() * mip_count as usize
+    };
+    let total_surfaces = array_size as usize * surfaces_per_slice;
+
+    let mut surfaces: Vec<DdsSurface> = Vec::with_capacity(total_surfaces);
+    let mut cursor = pixel_data_off;
+
+    for ai in 0..array_size {
+        if face_indices.is_empty() {
+            for (mi, &(mw, mh)) in mip_dims.iter().enumerate() {
+                let sb = surface_size_bytes(pix, mw, mh) as usize;
+                if bytes.len() < cursor + sb {
+                    return Err(DdsError::invalid(format!(
+                        "DDS pixel data truncated at array={ai} mip={mi} ({mw}x{mh}): need {sb} bytes, have {}",
+                        bytes.len() - cursor,
+                    )));
+                }
+                let stride = surface_stride_bytes(pix, mw);
+                surfaces.push(DdsSurface {
+                    width: mw,
+                    height: mh,
+                    mip_level: mi as u32,
+                    array_slice: ai,
+                    face: None,
+                    plane: DdsPlane {
+                        stride,
+                        data: bytes[cursor..cursor + sb].to_vec(),
+                    },
+                });
+                cursor += sb;
+            }
+        } else {
+            for face in face_indices.iter() {
+                for (mi, &(mw, mh)) in mip_dims.iter().enumerate() {
+                    let sb = surface_size_bytes(pix, mw, mh) as usize;
+                    if bytes.len() < cursor + sb {
+                        return Err(DdsError::invalid(format!(
+                            "DDS pixel data truncated at array={ai} face={} mip={mi} ({mw}x{mh}): need {sb} bytes, have {}",
+                            face.short_name(),
+                            bytes.len() - cursor,
+                        )));
+                    }
+                    let stride = surface_stride_bytes(pix, mw);
+                    surfaces.push(DdsSurface {
+                        width: mw,
+                        height: mh,
+                        mip_level: mi as u32,
+                        array_slice: ai,
+                        face: Some(*face),
+                        plane: DdsPlane {
+                            stride,
+                            data: bytes[cursor..cursor + sb].to_vec(),
+                        },
+                    });
+                    cursor += sb;
+                }
+            }
+        }
+    }
+
+    if surfaces.is_empty() {
+        return Err(DdsError::invalid("DDS file produced zero surfaces"));
+    }
+
+    // Mirror surface[0] into `planes[0]` for the legacy single-surface
+    // API surface that round-1 callers relied on.
+    let primary_plane = surfaces[0].plane.clone();
+
     Ok(DdsImage {
         width,
         height,
         pixel_format: pix,
-        planes: vec![plane],
+        planes: vec![primary_plane],
+        surfaces,
         pts: None,
-        mip_map_count: mip,
+        mip_map_count: mip_count,
         has_dxt10_header: has_dxt10,
         dxgi_format: dxgi,
+        is_cubemap,
+        array_size,
     })
 }
 

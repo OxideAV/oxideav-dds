@@ -40,10 +40,20 @@ fn roundtrip_format(pix: DdsPixelFormat, w: u32, h: u32) {
         height: h,
         pixel_format: pix,
         planes: vec![plane.clone()],
+        surfaces: vec![oxideav_dds::DdsSurface {
+            width: w,
+            height: h,
+            mip_level: 0,
+            array_slice: 0,
+            face: None,
+            plane: plane.clone(),
+        }],
         pts: None,
         mip_map_count: 1,
         has_dxt10_header: false,
         dxgi_format: None,
+        is_cubemap: false,
+        array_size: 1,
     };
     let bytes = encode_dds_uncompressed(&src)
         .unwrap_or_else(|e| panic!("encode failed for {}: {e}", pix.name()));
@@ -340,18 +350,29 @@ fn rejects_unknown_dxgi_format() {
 
 #[test]
 fn rejects_block_compressed_in_uncompressed_encoder() {
+    let plane = DdsPlane {
+        stride: 8,
+        data: vec![0u8; 8],
+    };
     let img = DdsImage {
         width: 4,
         height: 4,
         pixel_format: DdsPixelFormat::Bc1,
-        planes: vec![DdsPlane {
-            stride: 8,
-            data: vec![0u8; 8],
+        planes: vec![plane.clone()],
+        surfaces: vec![oxideav_dds::DdsSurface {
+            width: 4,
+            height: 4,
+            mip_level: 0,
+            array_slice: 0,
+            face: None,
+            plane,
         }],
         pts: None,
         mip_map_count: 1,
         has_dxt10_header: false,
         dxgi_format: None,
+        is_cubemap: false,
+        array_size: 1,
     };
     assert!(encode_dds_uncompressed(&img).is_err());
 }

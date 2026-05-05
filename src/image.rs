@@ -183,29 +183,103 @@ pub struct DdsPlane {
     pub data: Vec<u8>,
 }
 
-/// One decoded DDS surface (mip level 0; round 1 ignores additional
-/// mip levels and cubemap faces).
+/// Cubemap face identifier for a [`DdsSurface`]. Order mirrors
+/// Microsoft's `DDS_CUBEMAP_*` flag bit positions: +X / -X / +Y / -Y /
+/// +Z / -Z.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CubemapFace {
+    /// `DDSCAPS2_CUBEMAP_POSITIVEX` — +X (right).
+    PositiveX,
+    /// `DDSCAPS2_CUBEMAP_NEGATIVEX` — -X (left).
+    NegativeX,
+    /// `DDSCAPS2_CUBEMAP_POSITIVEY` — +Y (top).
+    PositiveY,
+    /// `DDSCAPS2_CUBEMAP_NEGATIVEY` — -Y (bottom).
+    NegativeY,
+    /// `DDSCAPS2_CUBEMAP_POSITIVEZ` — +Z (front).
+    PositiveZ,
+    /// `DDSCAPS2_CUBEMAP_NEGATIVEZ` — -Z (back).
+    NegativeZ,
+}
+
+impl CubemapFace {
+    /// All six cubemap faces, in the same order Microsoft writes them
+    /// to disk (PX, NX, PY, NY, PZ, NZ).
+    pub const ALL: [Self; 6] = [
+        Self::PositiveX,
+        Self::NegativeX,
+        Self::PositiveY,
+        Self::NegativeY,
+        Self::PositiveZ,
+        Self::NegativeZ,
+    ];
+
+    /// Short two-character name (e.g. `"+X"`, `"-Z"`).
+    pub fn short_name(self) -> &'static str {
+        match self {
+            Self::PositiveX => "+X",
+            Self::NegativeX => "-X",
+            Self::PositiveY => "+Y",
+            Self::NegativeY => "-Y",
+            Self::PositiveZ => "+Z",
+            Self::NegativeZ => "-Z",
+        }
+    }
+}
+
+/// One decoded surface — i.e. one (array_slice, face, mip_level) triple.
+/// For a plain 2D texture there is exactly one [`DdsSurface`] in
+/// [`DdsImage::surfaces`]; for a mipmapped cubemap with N array slices
+/// there are `N × 6 × mip_count` surfaces.
+#[derive(Debug, Clone)]
+pub struct DdsSurface {
+    /// Width of this surface in pixels (= `image.width >> mip_level`,
+    /// floored to 1).
+    pub width: u32,
+    /// Height of this surface in pixels.
+    pub height: u32,
+    /// Mip level — 0 for the base level, 1 for half-res, etc.
+    pub mip_level: u32,
+    /// DX10-array slice index (0 for non-array textures).
+    pub array_slice: u32,
+    /// Cubemap face — `None` for non-cubemap textures.
+    pub face: Option<CubemapFace>,
+    /// Plane bytes for this surface (always one plane today).
+    pub plane: DdsPlane,
+}
+
+/// One decoded DDS file — header metadata plus every (array, face,
+/// mip) surface the file carries.
 ///
 /// `pts` is `None` for the standalone [`crate::parse_dds`] entry
 /// point. The registry-backed `Decoder` impl still passes `pts`
 /// through from the surrounding `Packet`.
 #[derive(Debug, Clone)]
 pub struct DdsImage {
-    /// Picture width in pixels.
+    /// Picture width in pixels (mip-0).
     pub width: u32,
-    /// Picture height in pixels.
+    /// Picture height in pixels (mip-0).
     pub height: u32,
     /// On-disk pixel layout the planes carry.
     pub pixel_format: DdsPixelFormat,
-    /// One [`DdsPlane`] per plane — DDS files always pack into a
-    /// single contiguous plane today, so this is always `len() == 1`.
+    /// Mip-0 / first-face / first-array-slice plane. Kept as a
+    /// convenience for callers that don't care about mipmaps,
+    /// cubemaps, or texture arrays — mirrors `surfaces[0].plane`. New
+    /// code should prefer iterating [`Self::surfaces`].
     pub planes: Vec<DdsPlane>,
+    /// Every surface the file carries, in the on-disk order Microsoft
+    /// mandates (outer loop over array slice, then over cubemap face,
+    /// then over mip level).
+    ///
+    /// For a non-mipmapped 2D texture this is a single-element vector
+    /// equivalent to `planes[0]`. For a mipmapped cubemap with N array
+    /// slices the length is `N × 6 × mip_map_count`.
+    pub surfaces: Vec<DdsSurface>,
     /// Optional presentation timestamp (carried through from the
     /// registry-backed decoder; always `None` for the standalone path).
     pub pts: Option<i64>,
     /// Mipmap-level count as declared in the DDS header (1 for
-    /// non-mipmapped surfaces). The pixel data the parser hands back
-    /// covers mip-0 only; round 2 will surface the rest.
+    /// non-mipmapped surfaces).
     pub mip_map_count: u32,
     /// True when the source file used the `DDS_HEADER_DXT10` extension.
     /// Round-trip preserved by the encoder.
@@ -214,4 +288,9 @@ pub struct DdsImage {
     /// legacy headers. Useful for callers that want to know the BC*
     /// sRGB / unorm / snorm variant precisely.
     pub dxgi_format: Option<crate::types::DxgiFormat>,
+    /// True when the source file is a cubemap (`DDSCAPS2_CUBEMAP` set).
+    pub is_cubemap: bool,
+    /// DX10 texture-array element count (1 for non-array textures, 6
+    /// for the per-face slices of a DX10 cubemap, etc.).
+    pub array_size: u32,
 }
