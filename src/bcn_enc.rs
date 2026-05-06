@@ -1,10 +1,12 @@
-//! BCn block encoders — round 3 ships BC1 (DXT1) only.
+//! BCn block encoders — round 3 shipped BC1 (DXT1); round 4 adds
+//! BC2 (DXT3), BC3 (DXT5), BC4 (single channel) and BC5 (two channel).
 //!
-//! Reference: Microsoft's public "BC1, BC2 and BC3" article on
-//! learn.microsoft.com (block layout, c0/c1 ordering, 4-colour vs
-//! 3-colour-plus-transparent rules) and the public Direct3D 11
-//! reference. No DirectXTex / NVTT / libsquish / bc7enc / basisu /
-//! ARM astc-encoder source was consulted; only the public spec.
+//! Reference: Microsoft's public "BC1, BC2 and BC3" + "BC4" + "BC5"
+//! articles on learn.microsoft.com (block layout, c0/c1 ordering,
+//! 4-colour vs 3-colour-plus-transparent rules, 8-value vs 6-value
+//! interpolation modes) and the public Direct3D 11 reference. No
+//! DirectXTex / NVTT / libsquish / bc7enc / basisu / ARM astc-encoder
+//! source was consulted; only the public spec.
 //!
 //! Encoder strategy (BC1):
 //!
@@ -267,10 +269,321 @@ pub fn encode_bc1(
     Ok(())
 }
 
+// ---- BC4 / single-channel interpolated-alpha block encoder ------------
+
+/// Encode 16 single-channel bytes (`pixels`, row-major) into an 8-byte
+/// BC4 block using the interpolated-alpha layout that BC3-alpha and BC4
+/// share. We always emit the 8-value mode (`a0 > a1`) which avoids the
+/// need to special-case "exactly 0" / "exactly 255" pixels — those still
+/// quantise correctly within the 8-value palette.
+///
+/// Strategy:
+/// * Endpoints = `(max, min)` of the input. If max == min, both
+///   endpoints are equal and every index is 0.
+/// * Otherwise build the 8-entry palette and quantise each pixel to the
+///   nearest entry (`abs(diff)` minimum). Pack the resulting 3-bit
+///   indices into the 48-bit packed-index field.
+fn encode_bc4_unorm_block(pixels: &[u8; 16]) -> [u8; 8] {
+    let mut max = 0u8;
+    let mut min = 255u8;
+    for &p in pixels.iter() {
+        if p > max {
+            max = p;
+        }
+        if p < min {
+            min = p;
+        }
+    }
+    if max == min {
+        // Degenerate — emit a 6-value-mode block with a0==a1 and all
+        // indices = 0.
+        let mut out = [0u8; 8];
+        out[0] = max;
+        out[1] = min;
+        return out;
+    }
+    let a0 = max;
+    let a1 = min;
+    // 8-value palette: a0, a1, (6a0+a1)/7 ... (a0+6a1)/7.
+    let mut palette = [0u16; 8];
+    palette[0] = a0 as u16;
+    palette[1] = a1 as u16;
+    for k in 1..=6u16 {
+        let num = (7 - k) * a0 as u16 + k * a1 as u16;
+        palette[(k + 1) as usize] = num / 7;
+    }
+    let mut packed: u64 = 0;
+    for (i, &p) in pixels.iter().enumerate() {
+        let mut best = 0u32;
+        let mut best_d = u32::MAX;
+        for (k, &pal) in palette.iter().enumerate() {
+            let d = (p as i32 - pal as i32).unsigned_abs();
+            if d < best_d {
+                best_d = d;
+                best = k as u32;
+            }
+        }
+        packed |= (best as u64 & 0x7) << (i * 3);
+    }
+    let mut out = [0u8; 8];
+    out[0] = a0;
+    out[1] = a1;
+    let bytes = packed.to_le_bytes();
+    out[2..8].copy_from_slice(&bytes[0..6]);
+    out
+}
+
+/// Encode 16 alpha bytes into a BC2-style explicit-4-bit-alpha block
+/// (8 bytes). Each pixel is quantised by right-shifting 4 bits (top
+/// nibble survives — drops 4 LSBs).
+fn encode_bc2_alpha_block(pixels_alpha: &[u8; 16]) -> [u8; 8] {
+    let mut out = [0u8; 8];
+    for (i, &a) in pixels_alpha.iter().enumerate() {
+        let nibble = a >> 4;
+        if i & 1 == 0 {
+            out[i / 2] |= nibble & 0x0f;
+        } else {
+            out[i / 2] |= (nibble & 0x0f) << 4;
+        }
+    }
+    out
+}
+
+/// Encode an RGBA8 surface to BC2 (DXT3): 4-bit explicit alpha + 4-colour BC1.
+pub fn encode_bc2(input: &[u8], width: u32, height: u32, output: &mut [u8]) -> Result<()> {
+    let bw = width.max(1).div_ceil(4) as usize;
+    let bh = height.max(1).div_ceil(4) as usize;
+    let want_in = width as usize * height as usize * 4;
+    if input.len() < want_in {
+        return Err(DdsError::invalid(format!(
+            "BC2 encoder input {} bytes < expected {} bytes for {}x{}",
+            input.len(),
+            want_in,
+            width,
+            height
+        )));
+    }
+    let want_out = bw * bh * 16;
+    if output.len() < want_out {
+        return Err(DdsError::invalid(format!(
+            "BC2 encoder output {} bytes < expected {} bytes for {}x{}",
+            output.len(),
+            want_out,
+            width,
+            height
+        )));
+    }
+    let stride = width as usize * 4;
+    for by in 0..bh {
+        for bx in 0..bw {
+            let mut block_rgba = [[0u8; 4]; 16];
+            let mut alpha = [0u8; 16];
+            for py in 0..4u32 {
+                let yy = ((by as u32) * 4 + py).min(height.saturating_sub(1));
+                for px in 0..4u32 {
+                    let xx = ((bx as u32) * 4 + px).min(width.saturating_sub(1));
+                    let p = rgba_at(input, xx, yy, stride);
+                    let i = (py * 4 + px) as usize;
+                    block_rgba[i] = p;
+                    alpha[i] = p[3];
+                }
+            }
+            let alpha_bytes = encode_bc2_alpha_block(&alpha);
+            // BC1 colour block, 4-colour mode (no punchthrough).
+            let mut colour_rgba = block_rgba;
+            // BC2 colour block always uses 4-colour interpolation —
+            // force opaque alpha so the BC1 encoder doesn't pick the
+            // 3-colour mode.
+            for p in colour_rgba.iter_mut() {
+                p[3] = 0xff;
+            }
+            let mut bc1 = encode_bc1_block(&colour_rgba, /*alpha*/ false);
+            // Ensure c0 > c1 so the BC2 reader uses the always-4-colour
+            // mode (matches the inner encoder for non-degenerate blocks).
+            let c0 = u16::from_le_bytes([bc1[0], bc1[1]]);
+            let c1 = u16::from_le_bytes([bc1[2], bc1[3]]);
+            if c0 < c1 {
+                // swap c0/c1 and flip indices (4-colour palette is
+                // symmetric: idx 0↔1, idx 2↔3).
+                bc1[0..2].copy_from_slice(&c1.to_le_bytes());
+                bc1[2..4].copy_from_slice(&c0.to_le_bytes());
+                let mut idx = u32::from_le_bytes(bc1[4..8].try_into().unwrap());
+                let flipped = ((idx & 0x55555555) << 1) | ((idx & 0xaaaaaaaa) >> 1);
+                idx = flipped;
+                bc1[4..8].copy_from_slice(&idx.to_le_bytes());
+            }
+            let off = (by * bw + bx) * 16;
+            output[off..off + 8].copy_from_slice(&alpha_bytes);
+            output[off + 8..off + 16].copy_from_slice(&bc1);
+        }
+    }
+    Ok(())
+}
+
+/// Encode an RGBA8 surface to BC3 (DXT5): interpolated-alpha + 4-colour BC1.
+pub fn encode_bc3(input: &[u8], width: u32, height: u32, output: &mut [u8]) -> Result<()> {
+    let bw = width.max(1).div_ceil(4) as usize;
+    let bh = height.max(1).div_ceil(4) as usize;
+    let want_in = width as usize * height as usize * 4;
+    if input.len() < want_in {
+        return Err(DdsError::invalid(format!(
+            "BC3 encoder input {} bytes < expected {} bytes for {}x{}",
+            input.len(),
+            want_in,
+            width,
+            height
+        )));
+    }
+    let want_out = bw * bh * 16;
+    if output.len() < want_out {
+        return Err(DdsError::invalid(format!(
+            "BC3 encoder output {} bytes < expected {} bytes for {}x{}",
+            output.len(),
+            want_out,
+            width,
+            height
+        )));
+    }
+    let stride = width as usize * 4;
+    for by in 0..bh {
+        for bx in 0..bw {
+            let mut block_rgba = [[0u8; 4]; 16];
+            let mut alpha = [0u8; 16];
+            for py in 0..4u32 {
+                let yy = ((by as u32) * 4 + py).min(height.saturating_sub(1));
+                for px in 0..4u32 {
+                    let xx = ((bx as u32) * 4 + px).min(width.saturating_sub(1));
+                    let p = rgba_at(input, xx, yy, stride);
+                    let i = (py * 4 + px) as usize;
+                    block_rgba[i] = p;
+                    alpha[i] = p[3];
+                }
+            }
+            let alpha_bytes = encode_bc4_unorm_block(&alpha);
+            // BC3 colour block always uses 4-colour interpolation; same
+            // c0 > c1 swap rule as BC2.
+            let mut colour_rgba = block_rgba;
+            for p in colour_rgba.iter_mut() {
+                p[3] = 0xff;
+            }
+            let mut bc1 = encode_bc1_block(&colour_rgba, /*alpha*/ false);
+            let c0 = u16::from_le_bytes([bc1[0], bc1[1]]);
+            let c1 = u16::from_le_bytes([bc1[2], bc1[3]]);
+            if c0 < c1 {
+                bc1[0..2].copy_from_slice(&c1.to_le_bytes());
+                bc1[2..4].copy_from_slice(&c0.to_le_bytes());
+                let mut idx = u32::from_le_bytes(bc1[4..8].try_into().unwrap());
+                let flipped = ((idx & 0x55555555) << 1) | ((idx & 0xaaaaaaaa) >> 1);
+                idx = flipped;
+                bc1[4..8].copy_from_slice(&idx.to_le_bytes());
+            }
+            let off = (by * bw + bx) * 16;
+            output[off..off + 8].copy_from_slice(&alpha_bytes);
+            output[off + 8..off + 16].copy_from_slice(&bc1);
+        }
+    }
+    Ok(())
+}
+
+/// Encode an R8 surface to BC4_UNORM. `input.len() >= width * height`,
+/// `output.len() >= ceil(w/4) * ceil(h/4) * 8`.
+pub fn encode_bc4_unorm(input: &[u8], width: u32, height: u32, output: &mut [u8]) -> Result<()> {
+    let bw = width.max(1).div_ceil(4) as usize;
+    let bh = height.max(1).div_ceil(4) as usize;
+    let want_in = width as usize * height as usize;
+    if input.len() < want_in {
+        return Err(DdsError::invalid(format!(
+            "BC4 encoder input {} bytes < expected {} bytes for {}x{}",
+            input.len(),
+            want_in,
+            width,
+            height
+        )));
+    }
+    let want_out = bw * bh * 8;
+    if output.len() < want_out {
+        return Err(DdsError::invalid(format!(
+            "BC4 encoder output {} bytes < expected {} bytes for {}x{}",
+            output.len(),
+            want_out,
+            width,
+            height
+        )));
+    }
+    let stride = width as usize;
+    for by in 0..bh {
+        for bx in 0..bw {
+            let mut block = [0u8; 16];
+            for py in 0..4u32 {
+                let yy = ((by as u32) * 4 + py).min(height.saturating_sub(1));
+                for px in 0..4u32 {
+                    let xx = ((bx as u32) * 4 + px).min(width.saturating_sub(1));
+                    block[(py * 4 + px) as usize] = input[yy as usize * stride + xx as usize];
+                }
+            }
+            let bc = encode_bc4_unorm_block(&block);
+            let off = (by * bw + bx) * 8;
+            output[off..off + 8].copy_from_slice(&bc);
+        }
+    }
+    Ok(())
+}
+
+/// Encode an interleaved RG8 surface (`[r, g, r, g, ...]`) to BC5_UNORM.
+/// `input.len() >= width * height * 2`, `output.len() >=
+/// ceil(w/4) * ceil(h/4) * 16`.
+pub fn encode_bc5_unorm(input: &[u8], width: u32, height: u32, output: &mut [u8]) -> Result<()> {
+    let bw = width.max(1).div_ceil(4) as usize;
+    let bh = height.max(1).div_ceil(4) as usize;
+    let want_in = width as usize * height as usize * 2;
+    if input.len() < want_in {
+        return Err(DdsError::invalid(format!(
+            "BC5 encoder input {} bytes < expected {} bytes for {}x{}",
+            input.len(),
+            want_in,
+            width,
+            height
+        )));
+    }
+    let want_out = bw * bh * 16;
+    if output.len() < want_out {
+        return Err(DdsError::invalid(format!(
+            "BC5 encoder output {} bytes < expected {} bytes for {}x{}",
+            output.len(),
+            want_out,
+            width,
+            height
+        )));
+    }
+    let stride = width as usize * 2;
+    for by in 0..bh {
+        for bx in 0..bw {
+            let mut r = [0u8; 16];
+            let mut g = [0u8; 16];
+            for py in 0..4u32 {
+                let yy = ((by as u32) * 4 + py).min(height.saturating_sub(1));
+                for px in 0..4u32 {
+                    let xx = ((bx as u32) * 4 + px).min(width.saturating_sub(1));
+                    let dst = yy as usize * stride + xx as usize * 2;
+                    let i = (py * 4 + px) as usize;
+                    r[i] = input[dst];
+                    g[i] = input[dst + 1];
+                }
+            }
+            let r_bc = encode_bc4_unorm_block(&r);
+            let g_bc = encode_bc4_unorm_block(&g);
+            let off = (by * bw + bx) * 16;
+            output[off..off + 8].copy_from_slice(&r_bc);
+            output[off + 8..off + 16].copy_from_slice(&g_bc);
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bcn::decode_bc1;
+    use crate::bcn::{decode_bc1, decode_bc2, decode_bc3, decode_bc4_unorm, decode_bc5_unorm};
 
     /// Solid white block → encoder picks both endpoints = white →
     /// every index = 0 → roundtrip is bit-exact.
@@ -391,5 +704,176 @@ mod tests {
         for chunk in decoded.chunks_exact(4) {
             assert_eq!(chunk, &[255, 255, 255, 255]);
         }
+    }
+
+    // ---- BC2 / BC3 / BC4 / BC5 encoder roundtrip tests -----------------
+
+    /// BC4 encoder: solid r = 200 → roundtrip bit-exact (both endpoints
+    /// = 200, every index = 0).
+    #[test]
+    fn bc4_encode_solid_roundtrip() {
+        let input = vec![200u8; 4 * 4];
+        let mut bc = vec![0u8; 8];
+        encode_bc4_unorm(&input, 4, 4, &mut bc).unwrap();
+        let mut decoded = vec![0u8; 4 * 4];
+        decode_bc4_unorm(&bc, 4, 4, &mut decoded).unwrap();
+        for &v in decoded.iter() {
+            assert_eq!(v, 200);
+        }
+    }
+
+    /// BC4 encoder: gradient block — endpoints = (max, min); every pixel
+    /// quantises to one of 8 palette entries and decodes within ±18 of
+    /// the source (8-value bin width = (255 - 0)/7 ≈ 36, so half-bin is 18).
+    #[test]
+    fn bc4_encode_gradient_psnr() {
+        let mut input = vec![0u8; 4 * 4];
+        for (i, b) in input.iter_mut().enumerate() {
+            *b = (i as u8) * 16; // 0, 16, 32, ..., 240
+        }
+        let mut bc = vec![0u8; 8];
+        encode_bc4_unorm(&input, 4, 4, &mut bc).unwrap();
+        let mut decoded = vec![0u8; 4 * 4];
+        decode_bc4_unorm(&bc, 4, 4, &mut decoded).unwrap();
+        let mut sse: u64 = 0;
+        for (s, d) in input.iter().zip(decoded.iter()) {
+            let diff = *s as i32 - *d as i32;
+            sse += (diff * diff) as u64;
+        }
+        // sqrt(sse / 16) — should be <= ~18 (half a bin).
+        let mse = sse as f64 / 16.0;
+        let rmse = mse.sqrt();
+        assert!(rmse < 20.0, "BC4 gradient rmse = {} (want < 20)", rmse);
+    }
+
+    /// BC2 encoder: opaque white block roundtrips bit-exact.
+    #[test]
+    fn bc2_encode_solid_white_roundtrip() {
+        let input = vec![0xffu8; 4 * 4 * 4];
+        let mut bc = vec![0u8; 16];
+        encode_bc2(&input, 4, 4, &mut bc).unwrap();
+        let mut decoded = vec![0u8; 4 * 4 * 4];
+        decode_bc2(&bc, 4, 4, &mut decoded).unwrap();
+        for chunk in decoded.chunks_exact(4) {
+            assert_eq!(chunk, &[255, 255, 255, 255]);
+        }
+    }
+
+    /// BC2 encoder preserves alpha quantised to top-nibble (loss = 4 LSBs
+    /// → output = input & 0xf0 | (input >> 4)).
+    #[test]
+    fn bc2_encode_alpha_quantises_to_top_nibble() {
+        let mut input = vec![0xffu8; 4 * 4 * 4];
+        // Set alpha values to 0x10..0x1f (low nibble varies, top = 1).
+        for (i, chunk) in input.chunks_exact_mut(4).enumerate() {
+            chunk[3] = 0x10 + i as u8;
+        }
+        let mut bc = vec![0u8; 16];
+        encode_bc2(&input, 4, 4, &mut bc).unwrap();
+        let mut decoded = vec![0u8; 4 * 4 * 4];
+        decode_bc2(&bc, 4, 4, &mut decoded).unwrap();
+        // Alpha: top-nibble 1 → expand_to_8 = 0x11. Low nibble dropped.
+        for chunk in decoded.chunks_exact(4) {
+            assert_eq!(chunk[3], 0x11, "BC2 alpha quantised to top nibble");
+        }
+    }
+
+    /// BC3 encoder: solid red opaque block roundtrips bit-exact.
+    #[test]
+    fn bc3_encode_solid_red_roundtrip() {
+        let mut input = vec![0u8; 4 * 4 * 4];
+        for chunk in input.chunks_exact_mut(4) {
+            chunk[0] = 0xff;
+            chunk[3] = 0xff;
+        }
+        let mut bc = vec![0u8; 16];
+        encode_bc3(&input, 4, 4, &mut bc).unwrap();
+        let mut decoded = vec![0u8; 4 * 4 * 4];
+        decode_bc3(&bc, 4, 4, &mut decoded).unwrap();
+        for chunk in decoded.chunks_exact(4) {
+            assert_eq!(chunk, &[0xff, 0, 0, 0xff]);
+        }
+    }
+
+    /// BC3 encoder: gradient alpha 0..240 → BC4-encoded alpha decodes
+    /// within RMSE 20.
+    #[test]
+    fn bc3_encode_alpha_gradient_psnr() {
+        let mut input = vec![0u8; 4 * 4 * 4];
+        for (i, chunk) in input.chunks_exact_mut(4).enumerate() {
+            chunk[0] = 128;
+            chunk[1] = 128;
+            chunk[2] = 128;
+            chunk[3] = (i as u8) * 16;
+        }
+        let mut bc = vec![0u8; 16];
+        encode_bc3(&input, 4, 4, &mut bc).unwrap();
+        let mut decoded = vec![0u8; 4 * 4 * 4];
+        decode_bc3(&bc, 4, 4, &mut decoded).unwrap();
+        let mut sse_a: u64 = 0;
+        for i in 0..16 {
+            let s = input[i * 4 + 3] as i32;
+            let d = decoded[i * 4 + 3] as i32;
+            sse_a += ((s - d) * (s - d)) as u64;
+        }
+        let rmse = (sse_a as f64 / 16.0).sqrt();
+        assert!(rmse < 20.0, "BC3 alpha gradient rmse = {}", rmse);
+    }
+
+    /// BC5 encoder: solid (r=120, g=80) block roundtrips bit-exact.
+    #[test]
+    fn bc5_encode_solid_roundtrip() {
+        let mut input = vec![0u8; 4 * 4 * 2];
+        for pair in input.chunks_exact_mut(2) {
+            pair[0] = 120;
+            pair[1] = 80;
+        }
+        let mut bc = vec![0u8; 16];
+        encode_bc5_unorm(&input, 4, 4, &mut bc).unwrap();
+        let mut decoded = vec![0u8; 4 * 4 * 2];
+        decode_bc5_unorm(&bc, 4, 4, &mut decoded).unwrap();
+        for pair in decoded.chunks_exact(2) {
+            assert_eq!(pair[0], 120);
+            assert_eq!(pair[1], 80);
+        }
+    }
+
+    /// Natural-image PSNR check on a synthetic gradient. The
+    /// furthest-point endpoint heuristic in `encode_bc1_block` gives
+    /// PSNR-RGB > ~30 dB on smoothly-varying photographic-style content.
+    #[test]
+    fn bc1_encode_natural_gradient_psnr_gt_25_db() {
+        // 16×16 RGBA gradient (no alpha variation).
+        let mut input = vec![0u8; 16 * 16 * 4];
+        for y in 0..16 {
+            for x in 0..16 {
+                let off = (y * 16 + x) * 4;
+                input[off] = (x * 16) as u8; // R varies horizontally
+                input[off + 1] = (y * 16) as u8; // G varies vertically
+                input[off + 2] = ((x + y) * 8) as u8; // B varies diagonally
+                input[off + 3] = 0xff;
+            }
+        }
+        let mut bc = vec![0u8; 16 * 8];
+        encode_bc1(&input, 16, 16, false, &mut bc).unwrap();
+        let mut decoded = vec![0u8; 16 * 16 * 4];
+        decode_bc1(&bc, 16, 16, &mut decoded).unwrap();
+        let mut sse: u64 = 0;
+        let mut count: u64 = 0;
+        for i in 0..(16 * 16) {
+            for ch in 0..3 {
+                let s = input[i * 4 + ch] as i32;
+                let d = decoded[i * 4 + ch] as i32;
+                sse += ((s - d) * (s - d)) as u64;
+                count += 1;
+            }
+        }
+        let mse = sse as f64 / count as f64;
+        let psnr = 10.0 * (255.0_f64 * 255.0 / mse).log10();
+        assert!(
+            psnr > 25.0,
+            "BC1 16x16 RGB-gradient PSNR = {:.2} dB (want > 25 dB)",
+            psnr
+        );
     }
 }

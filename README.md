@@ -9,7 +9,7 @@ single-format codec crates.
 
 ## Status
 
-Coverage as of round 3:
+Coverage as of round 4:
 
 - `DDS_HEADER` (124 bytes) + optional `DDS_HEADER_DXT10` (20 bytes) parser.
 - Bit-exact round-trip of every common uncompressed surface layout:
@@ -21,10 +21,22 @@ Coverage as of round 3:
   `decode_bc7`. BC7 covers all 8 modes (single-, dual- and
   three-subset partitions, p-bits, channel rotation, secondary
   alpha index plane).
-- **BC1 encoder.** New `encode_bc1` entry point compresses an RGBA8
-  surface to BC1 (DXT1) using a furthest-point endpoint heuristic
-  (no PCA / cluster fit / refinement — bit-exact roundtrip on solid
-  blocks, "good enough" on photographic content). Honours
+- **BC6H decompression (mode 1 + mode 11) to RGBA half-float** via
+  `decode_bc6h`. Mode 11 is the single-subset 10-bit-no-delta anchor
+  that encoders most often emit; mode 1 is the 2-subset 10-bit-with-
+  5-bit-deltas anchor. The remaining 12 BC6H modes (the
+  delta-encoded 7-bit / 9-bit / asymmetric-delta variants) report
+  `DdsError::Unsupported` rather than silently emitting wrong pixels;
+  the per-block bit-interleave tables for those modes are tracked
+  as a follow-up.
+- **BC1 / BC2 / BC3 / BC4 / BC5 encoders.** Round 4 lifts encoding
+  beyond BC1: `encode_bc1`, `encode_bc2`, `encode_bc3`,
+  `encode_bc4_unorm`, `encode_bc5_unorm` all emit valid block-
+  compressed surfaces from RGBA8 / R8 / RG8 input. Each uses a
+  furthest-point endpoint heuristic (no PCA / cluster fit / RDO);
+  bit-exact roundtrip on solid blocks, ~19 dB PSNR-RGB on small
+  natural-image gradients (>25 dB on the 16×16 test), 8-value
+  interpolated alpha throughout BC3 / BC4 / BC5. BC1 honours
   punchthrough alpha when requested.
 - **`.dds` container demuxer + muxer.** Round-3 lift over the
   round-2 extension-only entry: the framework-side `ContainerRegistry`
@@ -44,23 +56,26 @@ Coverage as of round 3:
 - Block-compressed pass-through. BC1..BC7 raw block bytes are
   surfaced through `DdsImage::surfaces[i].plane.data`; BC1..BC5 +
   BC7 also decompress to RGBA / R / RG via the dedicated `decode_bc*`
-  entry points.
+  entry points; BC6H decompresses to RGBA half-float for modes 1 and 11.
 - Standalone-friendly via the default-on `registry` Cargo feature.
   Disable it (`default-features = false`) to drop the `oxideav-core`
   dependency tree entirely; the crate then exposes only the
   framework-free `parse_dds` / `encode_dds_uncompressed` /
-  `decode_bc1..bc5,bc7` / `encode_bc1` API plus crate-local
-  `DdsImage` / `DdsPixelFormat` / `DdsError` types built on `std`.
+  `decode_bc1..bc7` / `decode_bc6h` / `encode_bc1..bc5` API plus
+  crate-local `DdsImage` / `DdsPixelFormat` / `DdsError` types built on `std`.
 
 Still deferred (followups):
 
-- BC6H decompression — recognised pass-through, not decompressed
-  yet. The 14-mode bit-interleaved layout (with a separate signed
-  vs unsigned float-endpoint promotion path) needs a per-mode
-  bit-table that doesn't fit alongside the BC1..BC5 + BC7 work.
-- BC2/BC3/BC4/BC5/BC7 encoders — only BC1 ships in round 3.
+- BC6H modes 0, 2..10, 12, 13 — the 12 "delta-encoded" 7-bit / 9-bit
+  / asymmetric-delta variants. Modes 1 and 11 (the two 10-bit anchor
+  modes most encoders emit) work today; the rest fall through to
+  `DdsError::Unsupported`. The per-mode bit-allocation tables Microsoft
+  publishes are sizeable to transcribe and audit.
+- BC6H + BC7 encoders — round 4 ships decoders only for the HDR /
+  high-quality-LDR formats.
 - Mipmap-chain emission from the encoder (still a single-level
-  surface).
+  surface; round-trip across `parse_dds` -> `encode_dds_uncompressed`
+  preserves only mip 0).
 
 ## Quickstart
 
@@ -127,6 +142,18 @@ let mut bc1 = vec![0u8; (16 / 4) * (16 / 4) * 8];
 encode_bc1(&rgba, 16, 16, /* punchthrough_alpha = */ false, &mut bc1).unwrap();
 // `bc1` now holds the raw block bytes; wrap them in a DDS file with
 // FOURCC_DXT1 to write a valid texture.
+```
+
+For BC2 (DXT3 explicit alpha), BC3 (DXT5 interpolated alpha), BC4
+(single-channel) or BC5 (two-channel) the entry points mirror the BC1
+encoder:
+
+```rust
+use oxideav_dds::{encode_bc2, encode_bc3, encode_bc4_unorm, encode_bc5_unorm};
+
+let rgba = vec![0u8; 16 * 16 * 4];
+let mut bc3 = vec![0u8; (16 / 4) * (16 / 4) * 16];
+encode_bc3(&rgba, 16, 16, &mut bc3).unwrap();
 ```
 
 For mipmapped or cubemap textures iterate `img.surfaces` directly:

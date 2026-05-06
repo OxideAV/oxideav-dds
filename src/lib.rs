@@ -14,7 +14,7 @@
 //! `four_cc == "DX10"`), and the raw pixel array (or block-compressed
 //! block array) for one or more mip levels.
 //!
-//! Coverage as of round 3:
+//! Coverage as of round 4:
 //!
 //! * Header parsing — magic + `DDS_HEADER` (124 bytes) + optional
 //!   `DDS_HEADER_DXT10` (20 bytes).
@@ -29,9 +29,16 @@
 //!   [`decode_bc1`], [`decode_bc2`], [`decode_bc3`],
 //!   [`decode_bc4_unorm`], [`decode_bc4_snorm`], [`decode_bc5_unorm`],
 //!   [`decode_bc5_snorm`], and [`decode_bc7`].
-//! * **BC1 (DXT1) encoder** via [`encode_bc1`] — compresses an RGBA8
-//!   surface into 8-byte / 4×4-block BC1 with a furthest-point
-//!   endpoint heuristic.
+//! * **BC6H decompression** (modes 1 + 11) to RGBA half-float via
+//!   [`decode_bc6h`]. Modes 1 and 11 are the two 10-bit anchor modes
+//!   (single-subset no-delta + 2-subset 5-bit-delta) that encoders
+//!   most often emit. The remaining 12 BC6H modes return
+//!   `DdsError::Unsupported` and are followups.
+//! * **BC1 + BC2 + BC3 + BC4 + BC5 encoders** via
+//!   [`encode_bc1`], [`encode_bc2`], [`encode_bc3`],
+//!   [`encode_bc4_unorm`], [`encode_bc5_unorm`] — RGBA8 / R8 / RG8 in,
+//!   block bytes out, furthest-point endpoint heuristic, bit-exact
+//!   roundtrip on solid blocks.
 //! * **Mipmap chain + cubemap faces + DX10 texture arrays** — every
 //!   on-disk surface is parsed into [`DdsImage::surfaces`] in
 //!   Microsoft's mandated order (array slice → face → mip).
@@ -47,11 +54,12 @@
 //!
 //! Still deferred (followups):
 //!
-//! * BC6H decompression to RGBA half-float — recognised pass-through,
-//!   not decompressed yet. The 14-mode bit-interleaved layout (with a
-//!   separate signed vs unsigned float-endpoint promotion path) needs
-//!   a per-mode bit-table that doesn't fit alongside the BC7 work.
-//! * BC2/BC3/BC4/BC5/BC7 encoders — only BC1 ships in round 3.
+//! * BC6H modes other than 1 and 11 — the 12 delta-encoded variants
+//!   need a per-mode bit-allocation table that's audit-heavy to
+//!   transcribe. Modes recognised but not implemented return
+//!   `DdsError::Unsupported`.
+//! * BC6H + BC7 encoders — round 4 ships decoders only for the HDR
+//!   and high-quality-LDR formats.
 //! * Mipmap-chain emission from the encoder (still single-level).
 //!
 //! ## Standalone vs registry-integrated
@@ -76,6 +84,7 @@
 //! `texconv`) are used only as black-box validators when generating
 //! test fixtures, not as a source of constants or layout.
 
+pub mod bc6h;
 pub mod bc7;
 pub mod bcn;
 pub mod bcn_enc;
@@ -93,12 +102,13 @@ pub mod registry;
 /// Codec id for DDS image frames.
 pub const CODEC_ID_STR: &str = "dds";
 
+pub use bc6h::decode_bc6h;
 pub use bc7::decode_bc7;
 pub use bcn::{
     decode_bc1, decode_bc2, decode_bc3, decode_bc4_snorm, decode_bc4_unorm, decode_bc5_snorm,
     decode_bc5_unorm,
 };
-pub use bcn_enc::encode_bc1;
+pub use bcn_enc::{encode_bc1, encode_bc2, encode_bc3, encode_bc4_unorm, encode_bc5_unorm};
 pub use decoder::parse_dds;
 pub use encoder::encode_dds_uncompressed;
 pub use error::{DdsError, Result};
