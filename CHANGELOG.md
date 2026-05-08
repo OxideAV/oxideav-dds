@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **BC7 mode 4/5 channel-rotation encoders (round 7)** — the encoder
+  now also tries the two 1-subset channel-rotation modes per block,
+  sweeping all 4 rotation values × (mode 4: 2 idx_sel choices) × mode 5.
+  Mode 4 = 1-subset 5/5/5 RGB + 6-bit alpha + 1-bit `idx_sel` selecting
+  whether the 2-bit primary index plane drives RGB or alpha (and the
+  3-bit secondary plane drives the other). Mode 5 = 1-subset 7/7/7 RGB
+  + 8-bit alpha + 2-bit indices on both planes. The 2-bit `rotation`
+  field swaps A with R/G/B post-decode, letting content where one
+  channel varies independently from the other three use the higher
+  alpha precision. Encoder pre-rotates the input pixels by the chosen
+  rotation, fits RGB and alpha endpoints separately by least-squares,
+  picks per-plane indices, and packs the bitstream — closing the BC7
+  encoder coverage gap (decoder already supported these).
+- **BC6H_SF16 (signed half-float) encoder (round 7)** — new
+  `encode_bc6h_sf16` and `encode_bc6h_sf16_from_f32` entry points emit
+  BC6H blocks for the signed-format DXGI variant (`BC6H_SF16` =
+  format-id 96). Signed format preserves negative values (sign bit at
+  half-bit position 15), useful for HDR content with negative radiance
+  or signed-displacement maps. The encoder mirrors the decoder's
+  signed-pipeline math: signed-magnitude quantisation, signed
+  unquantize (`((c << 15) + 0x4000) >> (bits-1)` per Microsoft), and
+  signed finalize (`(|c| * 31) >> 5` with sign re-attached). Currently
+  emits mode 10 (1-subset, 10/10 absolute, 4-bit indices) for SF16;
+  multi-mode SF16 (delta-encoded modes 11/12/13 + 2-subset modes 0..9
+  signed) is a follow-on. Decoder already supported `signed=true`.
 - **BC6H 2-subset modes 0..9 + 1-subset delta modes 11/12/13 (round 6)**
   — the BC6H encoder now sweeps all 14 BC6H modes per block. For
   2-subset modes (0/1/2/3/4/5/6/7/8/9), the encoder iterates over the

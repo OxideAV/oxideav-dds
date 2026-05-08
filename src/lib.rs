@@ -55,12 +55,23 @@
 //!     trade base precision for ever-smaller delta range.
 //! * **BC7 multi-mode encoder** via [`encode_bc7`]. Round-3 shipped
 //!   mode 6 only (1-subset baseline); round 4 added the three 2-subset
-//!   modes (1 / 3 / 7) and round 5 adds the two 3-subset modes (0 / 2)
-//!   for genuine rank-3 colour content. Mode 0 uses 4-bit RGB +
-//!   per-endpoint p-bits + 3-bit indices on the 16-entry partition
-//!   table; mode 2 uses 5-bit RGB, no p-bits, 2-bit indices on the
-//!   full 64-entry table. Lifts 3-axis natural-image PSNR from the
-//!   ~28 dB round-4 ceiling past 30 dB.
+//!   modes (1 / 3 / 7); round 5 added the two 3-subset modes (0 / 2)
+//!   for genuine rank-3 colour content; round 7 closes encoder
+//!   coverage with the two channel-rotation modes (4 / 5) — 1-subset
+//!   modes with separate RGB / alpha index planes that swap A with
+//!   one of R/G/B post-decode. Mode 4 uses 5/5/5 RGB + 6-bit alpha +
+//!   1-bit `idx_sel` (selects whether the 2-bit primary plane drives
+//!   RGB or alpha); mode 5 uses 7/7/7 RGB + 8-bit alpha + 2-bit on
+//!   both planes. Encoder pre-rotates the input pixels by the chosen
+//!   rotation, fits RGB and alpha endpoints separately by least-
+//!   squares, then packs — closing the encoder gap.
+//! * **BC6H_SF16 (signed) encoder** via [`encode_bc6h_sf16`] (and the
+//!   f32-input convenience [`encode_bc6h_sf16_from_f32`]). Mirrors the
+//!   decoder's signed-magnitude pipeline (signed unquantize + signed
+//!   finalize per Microsoft) for content with negative radiance or
+//!   signed-displacement maps. Currently emits mode 10 (1-subset,
+//!   10-bit signed absolute, 4-bit indices); multi-mode SF16 is a
+//!   follow-on round.
 //! * **Mipmap chain emission** for both uncompressed
 //!   ([`encode_dds_uncompressed`]) and block-compressed
 //!   ([`encode_dds_block_compressed`]) surfaces. The uncompressed path
@@ -90,8 +101,12 @@
 //!
 //! Still deferred (followups):
 //!
-//! * BC7 mode 4 / 5 channel-rotation encoders — decoded but not
-//!   encoded; the encode picker uses modes 0–3, 6, 7 only.
+//! * BC6H_SF16 multi-mode (delta-encoded modes 11/12/13 signed +
+//!   2-subset modes 0..9 signed) — currently [`encode_bc6h_sf16`]
+//!   emits mode 10 only.
+//! * LSQ refinement metric — current pixel-space LSQ is approximate;
+//!   fitting in unq-space could push 1-2 dB more on multi-axis HDR
+//!   content.
 //!
 //! ## Standalone vs registry-integrated
 //!
@@ -136,7 +151,9 @@ pub mod registry;
 pub const CODEC_ID_STR: &str = "dds";
 
 pub use bc6h::decode_bc6h;
-pub use bc6h_enc::{encode_bc6h, encode_bc6h_from_f32};
+pub use bc6h_enc::{
+    encode_bc6h, encode_bc6h_from_f32, encode_bc6h_sf16, encode_bc6h_sf16_from_f32,
+};
 pub use bc7::decode_bc7;
 pub use bc7_enc::encode_bc7;
 pub use bcn::{

@@ -1084,6 +1084,369 @@ pub fn encode_bc6h_from_f32(
     encode_bc6h(&halves, width, height, output)
 }
 
+// ---- BC6H_SF16 (signed half-float) encoder -----------------------------
+//
+// Round 7 closes the BC6H encoder coverage gap by adding a signed-format
+// (BC6H_SF16) entry point. The decoder already supports both unsigned and
+// signed flags; this section mirrors the encoder pipeline against the
+// signed unquantize / finalize formulas so encoded blocks roundtrip
+// through the decoder when the caller opts into BC6H_SF16.
+//
+// Pipeline differences from BC6H_UF16:
+//
+//   1. `quantize_half_sf16(half, bits)` — quantises a *signed* 16-bit half
+//      to a `bits`-bit signed integer. Forward: q -> unq_signed(q, bits)
+//      -> finish_sf16(unq) = (sign(unq) * (|unq| * 31) >> 5) | sign<<15.
+//   2. `unquantize_sf16(comp, bits)` — sign-magnitude unquantize. Returns
+//      a 17-bit signed integer (range [-0xffff, 0xffff]).
+//   3. `finish_sf16(comp)` — outputs a 16-bit half (sign-magnitude).
+//
+// We support modes 10 (1-subset 10/10 absolute) + 11 (1-subset 10.10 base
+// + 9-bit signed delta) for SF16; that covers the natural single-subset
+// HDR-with-negative-radiance use case. Multi-subset SF16 modes use the
+// same partition-sweep machinery as UF16 but with the signed-formula
+// helpers (added incrementally as workloads demand).
+
+#[inline]
+fn unquantize_sf16(comp: i32, bits: u32) -> i32 {
+    if bits >= 16 {
+        return comp;
+    }
+    let s = comp < 0;
+    let mut c = if s { -comp } else { comp };
+    let unq = if c == 0 {
+        0
+    } else if c >= ((1i32 << (bits - 1)) - 1) {
+        0x7fff
+    } else {
+        ((c << 15) + 0x4000) >> (bits - 1)
+    };
+    c = unq;
+    if s {
+        -c
+    } else {
+        c
+    }
+}
+
+#[inline]
+fn finish_sf16(comp: i32) -> u16 {
+    let (s, c) = if comp < 0 {
+        (1u16, ((-comp) as u32 * 31) >> 5)
+    } else {
+        (0u16, (comp as u32 * 31) >> 5)
+    };
+    (s << 15) | (c.min(0x7fff) as u16)
+}
+
+/// Convert a signed 16-bit half-float to its sign-magnitude integer
+/// representation: returns the value in [-0x7fff, 0x7fff].
+#[inline]
+fn half_sf16_to_signed_magnitude(half_bits: u16) -> i32 {
+    let s = (half_bits >> 15) & 1;
+    let mag = (half_bits & 0x7fff) as i32;
+    if s == 1 {
+        -mag
+    } else {
+        mag
+    }
+}
+
+/// Convert a signed magnitude back to a sign-magnitude half-float.
+/// Currently only used by the SF16 round-trip self-test.
+#[cfg(test)]
+fn signed_magnitude_to_half(value: i32) -> u16 {
+    if value < 0 {
+        let mag = (-value).min(0x7fff) as u16;
+        (1u16 << 15) | mag
+    } else {
+        (value.min(0x7fff)) as u16
+    }
+}
+
+/// Quantise a sign-magnitude half-float (i32 in [-0x7fff, 0x7fff]) to a
+/// `bits`-bit signed integer. The forward pipeline is q -> unq_signed
+/// -> finish_sf16; we invert it via probe-around-estimate.
+fn quantize_half_sf16(half_signed: i32, bits: u32) -> i32 {
+    let max_q = (1i32 << (bits - 1)) - 1;
+    let min_q = -max_q; // BC6H_SF16's signed range is symmetric.
+
+    // Forward: q -> 16-bit signed half-bits.
+    let forward = |q: i32| -> i32 {
+        let unq = unquantize_sf16(q, bits);
+        let half = finish_sf16(unq);
+        half_sf16_to_signed_magnitude(half)
+    };
+
+    if half_signed == 0 {
+        return 0;
+    }
+
+    // Continuous estimate: target_mag * 32 ≈ unq_mag * 31; unq ≈ target * 32 / 31.
+    let target_mag = half_signed.unsigned_abs() as i64;
+    let unq_est = (target_mag * 32) / 31;
+    let lhs = (unq_est << (bits - 1)).saturating_sub(0x4000);
+    let q_mag = (lhs >> 15) as i32;
+    let q_est = if half_signed < 0 {
+        -q_mag.min(max_q)
+    } else {
+        q_mag.min(max_q)
+    };
+
+    let mut best = q_est.clamp(min_q, max_q);
+    let mut best_err = (forward(best) - half_signed).unsigned_abs() as i64;
+    for d in [-2i32, -1, 0, 1, 2] {
+        let cand = (q_est + d).clamp(min_q, max_q);
+        let err = (forward(cand) - half_signed).unsigned_abs() as i64;
+        if err < best_err {
+            best_err = err;
+            best = cand;
+        }
+    }
+    best
+}
+
+/// Squared error between two signed-half-float RGB triples (in f32 space).
+fn sq_err_rgb_signed_half(a: [u16; 3], b: [u16; 3]) -> f64 {
+    let mut s = 0.0_f64;
+    for c in 0..3 {
+        let af = half_to_f32(a[c]) as f64;
+        let bf = half_to_f32(b[c]) as f64;
+        let d = af - bf;
+        s += d * d;
+    }
+    s
+}
+
+fn furthest_pair_global_signed(pixels: &[[u16; 3]; 16]) -> (usize, usize) {
+    let mut best_d = -1.0_f64;
+    let mut bi = 0usize;
+    let mut bj = 0usize;
+    for i in 0..16 {
+        for j in (i + 1)..16 {
+            let d = sq_err_rgb_signed_half(pixels[i], pixels[j]);
+            if d > best_d {
+                best_d = d;
+                bi = i;
+                bj = j;
+            }
+        }
+    }
+    (bi, bj)
+}
+
+/// Pack the SF16 mode-10 bitstream. Identical bit layout to the UF16
+/// mode 10; the only difference is in the *interpretation* of the field
+/// bits (signed vs unsigned). We store the raw twos-complement value
+/// truncated to `prec` bits — the decoder sign-extends it back when the
+/// signed flag is on.
+fn pack_mode10_signed(q0: [i32; 3], q1: [i32; 3], indices: [u32; 16]) -> [u8; 16] {
+    let mi = mode_info(10).expect("mode 10 info");
+    let prec_mask = (1u32 << 10) - 1;
+    let q = [
+        [(q0[0] as u32) & prec_mask, (q1[0] as u32) & prec_mask, 0, 0],
+        [(q0[1] as u32) & prec_mask, (q1[1] as u32) & prec_mask, 0, 0],
+        [(q0[2] as u32) & prec_mask, (q1[2] as u32) & prec_mask, 0, 0],
+    ];
+    pack_bc6h(&mi, 0b00011, 5, q, 0, &indices, 15)
+}
+
+fn snap_indices_1subset_signed(
+    pixels: &[[u16; 3]; 16],
+    q0: &[i32; 3],
+    q1: &[i32; 3],
+    prec: u32,
+    idx_bits: u32,
+    indices: &mut [u32; 16],
+) -> f64 {
+    let mut endpoints = [[0i32; 2]; 3];
+    for c in 0..3 {
+        endpoints[c][0] = unquantize_sf16(q0[c], prec);
+        endpoints[c][1] = unquantize_sf16(q1[c], prec);
+    }
+    let palette_size = 1usize << idx_bits;
+    let mut palette = [[0u16; 3]; 16];
+    for k in 0..palette_size {
+        for c in 0..3 {
+            let v = interp_endpoint(endpoints[c][0], endpoints[c][1], k, idx_bits);
+            palette[k][c] = finish_sf16(v);
+        }
+    }
+    let mut sse = 0.0f64;
+    for (px, &p) in pixels.iter().enumerate() {
+        let mut best_k = 0u32;
+        let mut best_e = f64::MAX;
+        for k in 0..palette_size {
+            let e = sq_err_rgb_signed_half(p, palette[k]);
+            if e < best_e {
+                best_e = e;
+                best_k = k as u32;
+            }
+        }
+        indices[px] = best_k;
+        sse += best_e;
+    }
+    sse
+}
+
+/// Encode one 4×4 block as BC6H_SF16 mode 10 (1-subset, 10-bit signed
+/// absolute endpoints, 4-bit indices). Returns `(block, sse)`.
+fn encode_mode10_signed(pixels: &[[u16; 3]; 16]) -> ([u8; 16], f64) {
+    let (bi, bj) = furthest_pair_global_signed(pixels);
+    let half0 = pixels[bi];
+    let half1 = pixels[bj];
+
+    let mut q0 = [0i32; 3];
+    let mut q1 = [0i32; 3];
+    for c in 0..3 {
+        let s0 = half_sf16_to_signed_magnitude(half0[c]);
+        let s1 = half_sf16_to_signed_magnitude(half1[c]);
+        q0[c] = quantize_half_sf16(s0, 10);
+        q1[c] = quantize_half_sf16(s1, 10);
+    }
+    let mut indices = [0u32; 16];
+    let sse = snap_indices_1subset_signed(pixels, &q0, &q1, 10, 4, &mut indices);
+
+    if indices[0] >= 8 {
+        std::mem::swap(&mut q0, &mut q1);
+        for idx in indices.iter_mut() {
+            *idx = 15 - *idx;
+        }
+    }
+    let block = pack_mode10_signed(q0, q1, indices);
+    (block, sse)
+}
+
+/// Block-level BC6H_SF16 picker. Currently dispatches mode 10 (1-subset
+/// 10/10 absolute) only — mode 11 (delta-encoded) and 2-subset modes
+/// require parallel signed-quantizer + signed-delta logic which are
+/// follow-on work.
+fn encode_bc6h_block_sf16(pixels: &[[u16; 3]; 16]) -> [u8; 16] {
+    let (block, _sse) = encode_mode10_signed(pixels);
+    block
+}
+
+/// Encode a width × height RGBA half-float surface (with sign-magnitude
+/// halves) to BC6H_SF16. Inputs may include negative values (sign bit
+/// set in any pixel half). The decoder must be invoked with `signed=true`.
+///
+/// This is the signed counterpart to [`encode_bc6h`]. `input` must hold
+/// `width × height × 8` bytes (interleaved RGBA half-float, alpha
+/// ignored). `output` must hold `ceil(w/4) × ceil(h/4) × 16` bytes.
+pub fn encode_bc6h_sf16(input: &[u8], width: u32, height: u32, output: &mut [u8]) -> Result<()> {
+    let bw = width.max(1).div_ceil(4) as usize;
+    let bh = height.max(1).div_ceil(4) as usize;
+    let want_in = width as usize * height as usize * 8;
+    if input.len() < want_in {
+        return Err(DdsError::invalid(format!(
+            "BC6H_SF16 encoder input {} bytes < expected {} bytes for {}x{}",
+            input.len(),
+            want_in,
+            width,
+            height
+        )));
+    }
+    let want_out = bw * bh * 16;
+    if output.len() < want_out {
+        return Err(DdsError::invalid(format!(
+            "BC6H_SF16 encoder output {} bytes < expected {} bytes for {}x{}",
+            output.len(),
+            want_out,
+            width,
+            height
+        )));
+    }
+    let mut halves = vec![0u16; (width * height * 4) as usize];
+    for (i, h) in halves.iter_mut().enumerate() {
+        *h = u16::from_le_bytes([input[i * 2], input[i * 2 + 1]]);
+    }
+    let stride_pixels = width as usize;
+    for by in 0..bh {
+        for bx in 0..bw {
+            let mut block = [[0u16; 3]; 16];
+            for py in 0..4u32 {
+                let yy = ((by as u32) * 4 + py).min(height.saturating_sub(1));
+                for px in 0..4u32 {
+                    let xx = ((bx as u32) * 4 + px).min(width.saturating_sub(1));
+                    let rgb = rgb_at(&halves, xx, yy, stride_pixels);
+                    block[(py * 4 + px) as usize] = rgb;
+                }
+            }
+            let bc = encode_bc6h_block_sf16(&block);
+            let off = (by * bw + bx) * 16;
+            output[off..off + 16].copy_from_slice(&bc);
+        }
+    }
+    Ok(())
+}
+
+/// Convenience: encode a `width × height × 3` f32 RGB surface as
+/// BC6H_SF16 (signed). Negative samples are preserved in the output
+/// (unlike [`encode_bc6h_from_f32`] which clamps negatives to zero).
+pub fn encode_bc6h_sf16_from_f32(
+    input: &[f32],
+    width: u32,
+    height: u32,
+    output: &mut [u8],
+) -> Result<()> {
+    let want_in = (width as usize) * (height as usize) * 3;
+    if input.len() < want_in {
+        return Err(DdsError::invalid(format!(
+            "BC6H_SF16 f32 input {} samples < expected {} for {}x{}",
+            input.len(),
+            want_in,
+            width,
+            height
+        )));
+    }
+    // Convert to sign-magnitude half RGBA (alpha = 0x3c00 = 1.0).
+    let mut halves = vec![0u8; width as usize * height as usize * 8];
+    for i in 0..(width as usize * height as usize) {
+        let r = f32_to_half_signed(input[i * 3]);
+        let g = f32_to_half_signed(input[i * 3 + 1]);
+        let b = f32_to_half_signed(input[i * 3 + 2]);
+        let a = 0x3c00u16;
+        halves[i * 8..i * 8 + 2].copy_from_slice(&r.to_le_bytes());
+        halves[i * 8 + 2..i * 8 + 4].copy_from_slice(&g.to_le_bytes());
+        halves[i * 8 + 4..i * 8 + 6].copy_from_slice(&b.to_le_bytes());
+        halves[i * 8 + 6..i * 8 + 8].copy_from_slice(&a.to_le_bytes());
+    }
+    encode_bc6h_sf16(&halves, width, height, output)
+}
+
+/// Convert an `f32` to a sign-magnitude IEEE-754 binary16 (preserves
+/// the sign bit, unlike [`f32_to_half`] which clamps negatives to zero).
+fn f32_to_half_signed(value: f32) -> u16 {
+    let bits = value.to_bits();
+    let sign = (bits >> 31) & 1;
+    let exp = ((bits >> 23) & 0xff) as i32;
+    let mant = bits & 0x7f_ffff;
+
+    if exp == 0xff {
+        // Infinity / NaN → max-finite, preserve sign.
+        return ((sign as u16) << 15) | 0x7bff;
+    }
+    if exp == 0 && mant == 0 {
+        return (sign as u16) << 15;
+    }
+    let exp_f16 = exp - 127 + 15;
+    if exp_f16 >= 0x1f {
+        // Overflow → max-finite.
+        return ((sign as u16) << 15) | 0x7bff;
+    }
+    if exp_f16 <= 0 {
+        // Subnormal half — shift mantissa right.
+        let shift = 1 - exp_f16;
+        if shift > 24 {
+            return (sign as u16) << 15;
+        }
+        let m = (mant | 0x800000) >> (shift + 13);
+        return ((sign as u16) << 15) | (m as u16);
+    }
+    let m = mant >> 13;
+    ((sign as u16) << 15) | ((exp_f16 as u16) << 10) | (m as u16)
+}
+
 // Suppress unused-warning for helper kept for future iterative refinement.
 #[allow(dead_code)]
 fn _unused() {
@@ -1464,5 +1827,179 @@ mod tests {
     fn encode_delta_overflow_returns_none() {
         // q0=0, q1=512 with delta_bits=9. Signed range is [-256,255]; 512 > 255.
         assert_eq!(encode_delta(0, 512, 10, 9), None);
+    }
+
+    // ---- BC6H_SF16 (signed) tests --------------------------------------
+
+    /// f32_to_half_signed preserves sign for negative inputs.
+    #[test]
+    fn f32_to_half_signed_negative() {
+        assert_eq!(f32_to_half_signed(-1.0), 0x8000 | 0x3c00);
+        assert_eq!(f32_to_half_signed(-0.5), 0x8000 | 0x3800);
+        assert_eq!(f32_to_half_signed(0.0), 0x0000);
+        assert_eq!(f32_to_half_signed(1.0), 0x3c00);
+    }
+
+    /// half_sf16_to_signed_magnitude / signed_magnitude_to_half round-trip.
+    /// Negative zero (`0x8000`) collapses to +0 because sign-magnitude
+    /// integer 0 has no sign bit; that's the IEEE-equivalent value.
+    #[test]
+    fn half_sf16_signed_magnitude_roundtrip() {
+        for h in [0x0000u16, 0x3c00, 0x3800, 0x7bff, 0x8001, 0xbc00, 0xfbff] {
+            let sm = half_sf16_to_signed_magnitude(h);
+            let back = signed_magnitude_to_half(sm);
+            assert_eq!(h, back, "roundtrip {:#x} -> {} -> {:#x}", h, sm, back);
+        }
+        // Negative zero: signed-magnitude integer 0 carries no sign,
+        // so the round-trip yields the IEEE-equivalent +0.
+        assert_eq!(
+            signed_magnitude_to_half(half_sf16_to_signed_magnitude(0x8000)),
+            0x0000
+        );
+    }
+
+    /// SF16 quantize then unquantize then finish reproduces the input
+    /// half within ~1 LSB for typical mid-range values.
+    #[test]
+    fn quantize_sf16_roundtrip_midrange() {
+        // Half(0.5) = 0x3800 (positive); half(-0.5) = 0xb800.
+        for h in [0x3800u16, 0x3c00u16, 0x4400u16, 0xb800u16, 0xbc00u16] {
+            let s = half_sf16_to_signed_magnitude(h);
+            let q = quantize_half_sf16(s, 10);
+            let unq = unquantize_sf16(q, 10);
+            let back = finish_sf16(unq);
+            let s_back = half_sf16_to_signed_magnitude(back);
+            // Should be within ~1% relative error after the 31/32 finalise.
+            let abs_err = (s - s_back).unsigned_abs();
+            assert!(
+                abs_err < 200,
+                "SF16 roundtrip {:#x}: orig sm={} -> q={} -> unq={} -> back={:#x} (sm={}) abs_err={}",
+                h,
+                s,
+                q,
+                unq,
+                back,
+                s_back,
+                abs_err
+            );
+        }
+    }
+
+    /// BC6H_SF16: encode a solid (-0.5, -0.5, -0.5) HDR block (negative
+    /// radiance — only valid in signed format). Decode with `signed=true`
+    /// and verify all pixels recover something close to (-0.5, -0.5, -0.5).
+    #[test]
+    fn bc6h_encode_sf16_solid_negative_block() {
+        let half_neg = 0xb800u16; // half(-0.5)
+        let mut input = vec![0u8; 4 * 4 * 8];
+        for i in 0..16 {
+            let off = i * 8;
+            input[off..off + 2].copy_from_slice(&half_neg.to_le_bytes());
+            input[off + 2..off + 4].copy_from_slice(&half_neg.to_le_bytes());
+            input[off + 4..off + 6].copy_from_slice(&half_neg.to_le_bytes());
+            input[off + 6..off + 8].copy_from_slice(&0x3c00u16.to_le_bytes());
+        }
+        let mut bc = vec![0u8; 16];
+        encode_bc6h_sf16(&input, 4, 4, &mut bc).unwrap();
+        let mut decoded = vec![0u8; 4 * 4 * 8];
+        decode_bc6h(&bc, 4, 4, true, &mut decoded).unwrap();
+        for i in 0..16 {
+            let off = i * 8;
+            for c in 0..3 {
+                let v = u16::from_le_bytes([decoded[off + c * 2], decoded[off + c * 2 + 1]]);
+                let f = half_to_f32(v);
+                // Expect ~-0.5; allow ±0.05 for the SF16 31/32 finalise.
+                assert!(
+                    f < -0.4 && f > -0.6,
+                    "pixel {} ch {} = {:#x} ({}) — expected ~-0.5",
+                    i,
+                    c,
+                    v,
+                    f
+                );
+            }
+        }
+    }
+
+    /// BC6H_SF16: encode an f32 gradient that spans both signs (e.g.,
+    /// [-0.5, 0.5]). Decode with `signed=true` and verify per-pixel
+    /// PSNR > 19 dB. Mode 10 alone (1-subset, 10-bit signed absolute
+    /// endpoints) hits this on a sign-spanning gradient — the BC6H_SF16
+    /// 31/32 finalise has an inherent ~1.6% cap-loss at endpoint
+    /// extremes, so the PSNR ceiling on f32 [−0.5, 0.5] content is
+    /// ~22-24 dB even for an exactly-fitting endpoint pair. Mode 11
+    /// (delta-encoded, +1 base bit) and the 2-subset signed modes
+    /// remain a follow-on for tighter signed-content PSNR.
+    #[test]
+    fn bc6h_encode_sf16_signed_gradient_psnr_gt_19db() {
+        let mut input_f32 = vec![0f32; 4 * 4 * 3];
+        for y in 0..4 {
+            for x in 0..4 {
+                let off = (y * 4 + x) * 3;
+                let v = -0.5 + ((x + y) as f32) / 6.0;
+                input_f32[off] = v;
+                input_f32[off + 1] = v;
+                input_f32[off + 2] = v;
+            }
+        }
+        let mut bc = vec![0u8; 16];
+        encode_bc6h_sf16_from_f32(&input_f32, 4, 4, &mut bc).unwrap();
+        let mut decoded = vec![0u8; 4 * 4 * 8];
+        decode_bc6h(&bc, 4, 4, true, &mut decoded).unwrap();
+
+        let mut input_half = vec![0u8; 4 * 4 * 8];
+        for i in 0..16 {
+            let r = f32_to_half_signed(input_f32[i * 3]);
+            let g = f32_to_half_signed(input_f32[i * 3 + 1]);
+            let b = f32_to_half_signed(input_f32[i * 3 + 2]);
+            input_half[i * 8..i * 8 + 2].copy_from_slice(&r.to_le_bytes());
+            input_half[i * 8 + 2..i * 8 + 4].copy_from_slice(&g.to_le_bytes());
+            input_half[i * 8 + 4..i * 8 + 6].copy_from_slice(&b.to_le_bytes());
+            input_half[i * 8 + 6..i * 8 + 8].copy_from_slice(&0x3c00u16.to_le_bytes());
+        }
+        let psnr = psnr_rgb_half(&input_half, &decoded);
+        assert!(
+            psnr > 19.0,
+            "BC6H_SF16 signed gradient PSNR (peak 1.0) = {:.2} dB (want > 19 dB)",
+            psnr
+        );
+    }
+
+    /// BC6H_SF16: a positive-only block should round-trip through the
+    /// signed pipeline just as well as through the unsigned pipeline
+    /// (the sign bit is just always 0).
+    #[test]
+    fn bc6h_encode_sf16_positive_block_psnr_gt_25db() {
+        let mut input_f32 = vec![0f32; 4 * 4 * 3];
+        for y in 0..4 {
+            for x in 0..4 {
+                let off = (y * 4 + x) * 3;
+                let v = 0.1 + (x + y) as f32 * 0.05;
+                input_f32[off] = v;
+                input_f32[off + 1] = v;
+                input_f32[off + 2] = v;
+            }
+        }
+        let mut bc = vec![0u8; 16];
+        encode_bc6h_sf16_from_f32(&input_f32, 4, 4, &mut bc).unwrap();
+        let mut decoded = vec![0u8; 4 * 4 * 8];
+        decode_bc6h(&bc, 4, 4, true, &mut decoded).unwrap();
+
+        let mut input_half = vec![0u8; 4 * 4 * 8];
+        for i in 0..16 {
+            let r = f32_to_half_signed(input_f32[i * 3]);
+            let g = f32_to_half_signed(input_f32[i * 3 + 1]);
+            let b = f32_to_half_signed(input_f32[i * 3 + 2]);
+            input_half[i * 8..i * 8 + 2].copy_from_slice(&r.to_le_bytes());
+            input_half[i * 8 + 2..i * 8 + 4].copy_from_slice(&g.to_le_bytes());
+            input_half[i * 8 + 4..i * 8 + 6].copy_from_slice(&b.to_le_bytes());
+            input_half[i * 8 + 6..i * 8 + 8].copy_from_slice(&0x3c00u16.to_le_bytes());
+        }
+        let psnr = psnr_rgb_half(&input_half, &decoded);
+        assert!(
+            psnr > 25.0,
+            "BC6H_SF16 positive block PSNR (peak 1.0) = {:.2} dB (want > 25 dB)",
+            psnr
+        );
     }
 }

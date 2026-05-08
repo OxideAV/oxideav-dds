@@ -53,15 +53,25 @@ Coverage as of round 4:
   on tight-range gradients (mode 11/12 wins) and 2-subset
   partition-friendly content (mode 0/2..9 wins).
 - **BC7 multi-mode encoder.** Round-3 shipped mode 6 only; round 4
-  adds the three 2-subset modes — mode 1 (6-bit RGB + shared p-bits,
+  added the three 2-subset modes — mode 1 (6-bit RGB + shared p-bits,
   opaque), mode 3 (7-bit RGB + per-endpoint p-bits, opaque) and mode
-  7 (5-bit RGBA + per-endpoint p-bits, translucent) — with a full
-  64-entry partition-table sweep and least-squares endpoint
-  refinement. The block-level encoder picks the candidate with the
-  lowest SSE. Lifts multi-axis natural-image PSNR from the ~22 dB
-  mode-6 ceiling to ~28 dB on 3-axis content and ≥30 dB on rank-2
-  (two-region) content. The 3-subset modes 0 and 2 (genuine 3-axis
-  content) remain a future-round optimisation.
+  7 (5-bit RGBA + per-endpoint p-bits, translucent). Round 5 added
+  the 3-subset modes 0 and 2. Round 7 closes the encoder coverage
+  with the 1-subset channel-rotation modes 4 and 5: each block sweeps
+  all 4 rotation values × (mode 4: 2 idx_sel choices) × mode 5,
+  letting content with one independent channel use the higher alpha
+  precision via channel-rotation. With 8-mode coverage (0..7) and
+  full Microsoft / Khronos partition-table sweeps the encoder lifts
+  multi-axis natural-image PSNR-RGB past 30 dB and decorrelated-alpha
+  content past 30 dB-RGBA.
+- **BC6H_SF16 (signed) encoder.** `encode_bc6h_sf16` and
+  `encode_bc6h_sf16_from_f32` emit signed-format BC6H blocks (DXGI
+  `BC6H_SF16`). Mirrors the decoder's signed-magnitude pipeline:
+  signed-magnitude quantise, signed unquantize, signed finalize.
+  Currently emits mode 10 (1-subset, 10-bit signed absolute, 4-bit
+  indices) — sufficient for typical signed-displacement-map content.
+  Multi-mode SF16 (modes 11/12/13 signed-delta + 2-subset signed)
+  is a follow-on round.
 - **Mipmap chain emission** for both uncompressed and BC* surfaces.
   `encode_dds_uncompressed` emits a full mipmap chain when
   `image.mip_map_count > 1` (caller-supplied surfaces written
@@ -99,8 +109,10 @@ Coverage as of round 4:
 
 Still deferred (followups):
 
-- BC7 channel-rotation encoders (modes 4 and 5) — decoded but not
-  encoded; the encode picker uses modes 0–3, 6, 7 only.
+- BC6H_SF16 multi-mode (delta-encoded modes 11/12/13 signed + 2-subset
+  modes 0..9 signed) — currently `encode_bc6h_sf16` emits mode 10 only.
+- LSQ refinement metric — current pixel-space LSQ is approximate; fitting
+  in unq-space could push 1-2 dB more on multi-axis HDR content.
 
 ## Quickstart
 

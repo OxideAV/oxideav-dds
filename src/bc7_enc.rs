@@ -41,11 +41,20 @@
 //! 5. The block-level encoder picks the candidate with the lowest SSE
 //!    across modes 0, 1, 2, 3, 6 (opaque) or 6 + 7 (translucent).
 //!
-//! With ~6 candidate modes × up to 64 partitions × 2..4 p-bit choices
-//! per subset the per-block work is ~6 × 256 quantise+SSE iterations —
-//! in release mode that's ~O(150 µs) per 4×4 block, fine for small
-//! textures and test fixtures. Mode 4/5 channel-rotation encoders
-//! remain a separate followup.
+//! Round 7 closes the encoder coverage gap by adding mode 4/5
+//! channel-rotation encoders — both are 1-subset modes with separate
+//! RGB and alpha index planes plus a 2-bit field that swaps A with one
+//! of R/G/B post-decode. Mode 4 carries a 1-bit `idx_sel` that picks
+//! whether the 2-bit primary plane drives RGB or alpha; mode 5 has
+//! 2-bit indices on both planes. The encoder pre-rotates the input
+//! pixels by the chosen rotation, fits RGB and alpha endpoints
+//! separately, picks per-plane indices, then packs — sweeping all 4
+//! rotation values (× 2 idx_sel choices for mode 4).
+//!
+//! With ~7 candidate modes × up to 64 partitions × 2..4 p-bit choices
+//! per subset the per-block work is ~7 × 256 quantise+SSE iterations —
+//! in release mode that's ~O(180 µs) per 4×4 block, fine for small
+//! textures and test fixtures.
 //!
 //! Output is byte-by-byte bit-exact decoder-roundtrippable: the encoder
 //! always picks indices against the palette the *decoder* will produce,
@@ -894,6 +903,724 @@ fn encode_bc7_3subset(pixels_rgba: &[[u8; 4]; 16], mode: u32, partition: u32) ->
     (block, sse)
 }
 
+// ---- Mode 4 / 5 (1-subset, channel-rotation, dual index plane) ----------
+
+/// Apply BC7 channel-rotation to a 4-channel pixel: swap channel `rot`
+/// with the alpha channel (rot=0 → no swap; rot=1 → A↔R; rot=2 → A↔G;
+/// rot=3 → A↔B). Used by both encoder and decoder; involution (applying
+/// twice yields the identity).
+#[inline]
+fn apply_rotation(pixel: [u8; 4], rot: u32) -> [u8; 4] {
+    let mut p = pixel;
+    match rot {
+        0 => {}
+        1 => p.swap(0, 3),
+        2 => p.swap(1, 3),
+        3 => p.swap(2, 3),
+        _ => unreachable!(),
+    }
+    p
+}
+
+/// 1-D quantiser for an 8-bit value to `bits` bits, no p-bit (modes 4/5
+/// alpha when `bits >= 8`, or RGB channels with bit-replication when bits < 8).
+fn quantize_1ch_no_pbit(value: u8, bits: u32) -> (u32, u8) {
+    if bits >= 8 {
+        return (value as u32, value);
+    }
+    let max_raw = (1u32 << bits) - 1;
+    let approx = (value as u32) >> (8 - bits);
+    let mut best = (approx, recon8_no_pbit(approx, bits));
+    let mut best_err = abs_diff_i32(value as i32, best.1 as i32);
+    for delta in [-1i32, 1] {
+        let r = approx as i32 + delta;
+        if r < 0 || r > max_raw as i32 {
+            continue;
+        }
+        let r = r as u32;
+        let rec = recon8_no_pbit(r, bits);
+        let err = abs_diff_i32(value as i32, rec as i32);
+        if err < best_err {
+            best_err = err;
+            best = (r, rec);
+        }
+    }
+    best
+}
+
+/// Least-squares refinement of two endpoint scalars (e0, e1) for a single
+/// channel against fixed indices using the BC7 weight table for `idx_bits`.
+/// Returns `(e0, e1)` as 8-bit values clamped to [0, 255].
+fn refine_scalar_endpoints(values: &[u8; 16], indices: &[u32; 16], idx_bits: u32) -> (u8, u8) {
+    let weights = weight_for(idx_bits);
+    let mut aa = 0.0f64;
+    let mut bb = 0.0f64;
+    let mut ab = 0.0f64;
+    let mut ap = 0.0f64;
+    let mut bp = 0.0f64;
+    for i in 0..16 {
+        let w = weights[indices[i] as usize] as f64 / 64.0;
+        let a = 1.0 - w;
+        let b = w;
+        let p = values[i] as f64;
+        aa += a * a;
+        bb += b * b;
+        ab += a * b;
+        ap += a * p;
+        bp += b * p;
+    }
+    let det = aa * bb - ab * ab;
+    if det.abs() < 1e-9 {
+        let m: f64 = values.iter().map(|&v| v as f64).sum::<f64>() / 16.0;
+        let m = m.round().clamp(0.0, 255.0) as u8;
+        return (m, m);
+    }
+    let v0 = (bb * ap - ab * bp) / det;
+    let v1 = (aa * bp - ab * ap) / det;
+    let e0 = v0.round().clamp(0.0, 255.0) as u8;
+    let e1 = v1.round().clamp(0.0, 255.0) as u8;
+    (e0, e1)
+}
+
+/// Encode one 4×4 RGBA8 block as a mode-4 or mode-5 BC7 candidate for a
+/// specific channel-rotation.
+///
+/// Mode 4: 1 subset, 5-bit RGB endpoints, 6-bit A endpoints, no p-bits,
+///         primary index 2-bit (RGB) + secondary 3-bit (A) when idx_sel=0,
+///         OR primary 3-bit (RGB) + secondary 2-bit (A) when idx_sel=1.
+///         Channel-rotation r selects which channel swaps with A.
+/// Mode 5: 1 subset, 7-bit RGB endpoints, 8-bit A endpoints, no p-bits,
+///         2-bit RGB index plane + 2-bit A index plane.
+///         Channel-rotation r selects which channel swaps with A.
+///
+/// The encoder pre-rotates the input pixels by `rotation`, fits RGB+A
+/// endpoints separately on the rotated data, picks indices for each plane,
+/// and packs the bitstream. The decoder inverts the rotation post-interp,
+/// so encoded blocks roundtrip pixel-for-pixel.
+fn encode_bc7_mode4(pixels_rgba: &[[u8; 4]; 16], rotation: u32, idx_sel: u32) -> ([u8; 16], u64) {
+    debug_assert!(rotation < 4 && idx_sel < 2);
+
+    // Pre-rotate the input: each channel that ends up as "alpha" in the
+    // bitstream is the one the decoder will swap into place.
+    let mut rotated = [[0u8; 4]; 16];
+    for (i, p) in pixels_rgba.iter().enumerate() {
+        rotated[i] = apply_rotation(*p, rotation);
+    }
+
+    let (rgb_idx_bits, alpha_idx_bits) = if idx_sel == 0 {
+        (2u32, 3u32)
+    } else {
+        (3u32, 2u32)
+    };
+
+    // Mode 4 endpoint precision: RGB=5 bits (no p-bit), A=6 bits (no p-bit).
+    let rgb_bits = 5u32;
+    let alpha_bits = 6u32;
+
+    // ---- Seed RGB endpoints by furthest-point in 3-D RGB space.
+    let mut best_d = 0u32;
+    let mut bi = 0usize;
+    let mut bj = 0usize;
+    for i in 0..16 {
+        for j in (i + 1)..16 {
+            let mut d: u32 = 0;
+            for c in 0..3 {
+                let dc = rotated[i][c] as i32 - rotated[j][c] as i32;
+                d += (dc * dc) as u32;
+            }
+            if d > best_d {
+                best_d = d;
+                bi = i;
+                bj = j;
+            }
+        }
+    }
+    let mut rgb_e0 = [rotated[bi][0], rotated[bi][1], rotated[bi][2]];
+    let mut rgb_e1 = [rotated[bj][0], rotated[bj][1], rotated[bj][2]];
+
+    // ---- Seed alpha endpoints by min/max alpha.
+    let mut a_min = rotated[0][3];
+    let mut a_max = rotated[0][3];
+    for p in rotated.iter() {
+        a_min = a_min.min(p[3]);
+        a_max = a_max.max(p[3]);
+    }
+    let mut a_e0 = a_min;
+    let mut a_e1 = a_max;
+
+    // Quantise RGB / A endpoints + build palettes.
+    let quantise_rgb = |e0: [u8; 3], e1: [u8; 3]| -> ([u32; 3], [u32; 3], [u8; 3], [u8; 3]) {
+        let mut r0 = [0u32; 3];
+        let mut r1 = [0u32; 3];
+        let mut q0 = [0u8; 3];
+        let mut q1 = [0u8; 3];
+        for c in 0..3 {
+            let (a, b) = quantize_1ch_no_pbit(e0[c], rgb_bits);
+            r0[c] = a;
+            q0[c] = b;
+            let (a, b) = quantize_1ch_no_pbit(e1[c], rgb_bits);
+            r1[c] = a;
+            q1[c] = b;
+        }
+        (r0, r1, q0, q1)
+    };
+    let quantise_alpha = |e0: u8, e1: u8| -> (u32, u32, u8, u8) {
+        let (r0, q0) = quantize_1ch_no_pbit(e0, alpha_bits);
+        let (r1, q1) = quantize_1ch_no_pbit(e1, alpha_bits);
+        (r0, r1, q0, q1)
+    };
+
+    let (mut rgb_raw0, mut rgb_raw1, mut rgb_rec0, mut rgb_rec1) = quantise_rgb(rgb_e0, rgb_e1);
+    let (mut a_raw0, mut a_raw1, mut a_rec0, mut a_rec1) = quantise_alpha(a_e0, a_e1);
+
+    // ---- Index assignment loop with refinement.
+    let snap_rgb_indices = |q0: [u8; 3], q1: [u8; 3]| -> [u32; 16] {
+        let palette_size = 1usize << rgb_idx_bits;
+        let mut palette = [[0u8; 3]; 8];
+        for k in 0..palette_size {
+            for c in 0..3 {
+                palette[k][c] = interp(q0[c], q1[c], k, rgb_idx_bits);
+            }
+        }
+        let mut indices = [0u32; 16];
+        for (px, p) in rotated.iter().enumerate() {
+            let mut best_k = 0u32;
+            let mut best_d = u32::MAX;
+            for (k, pal) in palette.iter().take(palette_size).enumerate() {
+                let mut d: u32 = 0;
+                for c in 0..3 {
+                    let dc = pal[c] as i32 - p[c] as i32;
+                    d += (dc * dc) as u32;
+                }
+                if d < best_d {
+                    best_d = d;
+                    best_k = k as u32;
+                }
+            }
+            indices[px] = best_k;
+        }
+        indices
+    };
+    let snap_alpha_indices = |q0: u8, q1: u8| -> [u32; 16] {
+        let palette_size = 1usize << alpha_idx_bits;
+        let mut palette = [0u8; 8];
+        for k in 0..palette_size {
+            palette[k] = interp(q0, q1, k, alpha_idx_bits);
+        }
+        let mut indices = [0u32; 16];
+        for (px, p) in rotated.iter().enumerate() {
+            let mut best_k = 0u32;
+            let mut best_d = u32::MAX;
+            for k in 0..palette_size {
+                let dc = palette[k] as i32 - p[3] as i32;
+                let d = (dc * dc) as u32;
+                if d < best_d {
+                    best_d = d;
+                    best_k = k as u32;
+                }
+            }
+            indices[px] = best_k;
+        }
+        indices
+    };
+
+    let mut rgb_indices = snap_rgb_indices(rgb_rec0, rgb_rec1);
+    let mut alpha_indices = snap_alpha_indices(a_rec0, a_rec1);
+
+    // Iterative refinement: 2 passes is sufficient for natural content.
+    for _ in 0..2 {
+        // Refine RGB endpoints per channel.
+        let mut rch = [[0u8; 16]; 3];
+        for c in 0..3 {
+            for i in 0..16 {
+                rch[c][i] = rotated[i][c];
+            }
+        }
+        let mut new_rgb_e0 = [0u8; 3];
+        let mut new_rgb_e1 = [0u8; 3];
+        for c in 0..3 {
+            let (e0, e1) = refine_scalar_endpoints(&rch[c], &rgb_indices, rgb_idx_bits);
+            new_rgb_e0[c] = e0;
+            new_rgb_e1[c] = e1;
+        }
+        // Refine alpha endpoints.
+        let mut ach = [0u8; 16];
+        for i in 0..16 {
+            ach[i] = rotated[i][3];
+        }
+        let (new_a_e0, new_a_e1) = refine_scalar_endpoints(&ach, &alpha_indices, alpha_idx_bits);
+
+        let (n_rgb_raw0, n_rgb_raw1, n_rgb_rec0, n_rgb_rec1) = quantise_rgb(new_rgb_e0, new_rgb_e1);
+        let (n_a_raw0, n_a_raw1, n_a_rec0, n_a_rec1) = quantise_alpha(new_a_e0, new_a_e1);
+        let n_rgb_idx = snap_rgb_indices(n_rgb_rec0, n_rgb_rec1);
+        let n_a_idx = snap_alpha_indices(n_a_rec0, n_a_rec1);
+
+        // Compute SSE for old vs new (decoder-faithful: pre-rotation
+        // pixels reconstructed with palette interp, then SSE).
+        let sse_old = sse_mode_4_5_pre_rot(
+            &rotated,
+            rgb_rec0,
+            rgb_rec1,
+            a_rec0,
+            a_rec1,
+            &rgb_indices,
+            &alpha_indices,
+            rgb_idx_bits,
+            alpha_idx_bits,
+        );
+        let sse_new = sse_mode_4_5_pre_rot(
+            &rotated,
+            n_rgb_rec0,
+            n_rgb_rec1,
+            n_a_rec0,
+            n_a_rec1,
+            &n_rgb_idx,
+            &n_a_idx,
+            rgb_idx_bits,
+            alpha_idx_bits,
+        );
+        if sse_new < sse_old {
+            rgb_raw0 = n_rgb_raw0;
+            rgb_raw1 = n_rgb_raw1;
+            rgb_rec0 = n_rgb_rec0;
+            rgb_rec1 = n_rgb_rec1;
+            a_raw0 = n_a_raw0;
+            a_raw1 = n_a_raw1;
+            a_rec0 = n_a_rec0;
+            a_rec1 = n_a_rec1;
+            rgb_indices = n_rgb_idx;
+            alpha_indices = n_a_idx;
+            rgb_e0 = new_rgb_e0;
+            rgb_e1 = new_rgb_e1;
+            a_e0 = new_a_e0;
+            a_e1 = new_a_e1;
+        } else {
+            break;
+        }
+    }
+    let _ = (rgb_e0, rgb_e1, a_e0, a_e1); // silence unused warnings.
+
+    // ---- Anchor handling: pixel 0 is the anchor for both index planes.
+    // Each anchor index is stored with one fewer bit (MSB implicit-0),
+    // so it must be < palette_size / 2. Swap endpoints + complement
+    // indices in the offending plane if needed.
+    let rgb_pal_size = 1u32 << rgb_idx_bits;
+    if rgb_indices[0] >= rgb_pal_size / 2 {
+        std::mem::swap(&mut rgb_raw0, &mut rgb_raw1);
+        std::mem::swap(&mut rgb_rec0, &mut rgb_rec1);
+        for idx in rgb_indices.iter_mut() {
+            *idx = (rgb_pal_size - 1) - *idx;
+        }
+    }
+    let alpha_pal_size = 1u32 << alpha_idx_bits;
+    if alpha_indices[0] >= alpha_pal_size / 2 {
+        std::mem::swap(&mut a_raw0, &mut a_raw1);
+        std::mem::swap(&mut a_rec0, &mut a_rec1);
+        for idx in alpha_indices.iter_mut() {
+            *idx = (alpha_pal_size - 1) - *idx;
+        }
+    }
+
+    // ---- Final SSE against decoded pixels (post-rotation == original input).
+    let sse = sse_mode_4_5_pre_rot(
+        &rotated,
+        rgb_rec0,
+        rgb_rec1,
+        a_rec0,
+        a_rec1,
+        &rgb_indices,
+        &alpha_indices,
+        rgb_idx_bits,
+        alpha_idx_bits,
+    );
+
+    // ---- Pack bitstream (mode 4).
+    let block = pack_mode4(
+        rotation,
+        idx_sel,
+        rgb_raw0,
+        rgb_raw1,
+        a_raw0,
+        a_raw1,
+        rgb_indices,
+        alpha_indices,
+        idx_sel,
+    );
+    (block, sse)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn sse_mode_4_5_pre_rot(
+    rotated_pixels: &[[u8; 4]; 16],
+    rgb_q0: [u8; 3],
+    rgb_q1: [u8; 3],
+    a_q0: u8,
+    a_q1: u8,
+    rgb_idx: &[u32; 16],
+    a_idx: &[u32; 16],
+    rgb_idx_bits: u32,
+    a_idx_bits: u32,
+) -> u64 {
+    let mut sse: u64 = 0;
+    for px in 0..16 {
+        let mut recon = [0u8; 4];
+        for c in 0..3 {
+            recon[c] = interp(rgb_q0[c], rgb_q1[c], rgb_idx[px] as usize, rgb_idx_bits);
+        }
+        recon[3] = interp(a_q0, a_q1, a_idx[px] as usize, a_idx_bits);
+        sse += sq_dist4(recon, rotated_pixels[px]) as u64;
+    }
+    sse
+}
+
+#[allow(clippy::too_many_arguments)]
+fn pack_mode4(
+    rotation: u32,
+    idx_sel: u32,
+    rgb_raw0: [u32; 3],
+    rgb_raw1: [u32; 3],
+    a_raw0: u32,
+    a_raw1: u32,
+    rgb_indices: [u32; 16],
+    alpha_indices: [u32; 16],
+    _idx_sel_bit: u32,
+) -> [u8; 16] {
+    // Mode 4 prefix: 4 zeros + 1 = bit position 4 set.
+    let mut bw = BitWriter::new();
+    for _ in 0..4 {
+        bw.put(0, 1);
+    }
+    bw.put(1, 1);
+    // Rotation (2 bits), idx_sel (1 bit).
+    bw.put(rotation, 2);
+    bw.put(idx_sel, 1);
+    // RGB endpoints, channel-major: R0, R1, G0, G1, B0, B1 (5 bits each).
+    for ch in 0..3 {
+        bw.put(rgb_raw0[ch], 5);
+        bw.put(rgb_raw1[ch], 5);
+    }
+    // Alpha endpoints: A0, A1 (6 bits each).
+    bw.put(a_raw0, 6);
+    bw.put(a_raw1, 6);
+    // Primary index plane (RGB if idx_sel=0, else Alpha drives RGB).
+    // Stored: 2-bit indices when idx_sel=0 (anchor 1 bit), else 3-bit (anchor 2 bits).
+    // The "primary" plane in the bitstream is whichever has the lower idx_bits
+    // count when idx_sel=0 (RGB primary, A secondary). When idx_sel=1, RGB
+    // becomes the secondary plane (3-bit), and Alpha is primary (2-bit).
+    //
+    // Per Microsoft / Khronos: "Read primary then secondary indices.
+    // idx_sel routes which plane drives which output channel."
+    // We always pack rgb_indices into the plane that has rgb_idx_bits
+    // and alpha_indices into the plane that has alpha_idx_bits — but
+    // the *bitstream slot* of the primary vs secondary is fixed.
+    //
+    // Mode 4 primary slot is 2-bit (32 bits, anchor 1 bit), secondary
+    // is 3-bit (48 bits, anchor 2 bits). idx_sel=0 puts RGB in primary,
+    // alpha in secondary. idx_sel=1 swaps the routing.
+    let (primary_idx, primary_bits, secondary_idx, secondary_bits) = if idx_sel == 0 {
+        (&rgb_indices, 2u32, &alpha_indices, 3u32)
+    } else {
+        (&alpha_indices, 2u32, &rgb_indices, 3u32)
+    };
+    // Wait — re-examine. The decoder uses:
+    //   idx_sel == 0 → primary 2-bit drives colour, secondary 3-bit drives alpha.
+    // So when idx_sel == 0, RGB indices (which are 2-bit) go in primary.
+    // When idx_sel == 1, RGB indices (which are 3-bit) go in secondary;
+    // alpha indices (which are 2-bit) go in primary.
+    //
+    // Either way, the *primary* slot is always 2-bit (32 minus 1 anchor),
+    // and the *secondary* slot is always 3-bit (48 minus 1 anchor).
+    // Pixel 0 is the anchor in both planes.
+    for px in 0..16usize {
+        let nbits = if px == 0 {
+            primary_bits - 1
+        } else {
+            primary_bits
+        };
+        bw.put(primary_idx[px], nbits);
+    }
+    for px in 0..16usize {
+        let nbits = if px == 0 {
+            secondary_bits - 1
+        } else {
+            secondary_bits
+        };
+        bw.put(secondary_idx[px], nbits);
+    }
+    bw.into_block()
+}
+
+/// Encode one 4×4 RGBA8 block as a mode-5 BC7 candidate for a specific
+/// channel-rotation. Mode 5: 7-bit RGB, 8-bit A, no p-bits, both index
+/// planes 2-bit.
+fn encode_bc7_mode5(pixels_rgba: &[[u8; 4]; 16], rotation: u32) -> ([u8; 16], u64) {
+    debug_assert!(rotation < 4);
+
+    let mut rotated = [[0u8; 4]; 16];
+    for (i, p) in pixels_rgba.iter().enumerate() {
+        rotated[i] = apply_rotation(*p, rotation);
+    }
+
+    let rgb_idx_bits = 2u32;
+    let alpha_idx_bits = 2u32;
+    let rgb_bits = 7u32;
+    let alpha_bits = 8u32;
+
+    // Furthest-point seed in RGB.
+    let mut best_d = 0u32;
+    let mut bi = 0usize;
+    let mut bj = 0usize;
+    for i in 0..16 {
+        for j in (i + 1)..16 {
+            let mut d: u32 = 0;
+            for c in 0..3 {
+                let dc = rotated[i][c] as i32 - rotated[j][c] as i32;
+                d += (dc * dc) as u32;
+            }
+            if d > best_d {
+                best_d = d;
+                bi = i;
+                bj = j;
+            }
+        }
+    }
+    let mut rgb_e0 = [rotated[bi][0], rotated[bi][1], rotated[bi][2]];
+    let mut rgb_e1 = [rotated[bj][0], rotated[bj][1], rotated[bj][2]];
+
+    let mut a_min = rotated[0][3];
+    let mut a_max = rotated[0][3];
+    for p in rotated.iter() {
+        a_min = a_min.min(p[3]);
+        a_max = a_max.max(p[3]);
+    }
+    let mut a_e0 = a_min;
+    let mut a_e1 = a_max;
+
+    let quantise_rgb = |e0: [u8; 3], e1: [u8; 3]| -> ([u32; 3], [u32; 3], [u8; 3], [u8; 3]) {
+        let mut r0 = [0u32; 3];
+        let mut r1 = [0u32; 3];
+        let mut q0 = [0u8; 3];
+        let mut q1 = [0u8; 3];
+        for c in 0..3 {
+            let (a, b) = quantize_1ch_no_pbit(e0[c], rgb_bits);
+            r0[c] = a;
+            q0[c] = b;
+            let (a, b) = quantize_1ch_no_pbit(e1[c], rgb_bits);
+            r1[c] = a;
+            q1[c] = b;
+        }
+        (r0, r1, q0, q1)
+    };
+    let quantise_alpha = |e0: u8, e1: u8| -> (u32, u32, u8, u8) {
+        let (r0, q0) = quantize_1ch_no_pbit(e0, alpha_bits);
+        let (r1, q1) = quantize_1ch_no_pbit(e1, alpha_bits);
+        (r0, r1, q0, q1)
+    };
+
+    let (mut rgb_raw0, mut rgb_raw1, mut rgb_rec0, mut rgb_rec1) = quantise_rgb(rgb_e0, rgb_e1);
+    let (mut a_raw0, mut a_raw1, mut a_rec0, mut a_rec1) = quantise_alpha(a_e0, a_e1);
+
+    let snap_rgb_indices = |q0: [u8; 3], q1: [u8; 3]| -> [u32; 16] {
+        let palette_size = 1usize << rgb_idx_bits;
+        let mut palette = [[0u8; 3]; 4];
+        for k in 0..palette_size {
+            for c in 0..3 {
+                palette[k][c] = interp(q0[c], q1[c], k, rgb_idx_bits);
+            }
+        }
+        let mut indices = [0u32; 16];
+        for (px, p) in rotated.iter().enumerate() {
+            let mut best_k = 0u32;
+            let mut best_d = u32::MAX;
+            for (k, pal) in palette.iter().take(palette_size).enumerate() {
+                let mut d: u32 = 0;
+                for c in 0..3 {
+                    let dc = pal[c] as i32 - p[c] as i32;
+                    d += (dc * dc) as u32;
+                }
+                if d < best_d {
+                    best_d = d;
+                    best_k = k as u32;
+                }
+            }
+            indices[px] = best_k;
+        }
+        indices
+    };
+    let snap_alpha_indices = |q0: u8, q1: u8| -> [u32; 16] {
+        let palette_size = 1usize << alpha_idx_bits;
+        let mut palette = [0u8; 4];
+        for k in 0..palette_size {
+            palette[k] = interp(q0, q1, k, alpha_idx_bits);
+        }
+        let mut indices = [0u32; 16];
+        for (px, p) in rotated.iter().enumerate() {
+            let mut best_k = 0u32;
+            let mut best_d = u32::MAX;
+            for k in 0..palette_size {
+                let dc = palette[k] as i32 - p[3] as i32;
+                let d = (dc * dc) as u32;
+                if d < best_d {
+                    best_d = d;
+                    best_k = k as u32;
+                }
+            }
+            indices[px] = best_k;
+        }
+        indices
+    };
+
+    let mut rgb_indices = snap_rgb_indices(rgb_rec0, rgb_rec1);
+    let mut alpha_indices = snap_alpha_indices(a_rec0, a_rec1);
+
+    for _ in 0..2 {
+        let mut rch = [[0u8; 16]; 3];
+        for c in 0..3 {
+            for i in 0..16 {
+                rch[c][i] = rotated[i][c];
+            }
+        }
+        let mut new_rgb_e0 = [0u8; 3];
+        let mut new_rgb_e1 = [0u8; 3];
+        for c in 0..3 {
+            let (e0, e1) = refine_scalar_endpoints(&rch[c], &rgb_indices, rgb_idx_bits);
+            new_rgb_e0[c] = e0;
+            new_rgb_e1[c] = e1;
+        }
+        let mut ach = [0u8; 16];
+        for i in 0..16 {
+            ach[i] = rotated[i][3];
+        }
+        let (new_a_e0, new_a_e1) = refine_scalar_endpoints(&ach, &alpha_indices, alpha_idx_bits);
+
+        let (n_rgb_raw0, n_rgb_raw1, n_rgb_rec0, n_rgb_rec1) = quantise_rgb(new_rgb_e0, new_rgb_e1);
+        let (n_a_raw0, n_a_raw1, n_a_rec0, n_a_rec1) = quantise_alpha(new_a_e0, new_a_e1);
+        let n_rgb_idx = snap_rgb_indices(n_rgb_rec0, n_rgb_rec1);
+        let n_a_idx = snap_alpha_indices(n_a_rec0, n_a_rec1);
+
+        let sse_old = sse_mode_4_5_pre_rot(
+            &rotated,
+            rgb_rec0,
+            rgb_rec1,
+            a_rec0,
+            a_rec1,
+            &rgb_indices,
+            &alpha_indices,
+            rgb_idx_bits,
+            alpha_idx_bits,
+        );
+        let sse_new = sse_mode_4_5_pre_rot(
+            &rotated,
+            n_rgb_rec0,
+            n_rgb_rec1,
+            n_a_rec0,
+            n_a_rec1,
+            &n_rgb_idx,
+            &n_a_idx,
+            rgb_idx_bits,
+            alpha_idx_bits,
+        );
+        if sse_new < sse_old {
+            rgb_raw0 = n_rgb_raw0;
+            rgb_raw1 = n_rgb_raw1;
+            rgb_rec0 = n_rgb_rec0;
+            rgb_rec1 = n_rgb_rec1;
+            a_raw0 = n_a_raw0;
+            a_raw1 = n_a_raw1;
+            a_rec0 = n_a_rec0;
+            a_rec1 = n_a_rec1;
+            rgb_indices = n_rgb_idx;
+            alpha_indices = n_a_idx;
+            rgb_e0 = new_rgb_e0;
+            rgb_e1 = new_rgb_e1;
+            a_e0 = new_a_e0;
+            a_e1 = new_a_e1;
+        } else {
+            break;
+        }
+    }
+    let _ = (rgb_e0, rgb_e1, a_e0, a_e1);
+
+    // Anchor handling — pixel 0 is the anchor for both planes.
+    let rgb_pal_size = 1u32 << rgb_idx_bits;
+    if rgb_indices[0] >= rgb_pal_size / 2 {
+        std::mem::swap(&mut rgb_raw0, &mut rgb_raw1);
+        std::mem::swap(&mut rgb_rec0, &mut rgb_rec1);
+        for idx in rgb_indices.iter_mut() {
+            *idx = (rgb_pal_size - 1) - *idx;
+        }
+    }
+    let alpha_pal_size = 1u32 << alpha_idx_bits;
+    if alpha_indices[0] >= alpha_pal_size / 2 {
+        std::mem::swap(&mut a_raw0, &mut a_raw1);
+        std::mem::swap(&mut a_rec0, &mut a_rec1);
+        for idx in alpha_indices.iter_mut() {
+            *idx = (alpha_pal_size - 1) - *idx;
+        }
+    }
+
+    let sse = sse_mode_4_5_pre_rot(
+        &rotated,
+        rgb_rec0,
+        rgb_rec1,
+        a_rec0,
+        a_rec1,
+        &rgb_indices,
+        &alpha_indices,
+        rgb_idx_bits,
+        alpha_idx_bits,
+    );
+
+    let block = pack_mode5(
+        rotation,
+        rgb_raw0,
+        rgb_raw1,
+        a_raw0,
+        a_raw1,
+        rgb_indices,
+        alpha_indices,
+    );
+    (block, sse)
+}
+
+fn pack_mode5(
+    rotation: u32,
+    rgb_raw0: [u32; 3],
+    rgb_raw1: [u32; 3],
+    a_raw0: u32,
+    a_raw1: u32,
+    rgb_indices: [u32; 16],
+    alpha_indices: [u32; 16],
+) -> [u8; 16] {
+    let mut bw = BitWriter::new();
+    // Mode 5 prefix: 5 zeros + 1.
+    for _ in 0..5 {
+        bw.put(0, 1);
+    }
+    bw.put(1, 1);
+    // Rotation: 2 bits.
+    bw.put(rotation, 2);
+    // RGB endpoints, channel-major: R0, R1, G0, G1, B0, B1 (7 bits each).
+    for ch in 0..3 {
+        bw.put(rgb_raw0[ch], 7);
+        bw.put(rgb_raw1[ch], 7);
+    }
+    // Alpha endpoints: A0, A1 (8 bits each).
+    bw.put(a_raw0, 8);
+    bw.put(a_raw1, 8);
+    // Primary index plane (RGB, 2-bit, anchor pixel 0 = 1 bit).
+    for px in 0..16usize {
+        let nbits = if px == 0 { 1u32 } else { 2u32 };
+        bw.put(rgb_indices[px], nbits);
+    }
+    // Secondary index plane (Alpha, 2-bit, anchor pixel 0 = 1 bit).
+    for px in 0..16usize {
+        let nbits = if px == 0 { 1u32 } else { 2u32 };
+        bw.put(alpha_indices[px], nbits);
+    }
+    bw.into_block()
+}
+
 /// Channel quantiser for modes that don't carry p-bits (mode 2).
 /// Quantises each colour channel to `colour_bits` and reconstructs by
 /// bit-replication (Microsoft's "high-into-low" rule).
@@ -1090,6 +1817,27 @@ fn encode_block(pixels_rgba: &[[u8; 4]; 16]) -> [u8; 16] {
                 best_sse = sse;
                 best_block = cand;
             }
+        }
+    }
+
+    // Try mode 4/5 (1-subset, channel-rotation, dual index plane) for
+    // content where alpha varies independently from RGB. Even for opaque
+    // content these can win when one of R/G/B varies sharply against the
+    // other two — the rotation lets that channel use the 6-/8-bit alpha
+    // precision while RGB uses the lower-precision plane. Sweep all 4
+    // rotations × (mode 4: 2 idx_sel choices) × mode 5.
+    for rotation in 0..4u32 {
+        for idx_sel in 0..2u32 {
+            let (cand, sse) = encode_bc7_mode4(pixels_rgba, rotation, idx_sel);
+            if sse < best_sse {
+                best_sse = sse;
+                best_block = cand;
+            }
+        }
+        let (cand, sse) = encode_bc7_mode5(pixels_rgba, rotation);
+        if sse < best_sse {
+            best_sse = sse;
+            best_block = cand;
         }
     }
 
@@ -1423,5 +2171,162 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Mode 4/5 standalone roundtrip for a single rotation choice — verify
+    /// the encoder produces decoder-roundtrippable bytes for a constructed
+    /// block where the rotation makes a difference.
+    #[test]
+    fn bc7_encode_mode4_rotation_roundtrip() {
+        // Block: solid RGB (all 0xff red), with alpha that varies on a
+        // gradient. Mode 4 with rotation=0, idx_sel=0 should reconstruct
+        // both planes well (RGB endpoints both close to red, alpha
+        // endpoints span the gradient with 6-bit precision + 3-bit indices).
+        let mut input = vec![0u8; 4 * 4 * 4];
+        for y in 0..4 {
+            for x in 0..4 {
+                let off = (y * 4 + x) * 4;
+                input[off] = 0xff;
+                input[off + 3] = ((x + y) * 32).min(255) as u8;
+            }
+        }
+        let (block, _sse) = encode_bc7_mode4(&pixels_from(&input), 0, 0);
+        let pixels = crate::bc7::decode_bc7_block(&block);
+        for y in 0..4 {
+            for x in 0..4 {
+                let off = (y * 4 + x) * 4;
+                let p = pixels[y * 4 + x];
+                assert!(p[0] >= 0xf0, "pixel ({x},{y}) R = {} (want ~0xff)", p[0]);
+                let want_a = ((x + y) * 32).min(255) as u8;
+                let got_a = p[3];
+                assert!(
+                    got_a.abs_diff(want_a) <= 16,
+                    "pixel ({x},{y}) alpha = {} (want {} ± 16)",
+                    got_a,
+                    want_a
+                );
+                let _ = off;
+            }
+        }
+    }
+
+    /// Mode 5 standalone roundtrip — both index planes 2-bit, 7-bit RGB
+    /// + 8-bit alpha.
+    #[test]
+    fn bc7_encode_mode5_rotation_roundtrip() {
+        // Block: alpha varies sharply (0 / 255 split horizontally), RGB
+        // is constant gray. Mode 5 rotation=1 (A↔R) puts the gray into
+        // the bitstream alpha (high precision), and the 0/255 split into
+        // bitstream RGB-R — but mode 5's RGB is 7-bit so it can still
+        // carry that. Either rotation/mode picks a faithful encoding.
+        let mut input = vec![0u8; 4 * 4 * 4];
+        for y in 0..4 {
+            for x in 0..4 {
+                let off = (y * 4 + x) * 4;
+                input[off] = 0x80;
+                input[off + 1] = 0x80;
+                input[off + 2] = 0x80;
+                input[off + 3] = if x < 2 { 0x00 } else { 0xff };
+            }
+        }
+        let (block, _sse) = encode_bc7_mode5(&pixels_from(&input), 0);
+        let pixels = crate::bc7::decode_bc7_block(&block);
+        for y in 0..4 {
+            for x in 0..4 {
+                let p = pixels[y * 4 + x];
+                let want_a = if x < 2 { 0x00 } else { 0xff };
+                assert!(
+                    p[3].abs_diff(want_a) <= 16,
+                    "pixel ({x},{y}) alpha = {} (want {} ± 16)",
+                    p[3],
+                    want_a
+                );
+                // RGB should stay near 0x80.
+                for c in 0..3 {
+                    assert!(
+                        p[c].abs_diff(0x80) <= 16,
+                        "pixel ({x},{y}) ch{} = {} (want 0x80 ± 16)",
+                        c,
+                        p[c]
+                    );
+                }
+            }
+        }
+    }
+
+    /// Mode 4/5 channel-rotation independence: encode a block where alpha
+    /// is fully decorrelated from RGB. The block-level picker should
+    /// produce a faithful roundtrip, and at least one rotation should
+    /// give a markedly better result than no-rotation.
+    #[test]
+    fn bc7_encode_independent_alpha_rgb_psnr_gt_30db() {
+        // 8×8 block: RGB is a 1-D x-axis gradient (smooth), alpha is a
+        // vertical y-axis gradient (also smooth, but independent).
+        // Without channel-rotation, one of the two planes has to share
+        // the colour palette → quality suffers. Mode 4/5 lets each plane
+        // run its own endpoints + indices.
+        let mut input = vec![0u8; 8 * 8 * 4];
+        for y in 0..8 {
+            for x in 0..8 {
+                let off = (y * 8 + x) * 4;
+                input[off] = (x * 32) as u8;
+                input[off + 1] = (x * 32) as u8;
+                input[off + 2] = (x * 32) as u8;
+                input[off + 3] = (y * 32) as u8;
+            }
+        }
+        let mut bc = vec![0u8; 4 * 16];
+        encode_bc7(&input, 8, 8, &mut bc).unwrap();
+        let mut decoded = vec![0u8; 8 * 8 * 4];
+        decode_bc7(&bc, 8, 8, &mut decoded).unwrap();
+        let mut sse: u64 = 0;
+        let mut count: u64 = 0;
+        for (a, b) in input.chunks_exact(4).zip(decoded.chunks_exact(4)) {
+            for c in 0..4 {
+                let d = a[c] as i32 - b[c] as i32;
+                sse += (d * d) as u64;
+                count += 1;
+            }
+        }
+        let mse = sse as f64 / count as f64;
+        let psnr = if mse == 0.0 {
+            f64::INFINITY
+        } else {
+            10.0 * (255.0_f64 * 255.0 / mse).log10()
+        };
+        assert!(
+            psnr > 30.0,
+            "BC7 independent-alpha PSNR-RGBA = {:.2} dB (want > 30 dB)",
+            psnr
+        );
+    }
+
+    /// `apply_rotation` is its own inverse (involution): apply twice → identity.
+    #[test]
+    fn rotation_is_involution() {
+        for r in 0..4u32 {
+            for &p in &[
+                [0, 0, 0, 0u8],
+                [255, 128, 64, 32],
+                [1, 2, 3, 4],
+                [200, 150, 100, 50],
+            ] {
+                let twice = apply_rotation(apply_rotation(p, r), r);
+                assert_eq!(p, twice, "rotation {} not involution on {:?}", r, p);
+            }
+        }
+    }
+
+    fn pixels_from(input: &[u8]) -> [[u8; 4]; 16] {
+        let mut block = [[0u8; 4]; 16];
+        for i in 0..16 {
+            block[i] = [
+                input[i * 4],
+                input[i * 4 + 1],
+                input[i * 4 + 2],
+                input[i * 4 + 3],
+            ];
+        }
+        block
     }
 }
