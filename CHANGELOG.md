@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **BC6H decompression — all 14 modes**. Every BC6H mode (0..13) now
+  decodes to RGBA half-float via `decode_bc6h`. Round-1 had only
+  modes 1 and 11 (the 10-bit anchors); round-2 transcribes the
+  per-mode bit-allocation tables for the remaining 12 modes
+  (0, 2..10, 12, 13) — the 7-bit / 9-bit / asymmetric-delta variants
+  plus the 16.4 ONE-subset mode — from the public Intel Open Source
+  PRM Vol. 5 (BC6H section, 0BSD-licensed) and Microsoft's public
+  "BC6H Format" reference. Reserved 5-bit prefixes (10011, 10111,
+  11011, 11111) decode to zero RGB per spec without producing an
+  error. The four `delta`-encoded ONE-subset modes (10, 11, 12, 13)
+  use the `w + x` transform-inversion rule with prec-width wrap;
+  unquantize / interpolate / finalise pipeline matches Microsoft's
+  bit-accurate reference pseudocode. Full pipeline supports both
+  `BC6H_UF16` (unsigned) and `BC6H_SF16` (signed) finalisation.
 - **BC7 decompression** to RGBA8 via new public entry point
   `decode_bc7`. Covers all 8 modes (single-, dual- and three-subset
   partitions; 2/3/4-bit primary indices + optional 2/3-bit secondary

@@ -29,11 +29,10 @@
 //!   [`decode_bc1`], [`decode_bc2`], [`decode_bc3`],
 //!   [`decode_bc4_unorm`], [`decode_bc4_snorm`], [`decode_bc5_unorm`],
 //!   [`decode_bc5_snorm`], and [`decode_bc7`].
-//! * **BC6H decompression** (modes 1 + 11) to RGBA half-float via
-//!   [`decode_bc6h`]. Modes 1 and 11 are the two 10-bit anchor modes
-//!   (single-subset no-delta + 2-subset 5-bit-delta) that encoders
-//!   most often emit. The remaining 12 BC6H modes return
-//!   `DdsError::Unsupported` and are followups.
+//! * **BC6H decompression** — all 14 modes (0..13) — to RGBA half-float
+//!   via [`decode_bc6h`]. Reserved 5-bit prefixes (10011, 10111, 11011,
+//!   11111) decode to zero RGB per spec. Both `BC6H_UF16` (unsigned)
+//!   and `BC6H_SF16` (signed) finalisation paths are supported.
 //! * **BC1 + BC2 + BC3 + BC4 + BC5 encoders** via
 //!   [`encode_bc1`], [`encode_bc2`], [`encode_bc3`],
 //!   [`encode_bc4_unorm`], [`encode_bc5_unorm`] — RGBA8 / R8 / RG8 in,
@@ -54,11 +53,7 @@
 //!
 //! Still deferred (followups):
 //!
-//! * BC6H modes other than 1 and 11 — the 12 delta-encoded variants
-//!   need a per-mode bit-allocation table that's audit-heavy to
-//!   transcribe. Modes recognised but not implemented return
-//!   `DdsError::Unsupported`.
-//! * BC6H + BC7 encoders — round 4 ships decoders only for the HDR
+//! * BC6H + BC7 encoders — the crate ships decoders only for the HDR
 //!   and high-quality-LDR formats.
 //! * Mipmap-chain emission from the encoder (still single-level).
 //!

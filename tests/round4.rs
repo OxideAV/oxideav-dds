@@ -1,9 +1,10 @@
 //! Round-4 features: BC6H decompression + BC2/BC3/BC4/BC5 encoders.
 //!
 //! Covers the new public surface added in round 4:
-//! * [`oxideav_dds::decode_bc6h`] — BC6H mode-11 + mode-1 decoder
-//!   (HDR-float; modes 0..10 + 12/13 fall back to zero-filled output
-//!   plus an `Unsupported` diagnostic).
+//! * [`oxideav_dds::decode_bc6h`] — BC6H decoder. Round-2 (against
+//!   the round-4 README) lifted coverage from "modes 1+11 only" to
+//!   all 14 modes (0..13); the integration tests here exercise the
+//!   surface-level entry point.
 //! * [`oxideav_dds::encode_bc2`] / [`oxideav_dds::encode_bc3`] /
 //!   [`oxideav_dds::encode_bc4_unorm`] / [`oxideav_dds::encode_bc5_unorm`]
 //!   — block encoders, validated via roundtrip through the matching
@@ -131,17 +132,17 @@ fn bc5_encode_8x8_two_channel_roundtrip() {
     assert!(psnr > 25.0, "BC5 8x8 PSNR = {:.2} dB (want > 25 dB)", psnr);
 }
 
-/// Hand-built BC6H mode-11 block (the "anchor" 10-bit no-delta single-
-/// subset mode) that decodes to a solid-grey-ish HDR pixel: r = g = b
-/// midway between 0 and the mode-11 maximum. This validates the BC6H
-/// decoder without needing an external reference encoder (none is
-/// available in the workspace, and the spec is a clean-room reference).
+/// Hand-built BC6H mode-10 block (the 1-subset 10-bit no-delta anchor
+/// mode, prefix `00011`) that decodes to a solid HDR pixel: r = g = b
+/// at endpoint 0 (raw 200). Validates the decoder against Microsoft's
+/// unquantize formula: `((comp << 16) + 0x8000) >> bits`, then finish
+/// `(value * 31) >> 6`. With raw=200, bits=10:
+///   unquantized = (200 << 16 + 0x8000) >> 10 = 12831
+///   finalised   = (12831 * 31) >> 6 = 6212.
 #[test]
-fn bc6h_mode11_solid_midway() {
-    // Mode 11 prefix = 5 bits = 01011.
-    // Then six 10-bit endpoint values (r0, r1, g0, g1, b0, b1).
-    // Set each pair to (200, 600) — both within the 10-bit unsigned
-    // range. With all indices = 0 the output is endpoint 0.
+fn bc6h_mode10_solid_endpoint() {
+    // Mode 10 prefix = 5 bits = 00011.
+    // Then six 10-bit endpoint values (rw, gw, bw, rx, gx, bx).
     let mut block = [0u8; 16];
     let mut pos = 0usize;
     let push = |bits: u32, n: u32, block: &mut [u8; 16], pos: &mut usize| {
@@ -151,33 +152,44 @@ fn bc6h_mode11_solid_midway() {
             *pos += 1;
         }
     };
-    push(0b01011, 5, &mut block, &mut pos);
+    push(0b00011, 5, &mut block, &mut pos);
+    push(200, 10, &mut block, &mut pos);
+    push(200, 10, &mut block, &mut pos);
     push(200, 10, &mut block, &mut pos);
     push(600, 10, &mut block, &mut pos);
-    push(200, 10, &mut block, &mut pos);
     push(600, 10, &mut block, &mut pos);
-    push(200, 10, &mut block, &mut pos);
     push(600, 10, &mut block, &mut pos);
-    // Indices: pixel 0 anchor (3 bits) + 15×4 bits = 63 bits. Leave at zero.
+    // Indices: pixel 0 anchor (3 bits) + 15x4 bits = 63 bits. Leave zero.
     let mut out = vec![0u8; 4 * 4 * 8];
     decode_bc6h(&block, 4, 4, /*signed=*/ false, &mut out).expect("decode_bc6h");
-    // Pixel 0: anchor = 0 → endpoint 0; r raw = 200 → unquantize:
-    //   ((200 << 15) + 0x4000) >> 9 = ((6553600 + 16384) >> 9) = 12831.
-    // Finalise: 12831 * 31 / 64 = 6212.
-    let expected_half = ((((200u32) << 15) + 0x4000) >> 9) * 31 / 64;
+    let expected_half = ((((200u32) << 16) + 0x8000) >> 10) * 31 / 64;
     let r = u16::from_le_bytes([out[0], out[1]]);
     assert_eq!(r as u32, expected_half, "decoded R half-bits");
 }
 
-/// Mode-other-than-1-or-11 blocks should error with `Unsupported`.
+/// All 14 BC6H modes (0..13) decode without error. Reserved-prefix
+/// blocks (10011, 10111, 11011, 11111) decode to zero RGB per spec.
 #[test]
-fn bc6h_unimplemented_mode_returns_unsupported() {
-    let block = [0u8; 16]; // 2-bit prefix `00` → mode 0, not supported
+fn bc6h_all_modes_decode_without_error() {
+    // Mode 0 prefix = 00, all-zero block.
+    let block = [0u8; 16];
     let mut out = vec![0u8; 4 * 4 * 8];
-    let result = decode_bc6h(&block, 4, 4, false, &mut out);
-    assert!(
-        matches!(result, Err(oxideav_dds::DdsError::Unsupported(_))),
-        "mode 0 should report Unsupported, got {:?}",
-        result
-    );
+    decode_bc6h(&block, 4, 4, false, &mut out).expect("mode 0 decodes");
+    // Every R/G/B should be zero (endpoints zero, indices zero).
+    for chunk in out.chunks_exact(8) {
+        assert_eq!(u16::from_le_bytes([chunk[0], chunk[1]]), 0);
+        assert_eq!(u16::from_le_bytes([chunk[2], chunk[3]]), 0);
+        assert_eq!(u16::from_le_bytes([chunk[4], chunk[5]]), 0);
+        assert_eq!(u16::from_le_bytes([chunk[6], chunk[7]]), 0x3c00);
+    }
+
+    // Reserved 5-bit prefix 10011 → zero RGB.
+    let mut rblock = [0u8; 16];
+    rblock[0] = 0b10011;
+    let mut rout = vec![0u8; 4 * 4 * 8];
+    decode_bc6h(&rblock, 4, 4, false, &mut rout).expect("reserved decodes to zero");
+    for chunk in rout.chunks_exact(8) {
+        assert_eq!(u16::from_le_bytes([chunk[0], chunk[1]]), 0);
+        assert_eq!(u16::from_le_bytes([chunk[6], chunk[7]]), 0x3c00);
+    }
 }

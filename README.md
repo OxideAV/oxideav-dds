@@ -21,14 +21,15 @@ Coverage as of round 4:
   `decode_bc7`. BC7 covers all 8 modes (single-, dual- and
   three-subset partitions, p-bits, channel rotation, secondary
   alpha index plane).
-- **BC6H decompression (mode 1 + mode 11) to RGBA half-float** via
-  `decode_bc6h`. Mode 11 is the single-subset 10-bit-no-delta anchor
-  that encoders most often emit; mode 1 is the 2-subset 10-bit-with-
-  5-bit-deltas anchor. The remaining 12 BC6H modes (the
-  delta-encoded 7-bit / 9-bit / asymmetric-delta variants) report
-  `DdsError::Unsupported` rather than silently emitting wrong pixels;
-  the per-block bit-interleave tables for those modes are tracked
-  as a follow-up.
+- **BC6H decompression — all 14 modes — to RGBA half-float** via
+  `decode_bc6h`. Modes 0..13 are implemented per the per-mode
+  bit-allocation tables Microsoft mandates for Direct3D 11 hardware
+  (covering 10.5.5.5, 7.6.6.6, 11.5.5.5 / 11.4.4.4 / 11.4.5.4 /
+  11.4.4.5, 9.5.5.5, 8.6.6.6 / 8.5.6.5 / 8.5.5.6, 6.6.6.6 absolute
+  TWO-subset variants and 10.10 / 11.9 / 12.8 / 16.4 ONE-subset
+  variants). Both `BC6H_UF16` (unsigned) and `BC6H_SF16` (signed)
+  finalisation paths are supported. Reserved 5-bit prefixes
+  (10011, 10111, 11011, 11111) decode to zero RGB per spec.
 - **BC1 / BC2 / BC3 / BC4 / BC5 encoders.** Round 4 lifts encoding
   beyond BC1: `encode_bc1`, `encode_bc2`, `encode_bc3`,
   `encode_bc4_unorm`, `encode_bc5_unorm` all emit valid block-
@@ -56,7 +57,8 @@ Coverage as of round 4:
 - Block-compressed pass-through. BC1..BC7 raw block bytes are
   surfaced through `DdsImage::surfaces[i].plane.data`; BC1..BC5 +
   BC7 also decompress to RGBA / R / RG via the dedicated `decode_bc*`
-  entry points; BC6H decompresses to RGBA half-float for modes 1 and 11.
+  entry points; BC6H decompresses to RGBA half-float for all 14
+  modes via `decode_bc6h`.
 - Standalone-friendly via the default-on `registry` Cargo feature.
   Disable it (`default-features = false`) to drop the `oxideav-core`
   dependency tree entirely; the crate then exposes only the
@@ -66,12 +68,7 @@ Coverage as of round 4:
 
 Still deferred (followups):
 
-- BC6H modes 0, 2..10, 12, 13 — the 12 "delta-encoded" 7-bit / 9-bit
-  / asymmetric-delta variants. Modes 1 and 11 (the two 10-bit anchor
-  modes most encoders emit) work today; the rest fall through to
-  `DdsError::Unsupported`. The per-mode bit-allocation tables Microsoft
-  publishes are sizeable to transcribe and audit.
-- BC6H + BC7 encoders — round 4 ships decoders only for the HDR /
+- BC6H + BC7 encoders — the crate ships decoders only for the HDR /
   high-quality-LDR formats.
 - Mipmap-chain emission from the encoder (still a single-level
   surface; round-trip across `parse_dds` -> `encode_dds_uncompressed`
