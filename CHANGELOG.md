@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **BC7 3-subset modes (round 5)** — the encoder now also tries modes
+  0 (3-subset, 4-bit partition, 4-bit RGB + per-endpoint p-bits,
+  3-bit indices) and 2 (3-subset, 6-bit partition, 5-bit RGB, no
+  p-bits, 2-bit indices) per opaque block, sweeping the 16 / 64-entry
+  Microsoft / Khronos 3-subset partition tables with the same
+  least-squares refinement loop as the 2-subset modes. Lifts
+  rank-3 natural-image PSNR-RGB from the round-4 ~28 dB ceiling to
+  ≥30 dB (measured: 30.44 dB on the standard 8×8 three-axis fixture).
+- **`encode_dds_block_compressed_from_rgba8`** (round 5) closes the
+  BC* mip-chain emission story: takes an RGBA8 source plus
+  destination format + dimensions + mip count + cubemap / array_size
+  flags and returns a fully-formed DDS file. The encoder generates
+  each mip level by 2×2 box-filter downsampling the previous level's
+  RGBA8, then encodes that level to BC* blocks. Supports BC1, BC2,
+  BC3, BC4_UNORM, BC5_UNORM, BC7_UNORM and BC7_UNORM_SRGB; rejects
+  BC6H (HDR — callers must use `encode_bc6h_from_f32` +
+  `encode_dds_block_compressed`). Cubemap (`is_cubemap = true`,
+  6-face RGBA8 source) and DX10 texture-array (`array_size > 1`,
+  N-slice RGBA8 source) shapes are also supported on this path —
+  they previously hit the "cubemap / DX10 texture-array
+  block-compressed emission is not yet supported" error.
+
 - **BC7 2-subset modes (round 4)** — the encoder now also tries modes
   1 (6-bit RGB + shared p-bits, opaque), 3 (7-bit RGB + per-endpoint
   p-bits, opaque) and 7 (5-bit RGBA + per-endpoint p-bits, translucent)

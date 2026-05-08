@@ -1,12 +1,16 @@
 //! BC7 (DXGI `BC7_UNORM`) block encoder.
 //!
-//! Round 3 baseline shipped mode 6 only; round 4 adds the three
+//! Round 3 baseline shipped mode 6 only; round 4 added the three
 //! 2-subset modes — mode 1 (6-bit RGB + shared p-bits, opaque), mode 3
 //! (7-bit RGB + per-endpoint p-bits, opaque) and mode 7 (5-bit RGBA +
-//! per-endpoint p-bits) — with a partition-table search across the
-//! Microsoft / Khronos 64-partition set. The 2-subset modes are the
-//! natural-image quality target: they push multi-axis content from the
-//! ~22 dB ceiling of single-subset mode 6 to ~30 dB and beyond.
+//! per-endpoint p-bits, translucent) — with a partition-table search
+//! across the Microsoft / Khronos 64-partition set. Round 5 adds the
+//! two 3-subset modes — mode 0 (4-bit RGB + per-endpoint p-bits +
+//! 3-bit indices, 16-entry partition table) and mode 2 (5-bit RGB,
+//! no p-bits, 2-bit indices, 64-entry partition table) — for genuine
+//! 3-axis natural-image content that the 2-subset modes cannot fit
+//! cleanly. The combined picker pushes the round-4 ~28 dB ceiling on
+//! 3-axis content past 30 dB.
 //!
 //! Reference: Microsoft's public "BC7" article on learn.microsoft.com
 //! (Direct3D 11 reference) and the public Khronos
@@ -14,27 +18,34 @@
 //! specification. No DirectXTex / NVTT / bc7enc / ISPC / basisu source
 //! was consulted; only the public spec text + the layout tables.
 //!
-//! Encoder strategy (round 4):
+//! Encoder strategy (round 5):
 //!
 //! 1. **Mode 6 (always)**: Furthest-point endpoint pair in 4-D RGBA
 //!    space, 7-bit + 1-p-bit quantisation, 16-entry palette, nearest-
 //!    palette index per pixel. Bit-exact for solid-RGBA blocks; ~33–40 dB
 //!    PSNR on smoothly-varying photographic content.
 //! 2. **Mode 1 / 3** (opaque blocks only — every pixel α = 0xff):
-//!    Sweep the full 64-entry Microsoft / Khronos partition table; for
-//!    each partition, seed per-subset endpoints with furthest-point in
-//!    that subset, then run two iterations of (snap pixels to nearest
-//!    palette → least-squares refine endpoints → re-quantise) before
-//!    measuring SSE. Keep the winner across all partitions × both modes.
-//! 3. **Mode 7** (translucent blocks): Same partition × refinement loop
+//!    Sweep the full 64-entry Microsoft / Khronos 2-subset partition
+//!    table; for each partition, seed per-subset endpoints with
+//!    furthest-point in that subset, then run two iterations of (snap
+//!    pixels to nearest palette → least-squares refine endpoints →
+//!    re-quantise) before measuring SSE. Keep the winner across all
+//!    partitions × both modes.
+//! 3. **Mode 0 / 2** (opaque blocks only): Same loop generalised to
+//!    three subsets. Mode 0 uses the first 16 entries of the 3-subset
+//!    partition table (4-bit selector); mode 2 sweeps all 64 entries.
+//!    The 3-subset modes specifically address rank-3 colour content
+//!    that the 2-subset modes can only approximate.
+//! 4. **Mode 7** (translucent blocks): Same 2-subset refinement loop
 //!    with 5+5+1p quantisation per channel and per-endpoint p-bits.
-//! 4. The block-level encoder picks the candidate with the lowest SSE.
+//! 5. The block-level encoder picks the candidate with the lowest SSE
+//!    across modes 0, 1, 2, 3, 6 (opaque) or 6 + 7 (translucent).
 //!
-//! With 4 candidate modes × 64 partitions × 2..4 p-bit choices per
-//! subset the per-block work is ~2 × 256 quantise+SSE iterations — in
-//! release mode that's ~O(50 µs) per 4×4 block, fine for small textures
-//! and test fixtures. The 3-subset modes 0 and 2 (genuine 3-axis
-//! content) remain a future-round optimisation.
+//! With ~6 candidate modes × up to 64 partitions × 2..4 p-bit choices
+//! per subset the per-block work is ~6 × 256 quantise+SSE iterations —
+//! in release mode that's ~O(150 µs) per 4×4 block, fine for small
+//! textures and test fixtures. Mode 4/5 channel-rotation encoders
+//! remain a separate followup.
 //!
 //! Output is byte-by-byte bit-exact decoder-roundtrippable: the encoder
 //! always picks indices against the palette the *decoder* will produce,
@@ -46,7 +57,7 @@
 // preference for iterator-style code for this module.
 #![allow(clippy::needless_range_loop)]
 
-use crate::bc7::{ANCHOR_2_SUBSET_2, PART_2};
+use crate::bc7::{ANCHOR_2_SUBSET_2, ANCHOR_3_SUBSET_2, ANCHOR_3_SUBSET_3, PART_2, PART_3};
 use crate::error::{DdsError, Result};
 
 #[inline]
@@ -722,6 +733,296 @@ fn pack_2subset(
     bw.into_block()
 }
 
+// ---- Mode 0 / 2 (3-subset, opaque) -------------------------------------
+
+/// Furthest-point endpoint pair for a subset of pixels in a 3-subset
+/// partition. The 3-subset variant is identical to [`furthest_in_subset`]
+/// except `pixel_subset[i] ∈ {0, 1, 2}`.
+fn furthest_in_subset_3(
+    pixels: &[[u8; 4]; 16],
+    pixel_subset: &[u8; 16],
+    s: u8,
+) -> ([u8; 4], [u8; 4]) {
+    furthest_in_subset(pixels, pixel_subset, s)
+}
+
+/// Encode one 4×4 RGBA8 block as a 3-subset BC7 candidate (mode 0 or
+/// mode 2) for a specific partition. Returns `(block_bytes, sse)`.
+///
+/// Mode 0: 4-bit colour, no alpha, 6 per-endpoint p-bits, 3-bit indices,
+///         partition selector ∈ 0..16 (4-bit field).
+/// Mode 2: 5-bit colour, no alpha, no p-bits, 2-bit indices, partition
+///         selector ∈ 0..64 (6-bit field).
+fn encode_bc7_3subset(pixels_rgba: &[[u8; 4]; 16], mode: u32, partition: u32) -> ([u8; 16], u64) {
+    debug_assert!(mode == 0 || mode == 2);
+
+    let part = PART_3[partition as usize];
+    let (colour_bits, idx_bits, has_pbits, pbit_per_endpoint) = match mode {
+        0 => (4u32, 3u32, true, true),
+        2 => (5u32, 2u32, false, false),
+        _ => unreachable!(),
+    };
+
+    // Per-subset endpoint search: seed with furthest-point, then refine.
+    let mut subsets = [SubsetEnc {
+        raw: [[0; 4]; 2],
+        p: [0; 2],
+        rec: [[0; 4]; 2],
+    }; 3];
+    for s in 0..3u8 {
+        let (e0, e1) = furthest_in_subset_3(pixels_rgba, &part, s);
+        subsets[s as usize] = if has_pbits {
+            encode_subset(e0, e1, colour_bits, 0, pbit_per_endpoint)
+        } else {
+            // Mode 2: no p-bits — encode_subset_no_pbit collapses each
+            // channel to colour_bits + bit-replication.
+            encode_subset_no_pbit(e0, e1, colour_bits)
+        };
+    }
+
+    let palette_size = 1usize << idx_bits;
+    let build_palettes = |subsets: &[SubsetEnc; 3]| -> [[[u8; 4]; 8]; 3] {
+        let mut palettes: [[[u8; 4]; 8]; 3] = [[[0; 4]; 8]; 3];
+        for s in 0..3 {
+            let e0 = subsets[s].rec[0];
+            let e1 = subsets[s].rec[1];
+            for k in 0..palette_size {
+                for c in 0..3 {
+                    palettes[s][k][c] = interp(e0[c], e1[c], k, idx_bits);
+                }
+                palettes[s][k][3] = 255;
+            }
+        }
+        palettes
+    };
+    let snap_indices = |palettes: &[[[u8; 4]; 8]; 3]| -> [u32; 16] {
+        let mut indices = [0u32; 16];
+        for px in 0..16 {
+            let s = part[px] as usize;
+            let mut best = 0u32;
+            let mut best_d = u32::MAX;
+            let pal_slice = &palettes[s][..palette_size];
+            for (k, p) in pal_slice.iter().enumerate() {
+                let d = sq_dist4(*p, pixels_rgba[px]);
+                if d < best_d {
+                    best_d = d;
+                    best = k as u32;
+                }
+            }
+            indices[px] = best;
+        }
+        indices
+    };
+
+    let palettes = build_palettes(&subsets);
+    let mut indices = snap_indices(&palettes);
+
+    // Iterative refinement: 2 passes is enough for the gradient tests.
+    for _ in 0..2 {
+        let mut new_subsets = subsets;
+        for s in 0..3u8 {
+            let (e0_f, e1_f) = refine_endpoints_3(pixels_rgba, &part, s, &indices, idx_bits);
+            new_subsets[s as usize] = if has_pbits {
+                encode_subset(e0_f, e1_f, colour_bits, 0, pbit_per_endpoint)
+            } else {
+                encode_subset_no_pbit(e0_f, e1_f, colour_bits)
+            };
+        }
+        let new_palettes = build_palettes(&new_subsets);
+        let new_indices = snap_indices(&new_palettes);
+        let sse_old: u64 = (0..16usize)
+            .map(|px| {
+                let s = part[px] as usize;
+                sq_dist4(palettes[s][indices[px] as usize], pixels_rgba[px]) as u64
+            })
+            .sum();
+        let sse_new: u64 = (0..16usize)
+            .map(|px| {
+                let s = part[px] as usize;
+                sq_dist4(new_palettes[s][new_indices[px] as usize], pixels_rgba[px]) as u64
+            })
+            .sum();
+        if sse_new < sse_old {
+            subsets = new_subsets;
+            indices = new_indices;
+        } else {
+            break;
+        }
+    }
+
+    // Anchor handling: subset 0 anchor = pixel 0; subset 1 anchor =
+    // ANCHOR_3_SUBSET_2[partition]; subset 2 anchor = ANCHOR_3_SUBSET_3.
+    // Each anchor index has its MSB implicit-0, so it must be < palette_size / 2.
+    let anchor1 = ANCHOR_3_SUBSET_2[partition as usize] as usize;
+    let anchor2 = ANCHOR_3_SUBSET_3[partition as usize] as usize;
+    let anchors = [0usize, anchor1, anchor2];
+    let half = palette_size as u32 / 2;
+    let max_idx = palette_size as u32 - 1;
+    for (s, &anchor_px) in anchors.iter().enumerate() {
+        if indices[anchor_px] >= half {
+            subsets[s].raw.swap(0, 1);
+            subsets[s].p.swap(0, 1);
+            subsets[s].rec.swap(0, 1);
+            for px in 0..16 {
+                if part[px] as usize == s {
+                    indices[px] = max_idx - indices[px];
+                }
+            }
+        }
+    }
+
+    // Recompute SSE against final palettes (after anchor swaps).
+    let mut final_palettes: [[[u8; 4]; 8]; 3] = [[[0; 4]; 8]; 3];
+    for s in 0..3 {
+        let e0 = subsets[s].rec[0];
+        let e1 = subsets[s].rec[1];
+        for k in 0..palette_size {
+            for c in 0..3 {
+                final_palettes[s][k][c] = interp(e0[c], e1[c], k, idx_bits);
+            }
+            final_palettes[s][k][3] = 255;
+        }
+    }
+    let mut sse: u64 = 0;
+    for px in 0..16 {
+        let s = part[px] as usize;
+        let r = final_palettes[s][indices[px] as usize];
+        sse += sq_dist4(r, pixels_rgba[px]) as u64;
+    }
+
+    let block = pack_3subset(mode, partition, &subsets, indices, anchor1, anchor2);
+    (block, sse)
+}
+
+/// Channel quantiser for modes that don't carry p-bits (mode 2).
+/// Quantises each colour channel to `colour_bits` and reconstructs by
+/// bit-replication (Microsoft's "high-into-low" rule).
+fn encode_subset_no_pbit(e0: [u8; 4], e1: [u8; 4], colour_bits: u32) -> SubsetEnc {
+    let mut raw = [[0u32; 4]; 2];
+    let mut rec = [[0u8; 4]; 2];
+    for c in 0..3 {
+        let r0 = (e0[c] as u32) >> (8 - colour_bits);
+        let r1 = (e1[c] as u32) >> (8 - colour_bits);
+        raw[0][c] = r0;
+        raw[1][c] = r1;
+        // Decoder bit-replicates: high = (raw << (8 - bits)); v = high | (high >> bits).
+        rec[0][c] = recon8_no_pbit(r0, colour_bits);
+        rec[1][c] = recon8_no_pbit(r1, colour_bits);
+        // Round-test single-step adjustment: try raw ± 1 to see if a
+        // neighbouring quantised value is closer.
+        let max_raw = (1u32 << colour_bits) - 1;
+        for &delta in &[-1i32, 1] {
+            for ep in 0..2 {
+                let cur = raw[ep][c] as i32 + delta;
+                if !(0..=max_raw as i32).contains(&cur) {
+                    continue;
+                }
+                let cand = recon8_no_pbit(cur as u32, colour_bits);
+                let new_err = abs_diff_i32(if ep == 0 { e0[c] } else { e1[c] } as i32, cand as i32);
+                let cur_err = abs_diff_i32(
+                    if ep == 0 { e0[c] } else { e1[c] } as i32,
+                    rec[ep][c] as i32,
+                );
+                if new_err < cur_err {
+                    raw[ep][c] = cur as u32;
+                    rec[ep][c] = cand;
+                }
+            }
+        }
+    }
+    rec[0][3] = 255;
+    rec[1][3] = 255;
+    SubsetEnc {
+        raw,
+        p: [0; 2],
+        rec,
+    }
+}
+
+/// Reconstruct an 8-bit value from a `bits`-bit raw value with no p-bit.
+#[inline]
+fn recon8_no_pbit(raw: u32, bits: u32) -> u8 {
+    if bits >= 8 {
+        return raw as u8;
+    }
+    let shift = 8 - bits;
+    let high = (raw << shift) as u8;
+    high | (high >> bits)
+}
+
+/// Least-squares endpoint refinement for one subset of a 3-subset
+/// partition. Identical to [`refine_endpoints`] but indexes a 3-subset
+/// pixel-subset table rather than 2-subset.
+fn refine_endpoints_3(
+    pixels: &[[u8; 4]; 16],
+    pixel_subset: &[u8; 16],
+    s: u8,
+    indices: &[u32; 16],
+    idx_bits: u32,
+) -> ([u8; 4], [u8; 4]) {
+    refine_endpoints(pixels, pixel_subset, s, indices, idx_bits)
+}
+
+/// Pack a 3-subset BC7 block (mode 0 or mode 2).
+fn pack_3subset(
+    mode: u32,
+    partition: u32,
+    subsets: &[SubsetEnc; 3],
+    indices: [u32; 16],
+    anchor1: usize,
+    anchor2: usize,
+) -> [u8; 16] {
+    let (colour_bits, partition_bits, idx_bits, has_pbits) = match mode {
+        0 => (4u32, 4u32, 3u32, true),
+        2 => (5u32, 6u32, 2u32, false),
+        _ => unreachable!(),
+    };
+
+    let mut bw = BitWriter::new();
+    // Mode prefix: `mode` zeros, then a 1.
+    for _ in 0..mode {
+        bw.put(0, 1);
+    }
+    bw.put(1, 1);
+
+    // Partition: `partition_bits` bits.
+    bw.put(partition, partition_bits);
+
+    // Endpoint colours: channel-major (all R, all G, all B).
+    // Each channel has 6 endpoint slots (3 subsets × 2 endpoints).
+    // Slot order: subset0_e0, subset0_e1, subset1_e0, subset1_e1, subset2_e0, subset2_e1.
+    for ch in 0..3 {
+        for s in 0..3 {
+            for ep in 0..2 {
+                bw.put(subsets[s].raw[ep][ch], colour_bits);
+            }
+        }
+    }
+    // No alpha for modes 0 / 2.
+
+    // P-bits: mode 0 carries 6 per-endpoint p-bits; mode 2 has none.
+    if has_pbits {
+        for s in 0..3 {
+            for ep in 0..2 {
+                bw.put(subsets[s].p[ep], 1);
+            }
+        }
+    }
+
+    // Indices: each pixel writes `idx_bits` bits except the three anchors,
+    // which write `idx_bits - 1` bits (MSB implicit-0).
+    for px in 0..16 {
+        let nbits = if px == 0 || px == anchor1 || px == anchor2 {
+            idx_bits - 1
+        } else {
+            idx_bits
+        };
+        bw.put(indices[px], nbits);
+    }
+
+    bw.into_block()
+}
+
 // ---- Bit writer --------------------------------------------------------
 
 struct BitWriter {
@@ -761,10 +1062,30 @@ fn encode_block(pixels_rgba: &[[u8; 4]; 16]) -> [u8; 16] {
     let opaque = pixels_rgba.iter().all(|p| p[3] == 0xff);
 
     // Try 2-subset modes across the full 64-partition table.
-    let modes: &[u32] = if opaque { &[1, 3] } else { &[7] };
-    for &mode in modes {
+    let two_subset_modes: &[u32] = if opaque { &[1, 3] } else { &[7] };
+    for &mode in two_subset_modes {
         for partition in 0..PARTITION_COUNT {
             let (cand, sse) = encode_bc7_2subset(pixels_rgba, mode, partition);
+            if sse < best_sse {
+                best_sse = sse;
+                best_block = cand;
+            }
+        }
+    }
+
+    // Try 3-subset modes (opaque content only — modes 0 / 2 have no
+    // alpha endpoint). Mode 0 partition selector is 4-bit (16 entries);
+    // mode 2 sweeps the full 64-entry 3-subset table.
+    if opaque {
+        for partition in 0..16 {
+            let (cand, sse) = encode_bc7_3subset(pixels_rgba, 0, partition);
+            if sse < best_sse {
+                best_sse = sse;
+                best_block = cand;
+            }
+        }
+        for partition in 0..PARTITION_COUNT {
+            let (cand, sse) = encode_bc7_3subset(pixels_rgba, 2, partition);
             if sse < best_sse {
                 best_sse = sse;
                 best_block = cand;
@@ -781,8 +1102,9 @@ fn encode_block(pixels_rgba: &[[u8; 4]; 16]) -> [u8; 16] {
 /// `output` must hold `ceil(w/4) × ceil(h/4) × 16` bytes.
 ///
 /// The encoder picks the best of mode 6 (1-subset RGBA), mode 1 / 3
-/// (2-subset opaque) and mode 7 (2-subset RGBA) per block, sweeping a
-/// 16-partition shortlist for the 2-subset modes.
+/// (2-subset opaque), mode 0 / 2 (3-subset opaque) and mode 7
+/// (2-subset RGBA) per block, sweeping the Microsoft / Khronos
+/// partition tables for each multi-subset mode.
 pub fn encode_bc7(input: &[u8], width: u32, height: u32, output: &mut [u8]) -> Result<()> {
     let bw = width.max(1).div_ceil(4) as usize;
     let bh = height.max(1).div_ceil(4) as usize;
@@ -910,14 +1232,12 @@ mod tests {
         );
     }
 
-    /// 8×8 three-axis natural-image RGBA → round-4 lift: ≥ 25 dB via
-    /// the 2-subset mode-1/3 partition search (round-3 mode-6-only
+    /// 8×8 three-axis natural-image RGBA → round-5 lift: ≥ 30 dB via
+    /// the 3-subset mode-0/2 partition search (round-4 2-subset mode-1/3
     /// ceiling on this specifically 3-independent-axis pattern was
-    /// ~22 dB; the round-4 lift puts us at ~27 dB). The remaining gap
-    /// to 30+ dB on this pattern is intrinsic to 2-subset modes —
-    /// genuinely 3-axis content needs 3-subset modes 0/2 (round-5+).
+    /// ~28 dB; the round-5 3-subset modes 0 and 2 push past 30 dB).
     #[test]
-    fn bc7_encode_8x8_natural_image_three_axis_psnr_gt_25db() {
+    fn bc7_encode_8x8_natural_image_three_axis_psnr_gt_30db() {
         let mut input = vec![0u8; 8 * 8 * 4];
         for y in 0..8 {
             for x in 0..8 {
@@ -945,8 +1265,8 @@ mod tests {
         let mse = sse as f64 / count as f64;
         let psnr = 10.0 * (255.0_f64 * 255.0 / mse).log10();
         assert!(
-            psnr > 25.0,
-            "BC7 8x8 three-axis natural-image PSNR-RGB = {:.2} dB (want > 25 dB)",
+            psnr > 30.0,
+            "BC7 8x8 three-axis natural-image PSNR-RGB = {:.2} dB (want > 30 dB)",
             psnr
         );
     }

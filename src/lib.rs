@@ -14,7 +14,7 @@
 //! `four_cc == "DX10"`), and the raw pixel array (or block-compressed
 //! block array) for one or more mip levels.
 //!
-//! Coverage as of round 4:
+//! Coverage as of round 5:
 //!
 //! * Header parsing — magic + `DDS_HEADER` (124 bytes) + optional
 //!   `DDS_HEADER_DXT10` (20 bytes).
@@ -44,21 +44,27 @@
 //!   indices) — the highest-precision 1-subset BC6H mode and the
 //!   round-trip target for HDR gradient content.
 //! * **BC7 multi-mode encoder** via [`encode_bc7`]. Round-3 shipped
-//!   mode 6 only (1-subset baseline); round 4 adds the three 2-subset
-//!   modes — mode 1 (6-bit RGB + shared p-bits, opaque), mode 3
-//!   (7-bit RGB + per-endpoint p-bits, opaque) and mode 7 (5-bit RGBA +
-//!   per-endpoint p-bits, translucent) — with a full 64-partition
-//!   table search and least-squares endpoint refinement. Lifts
-//!   multi-axis natural-image PSNR from the ~22 dB mode-6 ceiling to
-//!   ~28 dB on 3-axis content and ≥ 30 dB on rank-2 content.
+//!   mode 6 only (1-subset baseline); round 4 added the three 2-subset
+//!   modes (1 / 3 / 7) and round 5 adds the two 3-subset modes (0 / 2)
+//!   for genuine rank-3 colour content. Mode 0 uses 4-bit RGB +
+//!   per-endpoint p-bits + 3-bit indices on the 16-entry partition
+//!   table; mode 2 uses 5-bit RGB, no p-bits, 2-bit indices on the
+//!   full 64-entry table. Lifts 3-axis natural-image PSNR from the
+//!   ~28 dB round-4 ceiling past 30 dB.
 //! * **Mipmap chain emission** for both uncompressed
 //!   ([`encode_dds_uncompressed`]) and block-compressed
 //!   ([`encode_dds_block_compressed`]) surfaces. The uncompressed path
 //!   either copies a pre-computed chain from `image.surfaces` or
-//!   fabricates levels by box-filter downsampling mip 0; the BC* path
-//!   takes pre-encoded per-mip block bytes from `image.surfaces` and
-//!   concatenates them with a legacy FourCC header (BC1..BC5) or DX10
-//!   extension header (BC6H, BC7).
+//!   fabricates levels by box-filter downsampling mip 0; the
+//!   pre-encoded BC* path takes per-mip block bytes from
+//!   `image.surfaces` and concatenates them with a legacy FourCC
+//!   header (BC1..BC5) or DX10 extension header (BC6H, BC7).
+//!   [`encode_dds_block_compressed_from_rgba8`] (round 5) closes the
+//!   mip-chain emission story: it accepts an RGBA8 source, generates
+//!   the chain by box-filter downsampling, and encodes each level to
+//!   BC* blocks in one call, so callers no longer have to pre-encode
+//!   each mip themselves. Cubemap (`is_cubemap`) and DX10 texture-
+//!   array (`array_size > 1`) shapes are also supported on this path.
 //! * **Mipmap chain + cubemap faces + DX10 texture arrays** — every
 //!   on-disk surface is parsed into [`DdsImage::surfaces`] in
 //!   Microsoft's mandated order (array slice → face → mip).
@@ -77,17 +83,8 @@
 //! * BC6H 2-subset modes (0..9) and the delta-encoded 1-subset modes
 //!   (11/12/13). The round-3 encoder ships only mode 11 (1-subset 11.9
 //!   baseline); the round-4 BC6H expansion is on the round-5 backlog.
-//! * BC7 3-subset modes (0 and 2) — round-4 adds the 2-subset modes
-//!   (1/3/7) but the 3-subset modes for genuinely 3-axis content are
-//!   decoded but not yet encoded; rank-3 natural-image content
-//!   currently caps at ~28 dB. Mode 4/5 channel-rotation encoders
-//!   remain a separate followup.
-//! * BC* mip-chain emission with on-the-fly downsampling — the
-//!   round-4 [`encode_dds_block_compressed`] path requires the caller
-//!   to pre-encode each mip level. Box-downsample-then-BC*-encode
-//!   inside the writer is a future-round optimisation.
-//! * Cubemap / DX10-array block-compressed emission — the BC* writer
-//!   currently rejects multi-face / multi-slice inputs.
+//! * BC7 mode 4 / 5 channel-rotation encoders — decoded but not
+//!   encoded; the encode picker uses modes 0–3, 6, 7 only.
 //!
 //! ## Standalone vs registry-integrated
 //!
@@ -141,7 +138,9 @@ pub use bcn::{
 };
 pub use bcn_enc::{encode_bc1, encode_bc2, encode_bc3, encode_bc4_unorm, encode_bc5_unorm};
 pub use decoder::parse_dds;
-pub use encoder::{encode_dds_block_compressed, encode_dds_uncompressed};
+pub use encoder::{
+    encode_dds_block_compressed, encode_dds_block_compressed_from_rgba8, encode_dds_uncompressed,
+};
 pub use error::{DdsError, Result};
 pub use image::{CubemapFace, DdsImage, DdsPixelFormat, DdsPlane, DdsSurface};
 pub use types::{

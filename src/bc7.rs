@@ -124,7 +124,7 @@ pub(crate) const PART_2: [[u8; 16]; 64] = [
 /// 16-element array: `partition_table_3[p][i]` is the subset index
 /// (0, 1 or 2) for pixel `i`.
 #[rustfmt::skip]
-const PART_3: [[u8; 16]; 64] = [
+pub(crate) const PART_3: [[u8; 16]; 64] = [
     [0,0,1,1, 0,0,1,1, 0,2,2,1, 2,2,2,2],
     [0,0,0,1, 0,0,1,1, 2,2,1,1, 2,2,2,1],
     [0,0,0,0, 2,0,0,1, 2,2,1,1, 2,2,1,1],
@@ -205,7 +205,7 @@ pub(crate) const ANCHOR_2_SUBSET_2: [u8; 64] = [
 /// Per-partition fixed anchor index for the second subset of a 3-subset
 /// partition.
 #[rustfmt::skip]
-const ANCHOR_3_SUBSET_2: [u8; 64] = [
+pub(crate) const ANCHOR_3_SUBSET_2: [u8; 64] = [
      3, 3,15,15,  8, 3,15,15,  8, 8, 6, 6,  6, 5, 3, 3,
      3, 3, 8,15,  3, 3, 6,10,  5, 8, 8, 6,  8, 5,15,15,
      8,15, 3, 5,  6,10, 8,15, 15, 3,15, 5, 15,15,15,15,
@@ -215,7 +215,7 @@ const ANCHOR_3_SUBSET_2: [u8; 64] = [
 /// Per-partition fixed anchor index for the third subset of a 3-subset
 /// partition.
 #[rustfmt::skip]
-const ANCHOR_3_SUBSET_3: [u8; 64] = [
+pub(crate) const ANCHOR_3_SUBSET_3: [u8; 64] = [
     15, 8, 8, 3, 15,15, 3, 8, 15,15,15,15, 15,15,15, 8,
     15, 8,15, 3, 15, 8,15, 8,  3,15, 6,10, 15,15,10, 8,
     15, 3,15,10, 10, 8, 9,10,  6,15, 8,15,  3, 6, 6, 8,

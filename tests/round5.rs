@@ -13,8 +13,8 @@
 
 use oxideav_dds::{
     decode_bc1, decode_bc6h, decode_bc7, encode_bc1, encode_bc6h, encode_bc6h_from_f32, encode_bc7,
-    encode_dds_block_compressed, encode_dds_uncompressed, parse_dds, DdsImage, DdsPixelFormat,
-    DdsPlane, DdsSurface,
+    encode_dds_block_compressed, encode_dds_block_compressed_from_rgba8, encode_dds_uncompressed,
+    parse_dds, CubemapFace, DdsImage, DdsPixelFormat, DdsPlane, DdsSurface,
 };
 
 /// BC7 encoder + decoder roundtrip on a 4×4 solid-white opaque block.
@@ -452,6 +452,180 @@ fn encode_block_compressed_rejects_uncompressed() {
         array_size: 1,
     };
     assert!(encode_dds_block_compressed(&img).is_err());
+}
+
+/// Round-5 lift: BC1 mip chain emission directly from RGBA8 — no
+/// caller-side pre-encoding. The writer fabricates each mip by
+/// box-downsampling the RGBA8 source then encoding to BC1 blocks.
+#[test]
+fn encode_bc1_mipmap_chain_from_rgba8() {
+    let w = 8u32;
+    let h = 8u32;
+    let mip = 4u32;
+    let rgba = vec![0xffu8; (w * h * 4) as usize]; // solid white
+    let bytes = encode_dds_block_compressed_from_rgba8(
+        &rgba,
+        w,
+        h,
+        DdsPixelFormat::Bc1,
+        mip,
+        false,
+        1,
+        false,
+    )
+    .expect("encode BC1 from RGBA8");
+    let parsed = parse_dds(&bytes).expect("parse BC1 mip chain");
+    assert_eq!(parsed.pixel_format, DdsPixelFormat::Bc1);
+    assert_eq!(parsed.mip_map_count, mip);
+    assert_eq!(parsed.surfaces.len(), mip as usize);
+    let dims = [(8u32, 8u32), (4, 4), (2, 2), (1, 1)];
+    for (level, &(mw, mh)) in dims.iter().enumerate().take(mip as usize) {
+        assert_eq!(parsed.surfaces[level].width, mw);
+        assert_eq!(parsed.surfaces[level].height, mh);
+    }
+    // Decode mip 0 — should reproduce solid white.
+    let mut decoded = vec![0u8; (w * h * 4) as usize];
+    decode_bc1(&parsed.surfaces[0].plane.data, w, h, &mut decoded).unwrap();
+    for chunk in decoded.chunks_exact(4) {
+        assert_eq!(chunk, &[255, 255, 255, 255]);
+    }
+}
+
+/// Round-5 lift: BC7 mip chain emission directly from RGBA8.
+#[test]
+fn encode_bc7_mipmap_chain_from_rgba8() {
+    let w = 8u32;
+    let h = 8u32;
+    let mip = 4u32;
+    // Smooth gradient — mip 0 should round-trip with high PSNR.
+    let mut rgba = vec![0u8; (w * h * 4) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            let off = ((y * w + x) * 4) as usize;
+            rgba[off] = (x * 32) as u8;
+            rgba[off + 1] = (y * 32) as u8;
+            rgba[off + 2] = ((x + y) * 16) as u8;
+            rgba[off + 3] = 0xff;
+        }
+    }
+    let bytes = encode_dds_block_compressed_from_rgba8(
+        &rgba,
+        w,
+        h,
+        DdsPixelFormat::Bc7Unorm,
+        mip,
+        false,
+        1,
+        true,
+    )
+    .expect("encode BC7 from RGBA8");
+    let parsed = parse_dds(&bytes).expect("parse BC7 mip chain");
+    assert_eq!(parsed.pixel_format, DdsPixelFormat::Bc7Unorm);
+    assert_eq!(parsed.mip_map_count, mip);
+    assert_eq!(parsed.surfaces.len(), mip as usize);
+    assert!(parsed.has_dxt10_header);
+
+    // Decode mip 0 + measure PSNR against the source RGBA8.
+    let mut decoded = vec![0u8; (w * h * 4) as usize];
+    decode_bc7(&parsed.surfaces[0].plane.data, w, h, &mut decoded).unwrap();
+    let mut sse: u64 = 0;
+    let mut count: u64 = 0;
+    for (a, b) in rgba.chunks_exact(4).zip(decoded.chunks_exact(4)) {
+        for c in 0..3 {
+            let d = a[c] as i32 - b[c] as i32;
+            sse += (d * d) as u64;
+            count += 1;
+        }
+    }
+    let mse = sse as f64 / count as f64;
+    let psnr = 10.0 * (255.0_f64 * 255.0 / mse).log10();
+    assert!(
+        psnr > 25.0,
+        "BC7-from-RGBA8 mip 0 PSNR = {:.2} dB (want > 25 dB)",
+        psnr
+    );
+}
+
+/// Round-5 lift: cubemap BC1 emission from a 6-slice RGBA8 source.
+#[test]
+fn encode_bc1_cubemap_from_rgba8() {
+    let w = 4u32;
+    let h = 4u32;
+    let mip = 1u32;
+    // Per-face solid colour: face_idx-coded so we can verify
+    // the surfaces come back in PX, NX, PY, NY, PZ, NZ order.
+    let face_count = 6u32;
+    let mut rgba = vec![0u8; (face_count * w * h * 4) as usize];
+    for f in 0..face_count {
+        let face_off = (f * w * h * 4) as usize;
+        for chunk in rgba[face_off..face_off + (w * h * 4) as usize].chunks_exact_mut(4) {
+            chunk[0] = (f as u8) * 40 + 10;
+            chunk[1] = (f as u8) * 40 + 10;
+            chunk[2] = (f as u8) * 40 + 10;
+            chunk[3] = 0xff;
+        }
+    }
+    let bytes = encode_dds_block_compressed_from_rgba8(
+        &rgba,
+        w,
+        h,
+        DdsPixelFormat::Bc1,
+        mip,
+        true,
+        1,
+        false,
+    )
+    .expect("encode cubemap BC1 from RGBA8");
+    let parsed = parse_dds(&bytes).expect("parse cubemap BC1");
+    assert!(parsed.is_cubemap);
+    assert_eq!(parsed.surfaces.len(), 6);
+    let order = [
+        CubemapFace::PositiveX,
+        CubemapFace::NegativeX,
+        CubemapFace::PositiveY,
+        CubemapFace::NegativeY,
+        CubemapFace::PositiveZ,
+        CubemapFace::NegativeZ,
+    ];
+    for (i, expected_face) in order.iter().enumerate() {
+        assert_eq!(parsed.surfaces[i].face, Some(*expected_face));
+    }
+}
+
+/// `encode_dds_block_compressed_from_rgba8` rejects BC6H (it's HDR —
+/// callers must pre-encode via `encode_bc6h_from_f32`).
+#[test]
+fn encode_block_compressed_from_rgba8_rejects_bc6h() {
+    let rgba = vec![0u8; 4 * 4 * 4];
+    let r = encode_dds_block_compressed_from_rgba8(
+        &rgba,
+        4,
+        4,
+        DdsPixelFormat::Bc6hUf16,
+        1,
+        false,
+        1,
+        false,
+    );
+    assert!(r.is_err());
+}
+
+/// `encode_dds_block_compressed_from_rgba8` rejects uncompressed
+/// pixel formats — the API contract is BC* only.
+#[test]
+fn encode_block_compressed_from_rgba8_rejects_uncompressed() {
+    let rgba = vec![0u8; 4 * 4 * 4];
+    let r = encode_dds_block_compressed_from_rgba8(
+        &rgba,
+        4,
+        4,
+        DdsPixelFormat::A8R8G8B8,
+        1,
+        false,
+        1,
+        false,
+    );
+    assert!(r.is_err());
 }
 
 /// Single-level surface (`mip_map_count = 1`) emits no mip flag and
