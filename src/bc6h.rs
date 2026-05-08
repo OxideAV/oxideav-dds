@@ -57,7 +57,7 @@ pub(crate) fn rgba_half_surface_bytes(width: u32, height: u32) -> usize {
 // ---- Partition + anchor tables (first 32 entries of the BC7 table) ------
 
 #[rustfmt::skip]
-const PART_2: [[u8; 16]; 32] = [
+pub(crate) const PART_2: [[u8; 16]; 32] = [
     [0,0,1,1, 0,0,1,1, 0,0,1,1, 0,0,1,1],
     [0,0,0,1, 0,0,0,1, 0,0,0,1, 0,0,0,1],
     [0,1,1,1, 0,1,1,1, 0,1,1,1, 0,1,1,1],
@@ -93,7 +93,7 @@ const PART_2: [[u8; 16]; 32] = [
 ];
 
 #[rustfmt::skip]
-const ANCHOR_2_SUBSET_2: [u8; 32] = [
+pub(crate) const ANCHOR_2_SUBSET_2: [u8; 32] = [
     15,15,15,15, 15,15,15,15, 15,15,15,15, 15,15,15,15,
     15, 2, 8, 2,  2, 8, 8,15,  2, 8, 2, 2,  8, 8, 2, 2,
 ];
@@ -161,39 +161,39 @@ impl<'a> BitReader<'a> {
 //   endpoint 3 = z (subset 1, endpoint B) — TWO modes only
 
 #[derive(Clone, Copy)]
-struct FieldBit {
+pub(crate) struct FieldBit {
     /// 0 = R, 1 = G, 2 = B.
-    channel: u8,
+    pub(crate) channel: u8,
     /// 0..=3, endpoint index.
-    endpoint: u8,
+    pub(crate) endpoint: u8,
     /// Destination bit position within the channel value (0 = LSB).
-    dest_bit: u8,
+    pub(crate) dest_bit: u8,
 }
 
 /// Per-mode descriptor. Bit-allocation tables transcribed from the
 /// Intel Open Source PRM Vol. 5 (BC6H section), which republishes
 /// Microsoft's authoritative per-mode bit-interleave table in textual
 /// form under the 0BSD license.
-struct ModeInfo {
+pub(crate) struct ModeInfo {
     /// Number of subsets (1 or 2).
-    subsets: u8,
+    pub(crate) subsets: u8,
     /// "w" endpoint precision per channel (R, G, B). For ONE-subset
     /// modes 11..=13 with asymmetric precision, this is the width of
     /// the SAME channel — w is the base endpoint, x is the delta.
-    prec_r: u8,
-    prec_g: u8,
-    prec_b: u8,
+    pub(crate) prec_r: u8,
+    pub(crate) prec_g: u8,
+    pub(crate) prec_b: u8,
     /// Delta width per channel. 0 = no delta (the field stores the
     /// absolute endpoint value, like modes 9 and 10).
-    delta_r: u8,
-    delta_g: u8,
-    delta_b: u8,
+    pub(crate) delta_r: u8,
+    pub(crate) delta_g: u8,
+    pub(crate) delta_b: u8,
     /// Bit ordering of fields after the mode prefix (and before the
     /// 5-bit partition / index bits, which the caller reads
     /// separately).
-    fields: &'static [FieldBit],
+    pub(crate) fields: &'static [FieldBit],
     /// Index bit count per pixel (3 for TWO-subset, 4 for ONE-subset).
-    idx_bits: u8,
+    pub(crate) idx_bits: u8,
 }
 
 macro_rules! fb {
@@ -745,7 +745,7 @@ fn decode_mode(block: &[u8; 16]) -> (u32, u32) {
     }
 }
 
-fn mode_info(mode: u32) -> Option<ModeInfo> {
+pub(crate) fn mode_info(mode: u32) -> Option<ModeInfo> {
     Some(match mode {
         0 => ModeInfo {
             subsets: 2,

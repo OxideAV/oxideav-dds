@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **BC6H 2-subset modes 0..9 + 1-subset delta modes 11/12/13 (round 6)**
+  — the BC6H encoder now sweeps all 14 BC6H modes per block. For
+  2-subset modes (0/1/2/3/4/5/6/7/8/9), the encoder iterates over the
+  32-entry BC6H partition table, seeds per-subset endpoints with
+  furthest-point + iterative LSQ refinement, and rejects partitions
+  where any cross-subset delta exceeds the mode's per-channel delta
+  width (5–6 bits). For 1-subset delta modes (11/12/13), the encoder
+  encodes the second endpoint as a signed delta from the first base
+  endpoint and rejects when overflow forces the delta out of the
+  per-mode range (9 / 8 / 4 bits respectively). The block-level
+  picker selects the lowest-SSE candidate across all modes; this
+  closes the BC6H encoder gap and lets the encoder pick higher-
+  precision modes (e.g. 11 = 10-bit base + 9-bit delta) for tight
+  gradients and lower-precision modes (9 = 6.6.6.6 absolute) for
+  cross-subset spreads that exceed the delta range. Round 5 mode
+  10 (1-subset, 10.10 absolute) remains the SSE reference baseline.
+
 - **BC7 3-subset modes (round 5)** — the encoder now also tries modes
   0 (3-subset, 4-bit partition, 4-bit RGB + per-endpoint p-bits,
   3-bit indices) and 2 (3-subset, 6-bit partition, 5-bit RGB, no

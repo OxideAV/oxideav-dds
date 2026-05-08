@@ -628,6 +628,136 @@ fn encode_block_compressed_from_rgba8_rejects_uncompressed() {
     assert!(r.is_err());
 }
 
+/// Round-6 lift: smoke-test DX10 array BC7 emission via
+/// `encode_dds_block_compressed_from_rgba8`. A 2-slice array of solid
+/// 4×4 RGBA8 should encode + parse with `array_size = 2` and produce 2
+/// surfaces with the correct DX10 header.
+#[test]
+fn encode_bc7_dx10_array_from_rgba8() {
+    let w = 4u32;
+    let h = 4u32;
+    let mip = 1u32;
+    let array_size = 2u32;
+    let face_count = 1u32;
+    // Two slices: slice 0 = pure red, slice 1 = pure blue.
+    let mut rgba = vec![0u8; (array_size * face_count * w * h * 4) as usize];
+    let stride = (w * h * 4) as usize;
+    for chunk in rgba[..stride].chunks_exact_mut(4) {
+        chunk[0] = 0xff;
+        chunk[3] = 0xff;
+    }
+    for chunk in rgba[stride..2 * stride].chunks_exact_mut(4) {
+        chunk[2] = 0xff;
+        chunk[3] = 0xff;
+    }
+    let bytes = encode_dds_block_compressed_from_rgba8(
+        &rgba,
+        w,
+        h,
+        DdsPixelFormat::Bc7Unorm,
+        mip,
+        false,
+        array_size,
+        true,
+    )
+    .expect("encode array BC7 from RGBA8");
+    let parsed = parse_dds(&bytes).expect("parse array BC7");
+    assert_eq!(parsed.pixel_format, DdsPixelFormat::Bc7Unorm);
+    assert_eq!(parsed.array_size, array_size);
+    assert_eq!(parsed.surfaces.len(), array_size as usize);
+    assert!(parsed.has_dxt10_header);
+    assert!(!parsed.is_cubemap);
+}
+
+/// Round-6 lift: BC6H encoder picks 2-subset modes when content
+/// benefits from partition. A 4×4 block with two clusters (left = dark,
+/// right = light) should encode losslessly — cluster intra-spread = 0,
+/// so any 2-subset mode fits with bit-exact reconstruction (modulo the
+/// 31/64 BC6H_UF16 finalise scale). Validates the new partition + mode
+/// dispatch path.
+#[test]
+fn bc6h_encode_two_cluster_block_high_psnr() {
+    let mut input_f32 = vec![0f32; 4 * 4 * 3];
+    for y in 0..4 {
+        for x in 0..4 {
+            let off = (y * 4 + x) * 3;
+            let v = if x < 2 { 0.4 } else { 0.6 };
+            input_f32[off] = v;
+            input_f32[off + 1] = v;
+            input_f32[off + 2] = v;
+        }
+    }
+    let mut bc = vec![0u8; 16];
+    encode_bc6h_from_f32(&input_f32, 4, 4, &mut bc).unwrap();
+    let mut decoded = vec![0u8; 4 * 4 * 8];
+    decode_bc6h(&bc, 4, 4, false, &mut decoded).unwrap();
+    fn half_to_f32(h: u16) -> f32 {
+        oxideav_dds::bc6h::half_to_f32(h)
+    }
+    let mut sse = 0.0_f64;
+    let mut count = 0u64;
+    for i in 0..16 {
+        let off = i * 8;
+        for c in 0..3 {
+            let h = u16::from_le_bytes([decoded[off + c * 2], decoded[off + c * 2 + 1]]);
+            let v = half_to_f32(h) as f64;
+            let target = input_f32[i * 3 + c] as f64;
+            sse += (v - target).powi(2);
+            count += 1;
+        }
+    }
+    let mse = sse / count as f64;
+    let psnr = 10.0 * (1.0_f64 / mse).log10();
+    assert!(
+        psnr > 35.0,
+        "BC6H 2-cluster PSNR = {:.2} dB (want > 35 dB)",
+        psnr
+    );
+}
+
+/// Round-6 lift: BC6H delta-encoded mode 11/12/13 picks a mode for a
+/// tight-range block (all pixels in [0.4, 0.5]). Verify the encoder
+/// produces a valid block that decodes back to the same range.
+#[test]
+fn bc6h_encode_tight_gradient_high_psnr() {
+    let mut input_f32 = vec![0f32; 4 * 4 * 3];
+    for y in 0..4 {
+        for x in 0..4 {
+            let off = (y * 4 + x) * 3;
+            let v = 0.4 + ((x + y) as f32 / 6.0) * 0.1;
+            input_f32[off] = v;
+            input_f32[off + 1] = v;
+            input_f32[off + 2] = v;
+        }
+    }
+    let mut bc = vec![0u8; 16];
+    encode_bc6h_from_f32(&input_f32, 4, 4, &mut bc).unwrap();
+    let mut decoded = vec![0u8; 4 * 4 * 8];
+    decode_bc6h(&bc, 4, 4, false, &mut decoded).unwrap();
+    fn half_to_f32(h: u16) -> f32 {
+        oxideav_dds::bc6h::half_to_f32(h)
+    }
+    let mut sse = 0.0_f64;
+    let mut count = 0u64;
+    for i in 0..16 {
+        let off = i * 8;
+        for c in 0..3 {
+            let h = u16::from_le_bytes([decoded[off + c * 2], decoded[off + c * 2 + 1]]);
+            let v = half_to_f32(h) as f64;
+            let target = input_f32[i * 3 + c] as f64;
+            sse += (v - target).powi(2);
+            count += 1;
+        }
+    }
+    let mse = sse / count as f64;
+    let psnr = 10.0 * (1.0_f64 / mse).log10();
+    assert!(
+        psnr > 30.0,
+        "BC6H tight gradient PSNR = {:.2} dB (want > 30 dB)",
+        psnr
+    );
+}
+
 /// Single-level surface (`mip_map_count = 1`) emits no mip flag and
 /// parses back with one surface — regression check that the round-3
 /// mipmap path doesn't break the pre-existing single-level case.

@@ -38,11 +38,21 @@
 //!   [`encode_bc4_unorm`], [`encode_bc5_unorm`] — RGBA8 / R8 / RG8 in,
 //!   block bytes out, furthest-point endpoint heuristic, bit-exact
 //!   roundtrip on solid blocks.
-//! * **BC6H mode-11 encoder** via [`encode_bc6h`] (and the f32-input
-//!   convenience [`encode_bc6h_from_f32`]). Round-3 baseline encoder
-//!   ships only mode 11 (1-subset, 11.9 endpoint precision, 4-bit
-//!   indices) — the highest-precision 1-subset BC6H mode and the
-//!   round-trip target for HDR gradient content.
+//! * **BC6H multi-mode encoder** via [`encode_bc6h`] (and the f32-input
+//!   convenience [`encode_bc6h_from_f32`]). Round-3 shipped mode 10
+//!   (1-subset, 10.10 absolute endpoint precision, 4-bit indices). Round
+//!   6 closes the BC6H encoder gap with a partition + mode picker:
+//!   * **2-subset modes 0..9** — sweep the 32 BC6H 2-subset partition
+//!     table for each candidate mode, seed per-subset endpoints with
+//!     furthest-point + iterative LSQ refinement, pick the partition ×
+//!     mode tuple with lowest SSE. Modes 0/2/3/4 (10.5 / 11.4-family)
+//!     reject blocks where any cross-subset delta exceeds 5 bits;
+//!     modes 6/7/8 (8-bit base) accept wider spreads; mode 9 (6.6.6.6
+//!     absolute, no delta) is the universal fallback.
+//!   * **1-subset delta-encoded modes 11/12/13** — mode 11 (10-bit
+//!     base + 9-bit delta) gives one extra base bit over mode 10 when
+//!     both endpoints are within ±256 in 10-bit q-space; modes 12 / 13
+//!     trade base precision for ever-smaller delta range.
 //! * **BC7 multi-mode encoder** via [`encode_bc7`]. Round-3 shipped
 //!   mode 6 only (1-subset baseline); round 4 added the three 2-subset
 //!   modes (1 / 3 / 7) and round 5 adds the two 3-subset modes (0 / 2)
@@ -80,9 +90,6 @@
 //!
 //! Still deferred (followups):
 //!
-//! * BC6H 2-subset modes (0..9) and the delta-encoded 1-subset modes
-//!   (11/12/13). The round-3 encoder ships only mode 11 (1-subset 11.9
-//!   baseline); the round-4 BC6H expansion is on the round-5 backlog.
 //! * BC7 mode 4 / 5 channel-rotation encoders — decoded but not
 //!   encoded; the encode picker uses modes 0–3, 6, 7 only.
 //!

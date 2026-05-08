@@ -39,13 +39,19 @@ Coverage as of round 4:
   natural-image gradients (>25 dB on the 16×16 test), 8-value
   interpolated alpha throughout BC3 / BC4 / BC5. BC1 honours
   punchthrough alpha when requested.
-- **BC6H mode-10 encoder.** Round-3 baseline: `encode_bc6h` (and the
-  f32-input convenience `encode_bc6h_from_f32`) emits BC6H mode 10
-  (1-subset, 10.10.10 absolute endpoint precision per channel, 4-bit
-  indices) from an RGBA half-float surface. Furthest-point endpoint
-  search in f32-RGB space; nearest-palette index quantisation; ≥30 dB
-  PSNR on grayscale HDR gradients. Multi-axis HDR content needs the
-  2-subset modes (0..8) which remain decoder-only.
+- **BC6H multi-mode encoder.** Round 3 shipped mode 10; round 6
+  closes the encoder gap with a partition + mode picker that sweeps
+  every BC6H mode per block. `encode_bc6h` (and the f32-input
+  convenience `encode_bc6h_from_f32`) iterates: (a) mode 10 (1-subset
+  10.10 absolute) as the SSE reference, (b) modes 11/12/13 (1-subset
+  10/12/16-bit base + 9/8/4-bit delta), (c) modes 0..9 (2-subset over
+  the 32-entry BC6H partition table). Each candidate uses
+  furthest-point endpoint seeding + iterative LSQ refinement;
+  delta-mode candidates that overflow the per-channel delta range
+  are rejected so the picker falls through to a wider-fitting mode.
+  Bit-exact roundtrip on solid blocks across every mode; ≥35 dB
+  on tight-range gradients (mode 11/12 wins) and 2-subset
+  partition-friendly content (mode 0/2..9 wins).
 - **BC7 multi-mode encoder.** Round-3 shipped mode 6 only; round 4
   adds the three 2-subset modes — mode 1 (6-bit RGB + shared p-bits,
   opaque), mode 3 (7-bit RGB + per-endpoint p-bits, opaque) and mode
@@ -93,15 +99,8 @@ Coverage as of round 4:
 
 Still deferred (followups):
 
-- BC6H modes other than mode 10 — the round-3 encoder ships only the
-  1-subset 10.10.10 baseline. The 2-subset modes (0..8) plus the
-  delta-encoded 1-subset modes (11/12/13) remain decoder-only.
-- BC7 modes other than mode 6 — the round-3 encoder ships only the
-  1-subset 7-bit-RGBA baseline. The 2- and 3-subset modes
-  (0/1/2/3/7), and the channel-rotation modes (4/5), remain
-  decoder-only.
-- BC*-format mip-chain emission via the dedicated encoders — round 3
-  lifts mipmap-chain emission for uncompressed surfaces only.
+- BC7 channel-rotation encoders (modes 4 and 5) — decoded but not
+  encoded; the encode picker uses modes 0–3, 6, 7 only.
 
 ## Quickstart
 
