@@ -16,6 +16,14 @@
 //! Microsoft's mandate that each level halves dimensions (rounded down,
 //! floored to 1) and the chain ends at the 1×1 surface.
 //!
+//! Round-4 lift: BC*-format mip chains can now be emitted via
+//! [`encode_dds_block_compressed`]. The caller supplies a [`DdsImage`]
+//! with a block-compressed [`DdsPixelFormat`] and `image.surfaces`
+//! holding the per-mip pre-encoded block bytes (one entry per mip level
+//! in declaration order). The encoder writes a DX10-extension header
+//! (or a legacy FourCC header for BC1/2/3/4/5) and concatenates the
+//! per-mip block streams.
+//!
 //! Reference: Microsoft's public "DDS file layout for textures" page on
 //! learn.microsoft.com. No DirectXTex / D3DX / NVTT / squish source
 //! consulted or paraphrased.
@@ -366,6 +374,219 @@ pub fn encode_dds_uncompressed(image: &DdsImage) -> Result<Vec<u8>> {
                 prev_h = nh;
             }
         }
+    }
+
+    Ok(out)
+}
+
+/// Map a block-compressed [`DdsPixelFormat`] to its on-disk
+/// `DDS_PIXELFORMAT.four_cc`. Returns `None` for formats that have no
+/// FourCC equivalent (BC6H, BC7) — those must use the DX10 extension
+/// header. Per Microsoft's "DDS pixel format" page.
+fn block_compressed_fourcc(pix: DdsPixelFormat) -> Option<u32> {
+    match pix {
+        DdsPixelFormat::Bc1 => Some(FOURCC_DXT1),
+        DdsPixelFormat::Bc2 => Some(FOURCC_DXT3),
+        DdsPixelFormat::Bc3 => Some(FOURCC_DXT5),
+        DdsPixelFormat::Bc4Unorm => Some(FOURCC_BC4U),
+        DdsPixelFormat::Bc4Snorm => Some(FOURCC_BC4S),
+        DdsPixelFormat::Bc5Unorm => Some(FOURCC_BC5U),
+        DdsPixelFormat::Bc5Snorm => Some(FOURCC_BC5S),
+        // BC6H / BC7 require the DX10 extension header.
+        DdsPixelFormat::Bc6hUf16
+        | DdsPixelFormat::Bc6hSf16
+        | DdsPixelFormat::Bc7Unorm
+        | DdsPixelFormat::Bc7UnormSrgb => None,
+        _ => None,
+    }
+}
+
+/// Map a block-compressed [`DdsPixelFormat`] to its DX10 `DXGI_FORMAT`
+/// integer code (per Microsoft's `DXGI_FORMAT` reference). Used when
+/// emitting the DX10 extension header.
+fn block_compressed_dxgi_code(pix: DdsPixelFormat) -> u32 {
+    match pix {
+        DdsPixelFormat::Bc1 => 71,          // BC1_UNORM
+        DdsPixelFormat::Bc2 => 74,          // BC2_UNORM
+        DdsPixelFormat::Bc3 => 77,          // BC3_UNORM
+        DdsPixelFormat::Bc4Unorm => 80,     // BC4_UNORM
+        DdsPixelFormat::Bc4Snorm => 81,     // BC4_SNORM
+        DdsPixelFormat::Bc5Unorm => 83,     // BC5_UNORM
+        DdsPixelFormat::Bc5Snorm => 84,     // BC5_SNORM
+        DdsPixelFormat::Bc6hUf16 => 95,     // BC6H_UF16
+        DdsPixelFormat::Bc6hSf16 => 96,     // BC6H_SF16
+        DdsPixelFormat::Bc7Unorm => 98,     // BC7_UNORM
+        DdsPixelFormat::Bc7UnormSrgb => 99, // BC7_UNORM_SRGB
+        _ => 0,
+    }
+}
+
+/// Compute the byte size of one block-compressed mip-level surface for
+/// width × height.
+fn block_compressed_surface_bytes(pix: DdsPixelFormat, width: u32, height: u32) -> usize {
+    let bb = pix.block_bytes().expect("block-compressed format") as usize;
+    let bw = width.max(1).div_ceil(4) as usize;
+    let bh = height.max(1).div_ceil(4) as usize;
+    bw * bh * bb
+}
+
+/// Encode a block-compressed [`DdsImage`] (BC1..BC7) as a DDS file.
+///
+/// The caller supplies pre-encoded block bytes via `image.surfaces`
+/// (one entry per mip level in declaration order, mip 0 first). Each
+/// surface's `plane.data` must be exactly
+/// `ceil(width/4) × ceil(height/4) × block_bytes` long for that mip's
+/// dimensions.
+///
+/// The encoder writes a legacy FourCC header for BC1..BC5 (matching
+/// the on-disk layout `texconv` produces) and a DX10-extension header
+/// for BC6H + BC7 (which have no legacy FourCC). When
+/// `image.has_dxt10_header` is true the DX10 extension is forced for
+/// every BC* format — useful for round-tripping a DXGI-tagged source.
+///
+/// `image.is_cubemap` and `image.array_size > 1` are not yet supported;
+/// the encoder rejects those inputs.
+pub fn encode_dds_block_compressed(image: &DdsImage) -> Result<Vec<u8>> {
+    if !image.pixel_format.is_block_compressed() {
+        return Err(DdsError::unsupported(format!(
+            "encode_dds_block_compressed requires a block-compressed pixel_format (got {})",
+            image.pixel_format.name()
+        )));
+    }
+    if image.is_cubemap || image.array_size > 1 {
+        return Err(DdsError::unsupported(
+            "cubemap / DX10 texture-array block-compressed emission is not yet supported"
+                .to_string(),
+        ));
+    }
+    let width = image.width;
+    let height = image.height;
+    if width == 0 || height == 0 {
+        return Err(DdsError::invalid(format!(
+            "zero-sized surface: {width}x{height}"
+        )));
+    }
+    let mip = image.mip_map_count.max(1);
+    let with_mips = mip > 1;
+    if image.surfaces.len() < mip as usize {
+        return Err(DdsError::invalid(format!(
+            "block-compressed encode requires {} pre-supplied surface(s), got {}",
+            mip,
+            image.surfaces.len()
+        )));
+    }
+
+    // Validate per-mip dimensions match the canonical chain and size
+    // matches `ceil(w/4) × ceil(h/4) × block_bytes`.
+    let mip_dims = mip_dimensions(width, height, mip);
+    for (i, (w, h)) in mip_dims.iter().enumerate() {
+        let s = &image.surfaces[i];
+        if s.width != *w || s.height != *h {
+            return Err(DdsError::invalid(format!(
+                "surface[{i}] dimensions {}x{} != canonical mip {} ({}x{})",
+                s.width, s.height, i, *w, *h
+            )));
+        }
+        let want = block_compressed_surface_bytes(image.pixel_format, *w, *h);
+        if s.plane.data.len() < want {
+            return Err(DdsError::invalid(format!(
+                "surface[{i}] plane has {} bytes, expected ≥ {} ({}x{} {})",
+                s.plane.data.len(),
+                want,
+                *w,
+                *h,
+                image.pixel_format.name(),
+            )));
+        }
+    }
+
+    // Decide DX10 vs legacy header.
+    let four_cc = block_compressed_fourcc(image.pixel_format);
+    let use_dx10 = image.has_dxt10_header || four_cc.is_none();
+
+    let mip0_bytes = block_compressed_surface_bytes(image.pixel_format, width, height);
+    let flags = DDSD_REQUIRED | DDSD_LINEARSIZE | if with_mips { DDSD_MIPMAPCOUNT } else { 0 };
+    let caps = DDSCAPS_TEXTURE
+        | if with_mips {
+            DDSCAPS_COMPLEX | DDSCAPS_MIPMAP
+        } else {
+            0
+        };
+
+    // ---- Build pixel format block.
+    let pf = if use_dx10 {
+        DdsPixelFormatHeader {
+            size: DDS_PIXELFORMAT_SIZE as u32,
+            flags: DDPF_FOURCC,
+            four_cc: FOURCC_DX10,
+            rgb_bit_count: 0,
+            r_bit_mask: 0,
+            g_bit_mask: 0,
+            b_bit_mask: 0,
+            a_bit_mask: 0,
+        }
+    } else {
+        DdsPixelFormatHeader {
+            size: DDS_PIXELFORMAT_SIZE as u32,
+            flags: DDPF_FOURCC,
+            four_cc: four_cc.expect("legacy FourCC available"),
+            rgb_bit_count: 0,
+            r_bit_mask: 0,
+            g_bit_mask: 0,
+            b_bit_mask: 0,
+            a_bit_mask: 0,
+        }
+    };
+
+    // ---- Compose output.
+    let total_payload: usize = mip_dims
+        .iter()
+        .map(|(w, h)| block_compressed_surface_bytes(image.pixel_format, *w, *h))
+        .sum();
+    let header_bytes = 4 + DDS_HEADER_SIZE + if use_dx10 { DDS_HEADER_DXT10_SIZE } else { 0 };
+    let mut out = Vec::with_capacity(header_bytes + total_payload);
+
+    push_u32(&mut out, DDS_MAGIC);
+    push_u32(&mut out, DDS_HEADER_SIZE as u32);
+    push_u32(&mut out, flags);
+    push_u32(&mut out, height);
+    push_u32(&mut out, width);
+    push_u32(&mut out, mip0_bytes as u32); // pitch_or_linear_size = mip-0 byte count
+    push_u32(&mut out, 0); // depth
+    push_u32(&mut out, mip);
+    for _ in 0..11 {
+        push_u32(&mut out, 0); // reserved1
+    }
+    push_u32(&mut out, pf.size);
+    push_u32(&mut out, pf.flags);
+    push_u32(&mut out, pf.four_cc);
+    push_u32(&mut out, pf.rgb_bit_count);
+    push_u32(&mut out, pf.r_bit_mask);
+    push_u32(&mut out, pf.g_bit_mask);
+    push_u32(&mut out, pf.b_bit_mask);
+    push_u32(&mut out, pf.a_bit_mask);
+    push_u32(&mut out, caps);
+    push_u32(&mut out, 0); // caps2
+    push_u32(&mut out, 0); // caps3
+    push_u32(&mut out, 0); // caps4
+    push_u32(&mut out, 0); // reserved2
+
+    if use_dx10 {
+        let dxgi = image
+            .dxgi_format
+            .map(|f| f.to_u32())
+            .unwrap_or_else(|| block_compressed_dxgi_code(image.pixel_format));
+        push_u32(&mut out, dxgi);
+        push_u32(&mut out, DDS_DIMENSION_TEXTURE2D);
+        push_u32(&mut out, 0); // misc_flag
+        push_u32(&mut out, image.array_size.max(1));
+        push_u32(&mut out, 0); // misc_flags2
+    }
+
+    // ---- Emit per-mip block bytes.
+    for (i, (w, h)) in mip_dims.iter().enumerate() {
+        let want = block_compressed_surface_bytes(image.pixel_format, *w, *h);
+        out.extend_from_slice(&image.surfaces[i].plane.data[..want]);
     }
 
     Ok(out)

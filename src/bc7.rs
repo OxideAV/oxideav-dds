@@ -52,7 +52,7 @@ use crate::error::{DdsError, Result};
 /// (0 or 1) for pixel `i` (row-major, x-major within the row) in the
 /// 4×4 block when partition selector is `p`.
 #[rustfmt::skip]
-const PART_2: [[u8; 16]; 64] = [
+pub(crate) const PART_2: [[u8; 16]; 64] = [
     // Partitions 0..63 of the 2-subset table.
     [0,0,1,1, 0,0,1,1, 0,0,1,1, 0,0,1,1],
     [0,0,0,1, 0,0,0,1, 0,0,0,1, 0,0,0,1],
@@ -195,7 +195,7 @@ const PART_3: [[u8; 16]; 64] = [
 /// partition (the index that's stored short-by-one bit because its
 /// MSB is implicitly zero).
 #[rustfmt::skip]
-const ANCHOR_2_SUBSET_2: [u8; 64] = [
+pub(crate) const ANCHOR_2_SUBSET_2: [u8; 64] = [
     15,15,15,15, 15,15,15,15, 15,15,15,15, 15,15,15,15,
     15, 2, 8, 2,  2, 8, 8,15,  2, 8, 2, 2,  8, 8, 2, 2,
     15,15, 6, 8,  2, 8,15,15,  2, 8, 2, 2,  2,15,15, 6,

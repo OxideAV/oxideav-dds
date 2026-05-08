@@ -46,19 +46,24 @@ Coverage as of round 4:
   search in f32-RGB space; nearest-palette index quantisation; ≥30 dB
   PSNR on grayscale HDR gradients. Multi-axis HDR content needs the
   2-subset modes (0..8) which remain decoder-only.
-- **BC7 mode-6 encoder.** Round-3 baseline: `encode_bc7` emits BC7
-  mode 6 (1-subset, 7-bit RGB + 7-bit alpha + 2 per-endpoint p-bits +
-  4-bit indices) from an RGBA8 surface. Same furthest-point endpoint
-  search; ≥30 dB PSNR on grayscale gradients; ~22 dB on multi-axis
-  natural-image content. The 2-subset modes (1, 3, 7) which are the
-  natural-image quality target stay decoder-only.
-- **Mipmap chain emission.** `encode_dds_uncompressed` now emits a
-  full mipmap chain when `image.mip_map_count > 1`. If
-  `image.surfaces` already carries the required levels (in mip order)
-  they're written verbatim; otherwise the encoder fabricates each
-  level beyond mip 0 by 2×2 box-filter downsampling — each level
-  halves dimensions floored to 1 down to the 1×1 surface, per
-  Microsoft's rule.
+- **BC7 multi-mode encoder.** Round-3 shipped mode 6 only; round 4
+  adds the three 2-subset modes — mode 1 (6-bit RGB + shared p-bits,
+  opaque), mode 3 (7-bit RGB + per-endpoint p-bits, opaque) and mode
+  7 (5-bit RGBA + per-endpoint p-bits, translucent) — with a full
+  64-entry partition-table sweep and least-squares endpoint
+  refinement. The block-level encoder picks the candidate with the
+  lowest SSE. Lifts multi-axis natural-image PSNR from the ~22 dB
+  mode-6 ceiling to ~28 dB on 3-axis content and ≥30 dB on rank-2
+  (two-region) content. The 3-subset modes 0 and 2 (genuine 3-axis
+  content) remain a future-round optimisation.
+- **Mipmap chain emission** for both uncompressed and BC* surfaces.
+  `encode_dds_uncompressed` emits a full mipmap chain when
+  `image.mip_map_count > 1` (caller-supplied surfaces written
+  verbatim, otherwise fabricated by 2×2 box-filter downsampling).
+  Round-4 `encode_dds_block_compressed` accepts pre-encoded per-mip
+  block bytes via `image.surfaces` and writes them with a legacy
+  FourCC header (BC1..BC5) or DX10 extension header (BC6H + BC7 or
+  any format with `has_dxt10_header == true`).
 - **`.dds` container demuxer + muxer.** Round-3 lift over the
   round-2 extension-only entry: the framework-side `ContainerRegistry`
   now installs probe + demuxer + muxer + extension table entries via

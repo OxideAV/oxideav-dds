@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **BC7 2-subset modes (round 4)** — the encoder now also tries modes
+  1 (6-bit RGB + shared p-bits, opaque), 3 (7-bit RGB + per-endpoint
+  p-bits, opaque) and 7 (5-bit RGBA + per-endpoint p-bits, translucent)
+  per block, sweeping the full 64-entry Microsoft / Khronos partition
+  table with two iterations of least-squares endpoint refinement per
+  candidate. The block-level encoder picks the candidate with lowest
+  SSE. Lifts multi-axis natural-image PSNR-RGB from the ~22 dB
+  single-subset mode-6 ceiling to ~28 dB on 3-axis content and ≥30 dB
+  on rank-2 (two-region) content. Mode 6 remains the always-tried
+  baseline.
+- **BC* mip chain emission** via new public entry point
+  `encode_dds_block_compressed`. The caller supplies a `DdsImage` with
+  a block-compressed `pixel_format` and `surfaces` holding pre-encoded
+  per-mip block bytes (one entry per mip level in declaration order).
+  The encoder writes a legacy FourCC header for BC1..BC5 and a DX10
+  extension header for BC6H + BC7 (or for any format when
+  `image.has_dxt10_header == true`), then concatenates the per-mip
+  block streams. Cubemap / DX10-array variants remain rejected for
+  this round.
 - **BC6H mode-10 encoder** via new public entry points `encode_bc6h`
   and `encode_bc6h_from_f32`. Compresses an RGBA half-float (or f32-
   RGB) surface to BC6H mode 10 (1-subset, 10.10.10 absolute endpoint

@@ -43,15 +43,22 @@
 //!   ships only mode 11 (1-subset, 11.9 endpoint precision, 4-bit
 //!   indices) — the highest-precision 1-subset BC6H mode and the
 //!   round-trip target for HDR gradient content.
-//! * **BC7 mode-6 encoder** via [`encode_bc7`]. Round-3 baseline
-//!   encoder ships only mode 6 (1-subset, 7-bit RGB + 7-bit alpha + 2
-//!   per-endpoint p-bits + 4-bit indices) — the canonical opaque-and-
-//!   translucent BC7 layout used by virtually every modern texture-
-//!   compression pipeline for general RGBA content.
-//! * **Mipmap chain emission** from [`encode_dds_uncompressed`].
-//!   When `image.mip_map_count > 1` the encoder either copies a pre-
-//!   computed chain from `image.surfaces` verbatim or fabricates the
-//!   levels by box-filter downsampling mip 0.
+//! * **BC7 multi-mode encoder** via [`encode_bc7`]. Round-3 shipped
+//!   mode 6 only (1-subset baseline); round 4 adds the three 2-subset
+//!   modes — mode 1 (6-bit RGB + shared p-bits, opaque), mode 3
+//!   (7-bit RGB + per-endpoint p-bits, opaque) and mode 7 (5-bit RGBA +
+//!   per-endpoint p-bits, translucent) — with a full 64-partition
+//!   table search and least-squares endpoint refinement. Lifts
+//!   multi-axis natural-image PSNR from the ~22 dB mode-6 ceiling to
+//!   ~28 dB on 3-axis content and ≥ 30 dB on rank-2 content.
+//! * **Mipmap chain emission** for both uncompressed
+//!   ([`encode_dds_uncompressed`]) and block-compressed
+//!   ([`encode_dds_block_compressed`]) surfaces. The uncompressed path
+//!   either copies a pre-computed chain from `image.surfaces` or
+//!   fabricates levels by box-filter downsampling mip 0; the BC* path
+//!   takes pre-encoded per-mip block bytes from `image.surfaces` and
+//!   concatenates them with a legacy FourCC header (BC1..BC5) or DX10
+//!   extension header (BC6H, BC7).
 //! * **Mipmap chain + cubemap faces + DX10 texture arrays** — every
 //!   on-disk surface is parsed into [`DdsImage::surfaces`] in
 //!   Microsoft's mandated order (array slice → face → mip).
@@ -67,16 +74,20 @@
 //!
 //! Still deferred (followups):
 //!
-//! * BC6H modes other than mode 11 — the round-3 encoder ships only
-//!   the 1-subset 11.9 baseline. Modes 0..10 + 12..13 (2-subset
-//!   partitions, asymmetric-precision modes, 16.4 ONE-subset) are
-//!   decoded but not encoded.
-//! * BC7 modes other than mode 6 — the round-3 encoder ships only
-//!   the 1-subset 7777-mode baseline. Modes 0/1/2/3 (2- and 3-subset
-//!   partitions for natural-image quality), 4/5 (channel rotation),
-//!   and 7 (2-subset opaque-alpha) are decoded but not encoded.
-//! * BC*-format mip-chain emission via the dedicated encoders — round
-//!   3 lifts mipmap-chain emission for uncompressed surfaces only.
+//! * BC6H 2-subset modes (0..9) and the delta-encoded 1-subset modes
+//!   (11/12/13). The round-3 encoder ships only mode 11 (1-subset 11.9
+//!   baseline); the round-4 BC6H expansion is on the round-5 backlog.
+//! * BC7 3-subset modes (0 and 2) — round-4 adds the 2-subset modes
+//!   (1/3/7) but the 3-subset modes for genuinely 3-axis content are
+//!   decoded but not yet encoded; rank-3 natural-image content
+//!   currently caps at ~28 dB. Mode 4/5 channel-rotation encoders
+//!   remain a separate followup.
+//! * BC* mip-chain emission with on-the-fly downsampling — the
+//!   round-4 [`encode_dds_block_compressed`] path requires the caller
+//!   to pre-encode each mip level. Box-downsample-then-BC*-encode
+//!   inside the writer is a future-round optimisation.
+//! * Cubemap / DX10-array block-compressed emission — the BC* writer
+//!   currently rejects multi-face / multi-slice inputs.
 //!
 //! ## Standalone vs registry-integrated
 //!
@@ -130,7 +141,7 @@ pub use bcn::{
 };
 pub use bcn_enc::{encode_bc1, encode_bc2, encode_bc3, encode_bc4_unorm, encode_bc5_unorm};
 pub use decoder::parse_dds;
-pub use encoder::encode_dds_uncompressed;
+pub use encoder::{encode_dds_block_compressed, encode_dds_uncompressed};
 pub use error::{DdsError, Result};
 pub use image::{CubemapFace, DdsImage, DdsPixelFormat, DdsPlane, DdsSurface};
 pub use types::{
