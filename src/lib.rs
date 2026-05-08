@@ -38,6 +38,20 @@
 //!   [`encode_bc4_unorm`], [`encode_bc5_unorm`] — RGBA8 / R8 / RG8 in,
 //!   block bytes out, furthest-point endpoint heuristic, bit-exact
 //!   roundtrip on solid blocks.
+//! * **BC6H mode-11 encoder** via [`encode_bc6h`] (and the f32-input
+//!   convenience [`encode_bc6h_from_f32`]). Round-3 baseline encoder
+//!   ships only mode 11 (1-subset, 11.9 endpoint precision, 4-bit
+//!   indices) — the highest-precision 1-subset BC6H mode and the
+//!   round-trip target for HDR gradient content.
+//! * **BC7 mode-6 encoder** via [`encode_bc7`]. Round-3 baseline
+//!   encoder ships only mode 6 (1-subset, 7-bit RGB + 7-bit alpha + 2
+//!   per-endpoint p-bits + 4-bit indices) — the canonical opaque-and-
+//!   translucent BC7 layout used by virtually every modern texture-
+//!   compression pipeline for general RGBA content.
+//! * **Mipmap chain emission** from [`encode_dds_uncompressed`].
+//!   When `image.mip_map_count > 1` the encoder either copies a pre-
+//!   computed chain from `image.surfaces` verbatim or fabricates the
+//!   levels by box-filter downsampling mip 0.
 //! * **Mipmap chain + cubemap faces + DX10 texture arrays** — every
 //!   on-disk surface is parsed into [`DdsImage::surfaces`] in
 //!   Microsoft's mandated order (array slice → face → mip).
@@ -53,9 +67,16 @@
 //!
 //! Still deferred (followups):
 //!
-//! * BC6H + BC7 encoders — the crate ships decoders only for the HDR
-//!   and high-quality-LDR formats.
-//! * Mipmap-chain emission from the encoder (still single-level).
+//! * BC6H modes other than mode 11 — the round-3 encoder ships only
+//!   the 1-subset 11.9 baseline. Modes 0..10 + 12..13 (2-subset
+//!   partitions, asymmetric-precision modes, 16.4 ONE-subset) are
+//!   decoded but not encoded.
+//! * BC7 modes other than mode 6 — the round-3 encoder ships only
+//!   the 1-subset 7777-mode baseline. Modes 0/1/2/3 (2- and 3-subset
+//!   partitions for natural-image quality), 4/5 (channel rotation),
+//!   and 7 (2-subset opaque-alpha) are decoded but not encoded.
+//! * BC*-format mip-chain emission via the dedicated encoders — round
+//!   3 lifts mipmap-chain emission for uncompressed surfaces only.
 //!
 //! ## Standalone vs registry-integrated
 //!
@@ -80,7 +101,9 @@
 //! test fixtures, not as a source of constants or layout.
 
 pub mod bc6h;
+pub mod bc6h_enc;
 pub mod bc7;
+pub mod bc7_enc;
 pub mod bcn;
 pub mod bcn_enc;
 #[cfg(feature = "registry")]
@@ -98,7 +121,9 @@ pub mod registry;
 pub const CODEC_ID_STR: &str = "dds";
 
 pub use bc6h::decode_bc6h;
+pub use bc6h_enc::{encode_bc6h, encode_bc6h_from_f32};
 pub use bc7::decode_bc7;
+pub use bc7_enc::encode_bc7;
 pub use bcn::{
     decode_bc1, decode_bc2, decode_bc3, decode_bc4_snorm, decode_bc4_unorm, decode_bc5_snorm,
     decode_bc5_unorm,

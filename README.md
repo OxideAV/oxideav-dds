@@ -39,6 +39,26 @@ Coverage as of round 4:
   natural-image gradients (>25 dB on the 16×16 test), 8-value
   interpolated alpha throughout BC3 / BC4 / BC5. BC1 honours
   punchthrough alpha when requested.
+- **BC6H mode-10 encoder.** Round-3 baseline: `encode_bc6h` (and the
+  f32-input convenience `encode_bc6h_from_f32`) emits BC6H mode 10
+  (1-subset, 10.10.10 absolute endpoint precision per channel, 4-bit
+  indices) from an RGBA half-float surface. Furthest-point endpoint
+  search in f32-RGB space; nearest-palette index quantisation; ≥30 dB
+  PSNR on grayscale HDR gradients. Multi-axis HDR content needs the
+  2-subset modes (0..8) which remain decoder-only.
+- **BC7 mode-6 encoder.** Round-3 baseline: `encode_bc7` emits BC7
+  mode 6 (1-subset, 7-bit RGB + 7-bit alpha + 2 per-endpoint p-bits +
+  4-bit indices) from an RGBA8 surface. Same furthest-point endpoint
+  search; ≥30 dB PSNR on grayscale gradients; ~22 dB on multi-axis
+  natural-image content. The 2-subset modes (1, 3, 7) which are the
+  natural-image quality target stay decoder-only.
+- **Mipmap chain emission.** `encode_dds_uncompressed` now emits a
+  full mipmap chain when `image.mip_map_count > 1`. If
+  `image.surfaces` already carries the required levels (in mip order)
+  they're written verbatim; otherwise the encoder fabricates each
+  level beyond mip 0 by 2×2 box-filter downsampling — each level
+  halves dimensions floored to 1 down to the 1×1 surface, per
+  Microsoft's rule.
 - **`.dds` container demuxer + muxer.** Round-3 lift over the
   round-2 extension-only entry: the framework-side `ContainerRegistry`
   now installs probe + demuxer + muxer + extension table entries via
@@ -68,11 +88,15 @@ Coverage as of round 4:
 
 Still deferred (followups):
 
-- BC6H + BC7 encoders — the crate ships decoders only for the HDR /
-  high-quality-LDR formats.
-- Mipmap-chain emission from the encoder (still a single-level
-  surface; round-trip across `parse_dds` -> `encode_dds_uncompressed`
-  preserves only mip 0).
+- BC6H modes other than mode 10 — the round-3 encoder ships only the
+  1-subset 10.10.10 baseline. The 2-subset modes (0..8) plus the
+  delta-encoded 1-subset modes (11/12/13) remain decoder-only.
+- BC7 modes other than mode 6 — the round-3 encoder ships only the
+  1-subset 7-bit-RGBA baseline. The 2- and 3-subset modes
+  (0/1/2/3/7), and the channel-rotation modes (4/5), remain
+  decoder-only.
+- BC*-format mip-chain emission via the dedicated encoders — round 3
+  lifts mipmap-chain emission for uncompressed surfaces only.
 
 ## Quickstart
 

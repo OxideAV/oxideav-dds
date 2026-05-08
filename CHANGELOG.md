@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **BC6H mode-10 encoder** via new public entry points `encode_bc6h`
+  and `encode_bc6h_from_f32`. Compresses an RGBA half-float (or f32-
+  RGB) surface to BC6H mode 10 (1-subset, 10.10.10 absolute endpoint
+  precision per channel, 4-bit indices) — the simplest 1-subset BC6H
+  layout, no delta-encoding overflow risk. Furthest-point endpoint
+  search in f32-RGB space; nearest-palette index quantisation;
+  Microsoft's `(31/64)` finalise step matches the decoder pipeline so
+  the round-trip is bit-accurate against the decoder. Solid blocks
+  round-trip; grayscale HDR gradients ≥30 dB PSNR (peak 1.0).
+- **BC7 mode-6 encoder** via new public entry point `encode_bc7`.
+  Compresses an RGBA8 surface to BC7 mode 6 (1-subset, 7-bit RGB +
+  7-bit alpha + 2 per-endpoint p-bits + 4-bit indices) — the
+  canonical opaque-and-translucent BC7 layout used by virtually
+  every modern texture-compression pipeline for general RGBA
+  content. Furthest-point endpoint search; per-endpoint p-bit
+  selection by majority-LSB vote; nearest-palette index
+  quantisation; anchor swap to keep pixel 0's index in the low half.
+  Solid blocks round-trip with up to 1-bit LSB error per channel
+  (intrinsic to mode 6's shared-per-endpoint p-bit); grayscale
+  gradients ≥30 dB PSNR-RGB.
+- **Mipmap-chain emission** in `encode_dds_uncompressed`. When
+  `DdsImage::mip_map_count > 1` the encoder now emits a full mipmap
+  chain. Pre-supplied surfaces (`image.surfaces` carrying the right
+  count of levels in mip order) are written verbatim; otherwise the
+  encoder fabricates each level beyond mip 0 with a 2×2 box-filter
+  downsample. Each level halves dimensions floored to 1 per
+  Microsoft's mip-dimension rule.
+
 - **BC6H decompression — all 14 modes**. Every BC6H mode (0..13) now
   decodes to RGBA half-float via `decode_bc6h`. Round-1 had only
   modes 1 and 11 (the 10-bit anchors); round-2 transcribes the

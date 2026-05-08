@@ -7,6 +7,15 @@
 //! contract; the round-1 encoder explicitly rejects block-compressed
 //! [`DdsPixelFormat`] inputs to keep the contract symmetric.
 //!
+//! Round-3 / round-5 lift: when `image.mip_map_count > 1`, the encoder
+//! emits a full mipmap chain. If `image.surfaces` already contains the
+//! required (mip_count) entries the encoder writes them verbatim — the
+//! caller pre-computed the chain. Otherwise the encoder fabricates
+//! every level after mip 0 with a 2×2 box filter (with right-/bottom-
+//! edge replication for odd-sized intermediate levels), respecting
+//! Microsoft's mandate that each level halves dimensions (rounded down,
+//! floored to 1) and the chain ends at the 1×1 surface.
+//!
 //! Reference: Microsoft's public "DDS file layout for textures" page on
 //! learn.microsoft.com. No DirectXTex / D3DX / NVTT / squish source
 //! consulted or paraphrased.
@@ -139,6 +148,56 @@ fn legacy_pixel_format_fields(pix: DdsPixelFormat) -> Result<DdsPixelFormatHeade
     })
 }
 
+/// Box-downsample a single uncompressed mip-level surface to the next
+/// (half-size) level. `bytes_per_pixel` is the uncompressed sample
+/// stride; channel arithmetic is unsigned 8-bit (the round-3 mip
+/// downsampler is byte-domain — it works for all the round-1
+/// uncompressed formats because their channels live in independent
+/// bytes; for packed-bit formats like R5G6B5 the result is a noisy
+/// approximation but still well-formed).
+fn box_downsample(src: &[u8], src_w: u32, src_h: u32, bytes_per_pixel: u32) -> (Vec<u8>, u32, u32) {
+    let dst_w = (src_w / 2).max(1);
+    let dst_h = (src_h / 2).max(1);
+    let bpp = bytes_per_pixel as usize;
+    let src_stride = src_w as usize * bpp;
+    let dst_stride = dst_w as usize * bpp;
+    let mut dst = vec![0u8; dst_stride * dst_h as usize];
+    for dy in 0..dst_h as usize {
+        for dx in 0..dst_w as usize {
+            // For odd dimensions, replicate the last in-bounds source
+            // pixel rather than going out of bounds.
+            let sx0 = (dx * 2).min(src_w as usize - 1);
+            let sx1 = (dx * 2 + 1).min(src_w as usize - 1);
+            let sy0 = (dy * 2).min(src_h as usize - 1);
+            let sy1 = (dy * 2 + 1).min(src_h as usize - 1);
+            for c in 0..bpp {
+                let p00 = src[sy0 * src_stride + sx0 * bpp + c] as u32;
+                let p01 = src[sy0 * src_stride + sx1 * bpp + c] as u32;
+                let p10 = src[sy1 * src_stride + sx0 * bpp + c] as u32;
+                let p11 = src[sy1 * src_stride + sx1 * bpp + c] as u32;
+                dst[dy * dst_stride + dx * bpp + c] = ((p00 + p01 + p10 + p11 + 2) / 4) as u8;
+            }
+        }
+    }
+    (dst, dst_w, dst_h)
+}
+
+/// Compute the canonical mip-level dimensions list for `(width, height,
+/// mip_count)` per Microsoft's rule: each level halves both dimensions
+/// (floored to 1), and the chain has exactly `mip_count` entries
+/// starting from level 0.
+fn mip_dimensions(width: u32, height: u32, mip_count: u32) -> Vec<(u32, u32)> {
+    let mut out = Vec::with_capacity(mip_count as usize);
+    let mut w = width;
+    let mut h = height;
+    for _ in 0..mip_count {
+        out.push((w, h));
+        w = (w / 2).max(1);
+        h = (h / 2).max(1);
+    }
+    out
+}
+
 /// Encode a [`DdsImage`] as an uncompressed DDS file.
 ///
 /// `image.pixel_format` must be one of the round-1 uncompressed
@@ -152,9 +211,11 @@ fn legacy_pixel_format_fields(pix: DdsPixelFormat) -> Result<DdsPixelFormatHeade
 /// verbatim into the file. No channel swapping or alpha-fill happens.
 ///
 /// The emitted file always uses the legacy `DDS_HEADER` layout (no
-/// DX10 extension). Mipmap count is set to `image.mip_map_count.max(1)`,
-/// but the encoder does not fabricate additional mip levels — round 2
-/// will add proper mipmap-chain handling.
+/// DX10 extension). When `image.mip_map_count > 1` the encoder emits
+/// the full mipmap chain: if `image.surfaces` carries the required
+/// number of mip levels (in declaration order, mip 0 first) those are
+/// copied verbatim; otherwise the encoder fabricates every level
+/// beyond mip 0 by a box-filter downsample of the previous level.
 pub fn encode_dds_uncompressed(image: &DdsImage) -> Result<Vec<u8>> {
     if image.pixel_format.is_block_compressed() {
         return Err(DdsError::unsupported(format!(
@@ -211,7 +272,49 @@ pub fn encode_dds_uncompressed(image: &DdsImage) -> Result<Vec<u8>> {
             0
         };
 
-    let mut out = Vec::with_capacity(4 + DDS_HEADER_SIZE + need as usize);
+    // ---- Compose mip-chain payload --------------------------------
+    //
+    // If image.surfaces already holds `mip` entries (in mip order, no
+    // cubemap / array indices), use them verbatim — caller pre-computed.
+    // Otherwise box-filter mip 0 to fabricate levels 1..mip-1.
+    let mip_dims = mip_dimensions(width, height, mip);
+    let pre_supplied_chain: Option<Vec<&[u8]>> =
+        if !with_mips || image.surfaces.len() < mip as usize {
+            None
+        } else if image.is_cubemap || image.array_size > 1 {
+            // Multi-face / multi-slice: fall through; the round-3 mip-
+            // chain emitter doesn't handle non-trivial array shapes.
+            None
+        } else {
+            // Verify dimensions match the canonical chain.
+            let mut ok = true;
+            let mut chain: Vec<&[u8]> = Vec::with_capacity(mip as usize);
+            for (i, (w, h)) in mip_dims.iter().enumerate() {
+                let s = &image.surfaces[i];
+                if s.width != *w || s.height != *h {
+                    ok = false;
+                    break;
+                }
+                let want = (*w as usize) * (*h as usize) * bpp as usize;
+                if s.plane.data.len() < want {
+                    ok = false;
+                    break;
+                }
+                chain.push(&s.plane.data[..want]);
+            }
+            if ok {
+                Some(chain)
+            } else {
+                None
+            }
+        };
+
+    let total_payload: usize = mip_dims
+        .iter()
+        .map(|(w, h)| (*w as usize) * (*h as usize) * bpp as usize)
+        .sum();
+
+    let mut out = Vec::with_capacity(4 + DDS_HEADER_SIZE + total_payload);
 
     push_u32(&mut out, DDS_MAGIC);
     push_u32(&mut out, DDS_HEADER_SIZE as u32);
@@ -240,7 +343,30 @@ pub fn encode_dds_uncompressed(image: &DdsImage) -> Result<Vec<u8>> {
     push_u32(&mut out, 0); // caps4
     push_u32(&mut out, 0); // reserved2
 
-    out.extend_from_slice(&plane.data[..need as usize]);
+    // ---- Emit mip 0.
+    let mip0_bytes = need as usize;
+    out.extend_from_slice(&plane.data[..mip0_bytes]);
+
+    // ---- Emit mip 1..n (either pre-supplied or fabricated).
+    if with_mips {
+        if let Some(chain) = pre_supplied_chain {
+            for level_data in chain.iter().skip(1) {
+                out.extend_from_slice(level_data);
+            }
+        } else {
+            // Fabricate by box-downsample.
+            let mut prev: Vec<u8> = plane.data[..mip0_bytes].to_vec();
+            let mut prev_w = width;
+            let mut prev_h = height;
+            for _ in 1..mip {
+                let (next, nw, nh) = box_downsample(&prev, prev_w, prev_h, bpp);
+                out.extend_from_slice(&next);
+                prev = next;
+                prev_w = nw;
+                prev_h = nh;
+            }
+        }
+    }
 
     Ok(out)
 }
