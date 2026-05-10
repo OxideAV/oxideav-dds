@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.3](https://github.com/OxideAV/oxideav-dds/compare/v0.0.2...v0.0.3) - 2026-05-08
+
+### Other
+
+- add mode 4/5 channel-rotation encoders + BC6H_SF16 (round 7)
+- add 2-subset modes 0..9 + delta-encoded 1-subset modes 11/12/13 (round 6)
+- add 3-subset modes (0/2) + BC*-from-RGBA8 mip emitter (round 5)
+- add 2-subset modes (1/3/7) + BC* mip chain emission (round 4)
+- add baseline encoders + mipmap-chain emission (round 3)
+- implement all 14 modes (round 2)
+- drop stale REGISTRARS / with_all_features intra-doc links
+- drop dead `linkme` dep
+- re-export __oxideav_entry from registry sub-module
+- round 4: BC6H decompression (modes 1+11) + BC2/3/4/5 encoders
+- deduplicate rgb565_to_rgb888 + drop hot-path heap allocations
+- round 3: BC7 decompression + BC1 encoder + .dds container demuxer/muxer
+- round 2: BC1-5 decompression + mipmaps + cubemap faces + texture arrays + full DXGI table
+- auto-register via oxideav_core::register! macro (linkme distributed slice)
+- unify entry point on register(&mut RuntimeContext) ([#502](https://github.com/OxideAV/oxideav-dds/pull/502))
+- add register_containers for .dds extension lookup
+
 ### Added
 
 - **BC7 mode 4/5 channel-rotation encoders (round 7)** — the encoder
