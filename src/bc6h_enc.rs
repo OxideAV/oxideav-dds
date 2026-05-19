@@ -1317,13 +1317,506 @@ fn encode_mode10_signed(pixels: &[[u16; 3]; 16]) -> ([u8; 16], f64) {
     (block, sse)
 }
 
-/// Block-level BC6H_SF16 picker. Currently dispatches mode 10 (1-subset
-/// 10/10 absolute) only — mode 11 (delta-encoded) and 2-subset modes
-/// require parallel signed-quantizer + signed-delta logic which are
-/// follow-on work.
+// ---- SF16 1-subset delta modes 11/12/13 -------------------------------
+//
+// Same bitstream layout as the UF16 counterparts (mode 11 prefix 0b00111,
+// mode 12 prefix 0b01011, mode 13 prefix 0b01111). The only difference is
+// interpretation: q0 (base) is a *signed* prec-bit two's-complement
+// integer; q1 is encoded as a *signed* delta-bit two's-complement integer
+// relative to q0. The decoder sign-extends both, sums them, masks to
+// prec bits, then sign-extends to recover q1.
+//
+// For the encoder, this means:
+//   1. Quantise each pixel pair to signed q0, q1 via `quantize_half_sf16`.
+//   2. The signed delta `(q1 - q0)` must fit in `[-2^(delta_bits-1),
+//      2^(delta_bits-1) - 1]`; bail if not.
+//   3. Store base = q0 truncated to prec bits (two's-complement bit
+//      pattern), delta = (q1 - q0) truncated to delta_bits.
+
+/// SF16 furthest-point endpoint search inside a single subset. Mirrors
+/// `furthest_pair_subset` but uses the signed-half error metric.
+fn furthest_pair_subset_signed(
+    pixels: &[[u16; 3]; 16],
+    subsets: &[u8; 16],
+    s: u8,
+) -> ([u16; 3], [u16; 3]) {
+    let mut idxs: [usize; 16] = [0; 16];
+    let mut n = 0usize;
+    for (i, &t) in subsets.iter().enumerate() {
+        if t == s {
+            idxs[n] = i;
+            n += 1;
+        }
+    }
+    if n == 0 {
+        return ([0; 3], [0; 3]);
+    }
+    if n == 1 {
+        return (pixels[idxs[0]], pixels[idxs[0]]);
+    }
+    let mut best_d = -1.0_f64;
+    let mut bi = idxs[0];
+    let mut bj = idxs[1];
+    for ai in 0..n {
+        for aj in (ai + 1)..n {
+            let i = idxs[ai];
+            let j = idxs[aj];
+            let d = sq_err_rgb_signed_half(pixels[i], pixels[j]);
+            if d > best_d {
+                best_d = d;
+                bi = i;
+                bj = j;
+            }
+        }
+    }
+    (pixels[bi], pixels[bj])
+}
+
+/// Convert an f32 endpoint estimate back to a signed quantised value at
+/// `prec` bits. Used by the signed LSQ refinement.
+fn f32_to_signed_q(value: f32, prec: u32) -> i32 {
+    let half = f32_to_half_signed(value);
+    let sm = half_sf16_to_signed_magnitude(half);
+    quantize_half_sf16(sm, prec)
+}
+
+/// LSQ refinement of two endpoints `q0, q1` (per channel) against fixed
+/// `indices` for the signed pipeline. Mirrors `refine_endpoints_1subset`
+/// but writes f32 → sign-magnitude half → signed quantise on output.
+fn refine_endpoints_1subset_signed(
+    pixels: &[[u16; 3]; 16],
+    indices: &[u32; 16],
+    idx_bits: u32,
+    prec: u32,
+) -> ([i32; 3], [i32; 3]) {
+    let weights = match idx_bits {
+        3 => &WEIGHT_3[..],
+        4 => &WEIGHT_4[..],
+        _ => unreachable!(),
+    };
+    let mut q0 = [0i32; 3];
+    let mut q1 = [0i32; 3];
+    for c in 0..3 {
+        let mut aa = 0.0f64;
+        let mut bb = 0.0f64;
+        let mut ab = 0.0f64;
+        let mut ap = 0.0f64;
+        let mut bp = 0.0f64;
+        for i in 0..16 {
+            let w = weights[indices[i] as usize] as f64 / 64.0;
+            let a = 1.0 - w;
+            let b = w;
+            let p = half_to_f32(pixels[i][c]) as f64;
+            // half_to_f32 already preserves sign-magnitude semantics for
+            // negative halves (the high bit of `pixels[i][c]` is the
+            // sign bit; `half_to_f32` reinterprets the half correctly).
+            aa += a * a;
+            bb += b * b;
+            ab += a * b;
+            ap += a * p;
+            bp += b * p;
+        }
+        let det = aa * bb - ab * ab;
+        let (e0, e1) = if det.abs() < 1e-9 {
+            let mut sum = 0.0f64;
+            for i in 0..16 {
+                sum += half_to_f32(pixels[i][c]) as f64;
+            }
+            let m = sum / 16.0;
+            (m, m)
+        } else {
+            let v0 = (bb * ap - ab * bp) / det;
+            let v1 = (aa * bp - ab * ap) / det;
+            (v0, v1)
+        };
+        q0[c] = f32_to_signed_q(e0 as f32, prec);
+        q1[c] = f32_to_signed_q(e1 as f32, prec);
+    }
+    (q0, q1)
+}
+
+/// SF16 2-subset palette + index snap. Mirrors `snap_indices_2subset`
+/// but with the signed unquantize / finish pipeline.
+fn snap_indices_2subset_signed(
+    pixels: &[[u16; 3]; 16],
+    subsets: &[u8; 16],
+    endpoints_unq: &[[i32; 4]; 3],
+    idx_bits: u32,
+    indices: &mut [u32; 16],
+) -> f64 {
+    let palette_size = 1usize << idx_bits;
+    let mut sse = 0.0f64;
+    for px in 0..16 {
+        let s = subsets[px] as usize;
+        let i0 = s * 2;
+        let i1 = s * 2 + 1;
+        let mut best_k = 0u32;
+        let mut best_e = f64::MAX;
+        for k in 0..palette_size {
+            let mut pal = [0u16; 3];
+            for c in 0..3 {
+                let v = interp_endpoint(endpoints_unq[c][i0], endpoints_unq[c][i1], k, idx_bits);
+                pal[c] = finish_sf16(v);
+            }
+            let e = sq_err_rgb_signed_half(pixels[px], pal);
+            if e < best_e {
+                best_e = e;
+                best_k = k as u32;
+            }
+        }
+        indices[px] = best_k;
+        sse += best_e;
+    }
+    sse
+}
+
+/// SF16 per-subset LSQ refinement.
+fn refine_endpoints_2subset_signed(
+    pixels: &[[u16; 3]; 16],
+    subsets: &[u8; 16],
+    s: u8,
+    indices: &[u32; 16],
+    idx_bits: u32,
+    prec: u32,
+) -> ([i32; 3], [i32; 3]) {
+    let weights = match idx_bits {
+        3 => &WEIGHT_3[..],
+        4 => &WEIGHT_4[..],
+        _ => unreachable!(),
+    };
+    let mut q0 = [0i32; 3];
+    let mut q1 = [0i32; 3];
+    for c in 0..3 {
+        let mut aa = 0.0f64;
+        let mut bb = 0.0f64;
+        let mut ab = 0.0f64;
+        let mut ap = 0.0f64;
+        let mut bp = 0.0f64;
+        let mut count = 0u32;
+        let mut sum = 0.0f64;
+        for i in 0..16 {
+            if subsets[i] != s {
+                continue;
+            }
+            count += 1;
+            let w = weights[indices[i] as usize] as f64 / 64.0;
+            let a = 1.0 - w;
+            let b = w;
+            let p = half_to_f32(pixels[i][c]) as f64;
+            aa += a * a;
+            bb += b * b;
+            ab += a * b;
+            ap += a * p;
+            bp += b * p;
+            sum += p;
+        }
+        if count == 0 {
+            q0[c] = 0;
+            q1[c] = 0;
+            continue;
+        }
+        let det = aa * bb - ab * ab;
+        let (e0, e1) = if det.abs() < 1e-9 {
+            let m = sum / count as f64;
+            (m, m)
+        } else {
+            let v0 = (bb * ap - ab * bp) / det;
+            let v1 = (aa * bp - ab * ap) / det;
+            (v0, v1)
+        };
+        q0[c] = f32_to_signed_q(e0 as f32, prec);
+        q1[c] = f32_to_signed_q(e1 as f32, prec);
+    }
+    (q0, q1)
+}
+
+/// Try mode 11 / 12 / 13 for SF16 (1-subset signed delta).
+/// Returns `(block, sse)` or `None` when the signed delta on any channel
+/// exceeds `[-2^(delta_bits-1), 2^(delta_bits-1) - 1]`.
+fn encode_mode_delta_1subset_signed(
+    pixels: &[[u16; 3]; 16],
+    mode: u32,
+    prefix: u32,
+    prec: u32,
+    delta_bits: u32,
+) -> Option<([u8; 16], f64)> {
+    let (best_i, best_j) = furthest_pair_global_signed(pixels);
+    let half0 = pixels[best_i];
+    let half1 = pixels[best_j];
+
+    let mut q0 = [0i32; 3];
+    let mut q1 = [0i32; 3];
+    for c in 0..3 {
+        let s0 = half_sf16_to_signed_magnitude(half0[c]);
+        let s1 = half_sf16_to_signed_magnitude(half1[c]);
+        q0[c] = quantize_half_sf16(s0, prec);
+        q1[c] = quantize_half_sf16(s1, prec);
+    }
+
+    // Reject if any channel's signed delta overflows. Symmetric two's-
+    // complement signed range for delta_bits is [-2^(d-1), 2^(d-1) - 1].
+    let half: i64 = 1i64 << (delta_bits - 1);
+    for c in 0..3 {
+        let d = (q1[c] as i64) - (q0[c] as i64);
+        if d < -half || d >= half {
+            return None;
+        }
+    }
+
+    let mut indices = [0u32; 16];
+    let _sse_init = snap_indices_1subset_signed(pixels, &q0, &q1, prec, 4, &mut indices);
+
+    // Iterative refinement (2 passes).
+    let mut sse = _sse_init;
+    for _ in 0..2 {
+        let (q0_new, q1_new) = refine_endpoints_1subset_signed(pixels, &indices, 4, prec);
+        // Re-check delta range after refinement.
+        let mut overflow = false;
+        for c in 0..3 {
+            let d = (q1_new[c] as i64) - (q0_new[c] as i64);
+            if d < -half || d >= half {
+                overflow = true;
+                break;
+            }
+        }
+        if overflow {
+            break;
+        }
+        let mut idx_new = [0u32; 16];
+        let sse_new = snap_indices_1subset_signed(pixels, &q0_new, &q1_new, prec, 4, &mut idx_new);
+        if sse_new < sse {
+            sse = sse_new;
+            q0 = q0_new;
+            q1 = q1_new;
+            indices = idx_new;
+        } else {
+            break;
+        }
+    }
+
+    // Anchor: pixel-0 index < 8 (3-bit MSB-implicit).
+    if indices[0] >= 8 {
+        std::mem::swap(&mut q0, &mut q1);
+        // Re-check delta after swap (signed-range asymmetry: half values
+        // can fit forward but overflow when negated).
+        for c in 0..3 {
+            let d = (q1[c] as i64) - (q0[c] as i64);
+            if d < -half || d >= half {
+                return None;
+            }
+        }
+        for idx in indices.iter_mut() {
+            *idx = 15 - *idx;
+        }
+    }
+
+    // Pack: base = q0 truncated to prec bits (two's-complement bit
+    // pattern); delta = (q1 - q0) truncated to delta_bits.
+    let prec_mask: u32 = (1u32 << prec) - 1;
+    let delta_mask: u32 = (1u32 << delta_bits) - 1;
+    let mut q_field = [[0u32; 4]; 3];
+    for c in 0..3 {
+        q_field[c][0] = (q0[c] as u32) & prec_mask;
+        let d = (q1[c] as i64) - (q0[c] as i64);
+        q_field[c][1] = (d as u32) & delta_mask;
+    }
+    let mi = mode_info(mode).expect("mode info");
+    let block = pack_bc6h(&mi, prefix, 5, q_field, 0, &indices, 15);
+    Some((block, sse))
+}
+
+/// Try one SF16 2-subset mode/partition. Mirrors `try_2subset` but uses
+/// the signed quantize / unquantize / delta encoding path.
+fn try_2subset_signed(
+    pixels: &[[u16; 3]; 16],
+    spec: &TwoSubsetSpec,
+    partition: u32,
+) -> Option<([u8; 16], f64)> {
+    let part = PART_2[partition as usize];
+    let anchor1 = ANCHOR_2_SUBSET_2[partition as usize];
+
+    let (s0_e0, s0_e1) = furthest_pair_subset_signed(pixels, &part, 0);
+    let (s1_e0, s1_e1) = furthest_pair_subset_signed(pixels, &part, 1);
+
+    let prec = spec.prec;
+    let delta = [spec.delta_r, spec.delta_g, spec.delta_b];
+
+    // Quantise each absolute endpoint (signed).
+    // Slot order: 0 = subset-0 ep0 (w / base), 1 = subset-0 ep1,
+    // 2 = subset-1 ep0, 3 = subset-1 ep1.
+    let mut q_abs = [[0i32; 4]; 3];
+    for c in 0..3 {
+        let s00 = half_sf16_to_signed_magnitude(s0_e0[c]);
+        let s01 = half_sf16_to_signed_magnitude(s0_e1[c]);
+        let s10 = half_sf16_to_signed_magnitude(s1_e0[c]);
+        let s11 = half_sf16_to_signed_magnitude(s1_e1[c]);
+        q_abs[c][0] = quantize_half_sf16(s00, prec);
+        q_abs[c][1] = quantize_half_sf16(s01, prec);
+        q_abs[c][2] = quantize_half_sf16(s10, prec);
+        q_abs[c][3] = quantize_half_sf16(s11, prec);
+    }
+
+    let build_endpoints_unq = |q_abs: &[[i32; 4]; 3]| -> [[i32; 4]; 3] {
+        let mut e = [[0i32; 4]; 3];
+        for c in 0..3 {
+            for ep in 0..4 {
+                e[c][ep] = unquantize_sf16(q_abs[c][ep], prec);
+            }
+        }
+        e
+    };
+    let endpoints_unq = build_endpoints_unq(&q_abs);
+    let mut indices = [0u32; 16];
+    let mut sse = snap_indices_2subset_signed(pixels, &part, &endpoints_unq, 3, &mut indices);
+
+    // Iterative refinement.
+    for _ in 0..2 {
+        let mut q_new = q_abs;
+        for s in 0..2u8 {
+            let (qs0, qs1) = refine_endpoints_2subset_signed(pixels, &part, s, &indices, 3, prec);
+            for c in 0..3 {
+                q_new[c][(s * 2) as usize] = qs0[c];
+                q_new[c][(s * 2 + 1) as usize] = qs1[c];
+            }
+        }
+        let endpoints_new = build_endpoints_unq(&q_new);
+        let mut idx_new = [0u32; 16];
+        let sse_new = snap_indices_2subset_signed(pixels, &part, &endpoints_new, 3, &mut idx_new);
+        if sse_new < sse {
+            sse = sse_new;
+            q_abs = q_new;
+            indices = idx_new;
+        } else {
+            break;
+        }
+    }
+
+    // Encode delta fields. For mode 9 (delta_*=0) all four slots are
+    // absolute (signed); for modes 0..8 every non-base slot must fit
+    // in the per-channel delta_bits as a signed two's-complement value.
+    let prec_mask: u32 = (1u32 << prec) - 1;
+    let mut q_field = [[0u32; 4]; 3];
+    for c in 0..3 {
+        q_field[c][0] = (q_abs[c][0] as u32) & prec_mask;
+        if delta[c] == 0 {
+            for slot in 1..4 {
+                q_field[c][slot] = (q_abs[c][slot] as u32) & prec_mask;
+            }
+        } else {
+            let half = 1i64 << (delta[c] - 1);
+            let dmask = (1u32 << delta[c]) - 1;
+            for slot in 1..4 {
+                let d = (q_abs[c][slot] as i64) - (q_abs[c][0] as i64);
+                if d < -half || d >= half {
+                    return None;
+                }
+                q_field[c][slot] = (d as u32) & dmask;
+            }
+        }
+    }
+
+    // Anchor handling: subset-0 anchor (pixel 0) and subset-1 anchor
+    // (partition-dependent) must fit in 2 bits — if any index >= 4,
+    // swap the two endpoints of that subset and complement subset
+    // indices.
+    let mut subset_swap = [false; 2];
+    if indices[0] >= 4 {
+        subset_swap[0] = true;
+    }
+    if indices[anchor1 as usize] >= 4 {
+        subset_swap[1] = true;
+    }
+    for s in 0..2u8 {
+        if !subset_swap[s as usize] {
+            continue;
+        }
+        let i0 = (s as usize) * 2;
+        let i1 = (s as usize) * 2 + 1;
+        for c in 0..3 {
+            q_abs[c].swap(i0, i1);
+        }
+        for px in 0..16 {
+            if part[px] == s {
+                indices[px] = 7 - indices[px];
+            }
+        }
+    }
+
+    if subset_swap[0] || subset_swap[1] {
+        // Re-encode the field bits with the swapped absolute endpoints.
+        for c in 0..3 {
+            q_field[c][0] = (q_abs[c][0] as u32) & prec_mask;
+            if delta[c] == 0 {
+                for slot in 1..4 {
+                    q_field[c][slot] = (q_abs[c][slot] as u32) & prec_mask;
+                }
+            } else {
+                let half = 1i64 << (delta[c] - 1);
+                let dmask = (1u32 << delta[c]) - 1;
+                for slot in 1..4 {
+                    let d = (q_abs[c][slot] as i64) - (q_abs[c][0] as i64);
+                    if d < -half || d >= half {
+                        return None;
+                    }
+                    q_field[c][slot] = (d as u32) & dmask;
+                }
+            }
+        }
+    }
+
+    let mi = mode_info(spec.mode).expect("mode info");
+    let block = pack_bc6h(
+        &mi,
+        spec.prefix,
+        spec.prefix_len,
+        q_field,
+        partition,
+        &indices,
+        anchor1,
+    );
+    Some((block, sse))
+}
+
+/// Block-level BC6H_SF16 picker. Sweeps mode 10 (1-subset 10/10
+/// absolute) + modes 11/12/13 (1-subset signed delta) + modes 0..9
+/// (2-subset signed) across the 32-entry partition table, picking
+/// the candidate with lowest SSE.
 fn encode_bc6h_block_sf16(pixels: &[[u16; 3]; 16]) -> [u8; 16] {
-    let (block, _sse) = encode_mode10_signed(pixels);
-    block
+    let (mut best_block, mut best_sse) = encode_mode10_signed(pixels);
+
+    // Try delta-encoded 1-subset modes 11, 12, 13.
+    if let Some((b, sse)) = encode_mode_delta_1subset_signed(pixels, 11, 0b00111, 10, 9) {
+        if sse < best_sse {
+            best_sse = sse;
+            best_block = b;
+        }
+    }
+    if let Some((b, sse)) = encode_mode_delta_1subset_signed(pixels, 12, 0b01011, 12, 8) {
+        if sse < best_sse {
+            best_sse = sse;
+            best_block = b;
+        }
+    }
+    if let Some((b, sse)) = encode_mode_delta_1subset_signed(pixels, 13, 0b01111, 16, 4) {
+        if sse < best_sse {
+            best_sse = sse;
+            best_block = b;
+        }
+    }
+
+    // Try 2-subset modes 0..9 across the 32-partition table.
+    for spec in TWO_SUBSET_MODES {
+        for partition in 0..32u32 {
+            if let Some((b, sse)) = try_2subset_signed(pixels, spec, partition) {
+                if sse < best_sse {
+                    best_sse = sse;
+                    best_block = b;
+                }
+            }
+        }
+    }
+
+    best_block
 }
 
 /// Encode a width × height RGBA half-float surface (with sign-magnitude
@@ -1961,6 +2454,187 @@ mod tests {
         assert!(
             psnr > 19.0,
             "BC6H_SF16 signed gradient PSNR (peak 1.0) = {:.2} dB (want > 19 dB)",
+            psnr
+        );
+    }
+
+    /// Diagnostic: print the multi-mode PSNR on the round-7 sign-spanning
+    /// gradient. Round-7 mode-10-only sat at the >19 dB threshold; this
+    /// test reuses the same input + asserts a tighter ≥22 dB bound to
+    /// document the multi-mode lift.
+    #[test]
+    fn bc6h_encode_sf16_signed_gradient_multimode_gt_22db() {
+        let mut input_f32 = vec![0f32; 4 * 4 * 3];
+        for y in 0..4 {
+            for x in 0..4 {
+                let off = (y * 4 + x) * 3;
+                let v = -0.5 + ((x + y) as f32) / 6.0;
+                input_f32[off] = v;
+                input_f32[off + 1] = v;
+                input_f32[off + 2] = v;
+            }
+        }
+        let mut bc = vec![0u8; 16];
+        encode_bc6h_sf16_from_f32(&input_f32, 4, 4, &mut bc).unwrap();
+        let mut decoded = vec![0u8; 4 * 4 * 8];
+        decode_bc6h(&bc, 4, 4, true, &mut decoded).unwrap();
+
+        let mut input_half = vec![0u8; 4 * 4 * 8];
+        for i in 0..16 {
+            let r = f32_to_half_signed(input_f32[i * 3]);
+            let g = f32_to_half_signed(input_f32[i * 3 + 1]);
+            let b = f32_to_half_signed(input_f32[i * 3 + 2]);
+            input_half[i * 8..i * 8 + 2].copy_from_slice(&r.to_le_bytes());
+            input_half[i * 8 + 2..i * 8 + 4].copy_from_slice(&g.to_le_bytes());
+            input_half[i * 8 + 4..i * 8 + 6].copy_from_slice(&b.to_le_bytes());
+            input_half[i * 8 + 6..i * 8 + 8].copy_from_slice(&0x3c00u16.to_le_bytes());
+        }
+        let psnr = psnr_rgb_half(&input_half, &decoded);
+        // Mode-10-only baseline (round 7) sat at the 19 dB threshold.
+        // Multi-mode picker should comfortably exceed 22 dB on the same
+        // sign-spanning gradient via mode 11 or a 2-subset mode.
+        assert!(
+            psnr > 22.0,
+            "BC6H_SF16 multi-mode signed gradient PSNR = {:.2} dB (want > 22 dB)",
+            psnr
+        );
+    }
+
+    /// BC6H_SF16 round-7 lift: signed tight-range gradient where the
+    /// delta-encoded modes 11/12/13 outperform mode 10. Block content:
+    /// signed values in [-0.05, 0.05] — both endpoints quantise to small
+    /// signed integers with a tiny delta that fits in 9-bit delta range
+    /// (mode 11) or 8-bit (mode 12) or 4-bit (mode 13). Higher-precision
+    /// base + small delta is favoured over the wider-spread mode-10
+    /// absolute encoding.
+    #[test]
+    fn bc6h_encode_sf16_mode11_tight_signed_gradient() {
+        let mut input_f32 = vec![0f32; 4 * 4 * 3];
+        for y in 0..4 {
+            for x in 0..4 {
+                let off = (y * 4 + x) * 3;
+                // Range [-0.05, 0.05] — tiny signed delta.
+                let v = -0.05 + ((x + y) as f32 / 6.0) * 0.1;
+                input_f32[off] = v;
+                input_f32[off + 1] = v;
+                input_f32[off + 2] = v;
+            }
+        }
+        let mut bc = vec![0u8; 16];
+        encode_bc6h_sf16_from_f32(&input_f32, 4, 4, &mut bc).unwrap();
+        let mut decoded = vec![0u8; 4 * 4 * 8];
+        decode_bc6h(&bc, 4, 4, true, &mut decoded).unwrap();
+
+        let mut input_half = vec![0u8; 4 * 4 * 8];
+        for i in 0..16 {
+            let r = f32_to_half_signed(input_f32[i * 3]);
+            let g = f32_to_half_signed(input_f32[i * 3 + 1]);
+            let b = f32_to_half_signed(input_f32[i * 3 + 2]);
+            input_half[i * 8..i * 8 + 2].copy_from_slice(&r.to_le_bytes());
+            input_half[i * 8 + 2..i * 8 + 4].copy_from_slice(&g.to_le_bytes());
+            input_half[i * 8 + 4..i * 8 + 6].copy_from_slice(&b.to_le_bytes());
+            input_half[i * 8 + 6..i * 8 + 8].copy_from_slice(&0x3c00u16.to_le_bytes());
+        }
+        let psnr = psnr_rgb_half(&input_half, &decoded);
+        // Tight gradient — multi-mode picker should land high PSNR.
+        // Tiny-magnitude signed content has very small absolute SSE,
+        // so the dB number is large; verifying that the multi-mode
+        // picker doesn't regress vs. mode-10-only.
+        assert!(
+            psnr > 35.0,
+            "BC6H_SF16 mode-11/12/13 tight signed gradient PSNR = {:.2} dB (want > 35 dB)",
+            psnr
+        );
+    }
+
+    /// BC6H_SF16 2-subset: two clusters of signed-half pixels (e.g. -0.4
+    /// vs +0.4) within one block. The 2-subset signed modes should
+    /// quantise each cluster's endpoints independently, beating the
+    /// 1-subset mode-10 baseline which has to span the entire signed
+    /// range.
+    #[test]
+    fn bc6h_encode_sf16_2subset_signed_two_cluster_block() {
+        let mut input_f32 = vec![0f32; 4 * 4 * 3];
+        for y in 0..4 {
+            for x in 0..4 {
+                let off = (y * 4 + x) * 3;
+                let v = if x < 2 { -0.4 } else { 0.4 };
+                input_f32[off] = v;
+                input_f32[off + 1] = v;
+                input_f32[off + 2] = v;
+            }
+        }
+        let mut bc = vec![0u8; 16];
+        encode_bc6h_sf16_from_f32(&input_f32, 4, 4, &mut bc).unwrap();
+        let mut decoded = vec![0u8; 4 * 4 * 8];
+        decode_bc6h(&bc, 4, 4, true, &mut decoded).unwrap();
+
+        // Verify sign discrimination preserved (left half negative,
+        // right half positive) — this is the 2-subset signed mode's
+        // primary value-add over the 1-subset mode-10 baseline.
+        for y in 0..4 {
+            for x in 0..4 {
+                let off = (y * 4 + x) * 8;
+                let r = u16::from_le_bytes([decoded[off], decoded[off + 1]]);
+                let r_f = half_to_f32(r);
+                if x < 2 {
+                    assert!(
+                        r_f < -0.2,
+                        "x={} y={} should be negative-half but got {}",
+                        x,
+                        y,
+                        r_f
+                    );
+                } else {
+                    assert!(
+                        r_f > 0.2,
+                        "x={} y={} should be positive-half but got {}",
+                        x,
+                        y,
+                        r_f
+                    );
+                }
+            }
+        }
+    }
+
+    /// BC6H_SF16 2-subset: PSNR threshold for clustered signed content.
+    /// Each cluster is solid (intra-spread = 0), so a 2-subset mode can
+    /// encode losslessly modulo the SF16 31/32 finalise.
+    #[test]
+    fn bc6h_encode_sf16_2subset_signed_psnr() {
+        let mut input_f32 = vec![0f32; 4 * 4 * 3];
+        for y in 0..4 {
+            for x in 0..4 {
+                let off = (y * 4 + x) * 3;
+                let v = if x < 2 { -0.3 } else { 0.5 };
+                input_f32[off] = v;
+                input_f32[off + 1] = v;
+                input_f32[off + 2] = v;
+            }
+        }
+        let mut bc = vec![0u8; 16];
+        encode_bc6h_sf16_from_f32(&input_f32, 4, 4, &mut bc).unwrap();
+        let mut decoded = vec![0u8; 4 * 4 * 8];
+        decode_bc6h(&bc, 4, 4, true, &mut decoded).unwrap();
+
+        let mut input_half = vec![0u8; 4 * 4 * 8];
+        for i in 0..16 {
+            let r = f32_to_half_signed(input_f32[i * 3]);
+            let g = f32_to_half_signed(input_f32[i * 3 + 1]);
+            let b = f32_to_half_signed(input_f32[i * 3 + 2]);
+            input_half[i * 8..i * 8 + 2].copy_from_slice(&r.to_le_bytes());
+            input_half[i * 8 + 2..i * 8 + 4].copy_from_slice(&g.to_le_bytes());
+            input_half[i * 8 + 4..i * 8 + 6].copy_from_slice(&b.to_le_bytes());
+            input_half[i * 8 + 6..i * 8 + 8].copy_from_slice(&0x3c00u16.to_le_bytes());
+        }
+        let psnr = psnr_rgb_half(&input_half, &decoded);
+        // 2-subset signed lifts a previously-21-dB-only mode-10 case
+        // (signed cross-subset spread of ~0.8 → halves quantise to widely-
+        // separated mode-10 endpoints) past 30 dB.
+        assert!(
+            psnr > 30.0,
+            "BC6H_SF16 2-subset two-cluster signed PSNR = {:.2} dB (want > 30 dB)",
             psnr
         );
     }

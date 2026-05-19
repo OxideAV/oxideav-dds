@@ -65,13 +65,17 @@
 //!   both planes. Encoder pre-rotates the input pixels by the chosen
 //!   rotation, fits RGB and alpha endpoints separately by least-
 //!   squares, then packs — closing the encoder gap.
-//! * **BC6H_SF16 (signed) encoder** via [`encode_bc6h_sf16`] (and the
-//!   f32-input convenience [`encode_bc6h_sf16_from_f32`]). Mirrors the
-//!   decoder's signed-magnitude pipeline (signed unquantize + signed
-//!   finalize per Microsoft) for content with negative radiance or
-//!   signed-displacement maps. Currently emits mode 10 (1-subset,
-//!   10-bit signed absolute, 4-bit indices); multi-mode SF16 is a
-//!   follow-on round.
+//! * **BC6H_SF16 (signed) multi-mode encoder** via
+//!   [`encode_bc6h_sf16`] (and the f32-input convenience
+//!   [`encode_bc6h_sf16_from_f32`]). Mirrors the decoder's signed-
+//!   magnitude pipeline (signed unquantize + signed finalize per
+//!   Microsoft) for content with negative radiance or signed-
+//!   displacement maps. Round-77 lift over round 7: the picker now
+//!   sweeps mode 10 (1-subset signed absolute), modes 11/12/13
+//!   (1-subset signed delta), and modes 0..9 (2-subset signed)
+//!   across the 32-entry BC6H partition table. Cross-subset signed
+//!   deltas that overflow the per-channel delta range bail out so
+//!   the picker can fall through to a wider mode.
 //! * **Mipmap chain emission** for both uncompressed
 //!   ([`encode_dds_uncompressed`]) and block-compressed
 //!   ([`encode_dds_block_compressed`]) surfaces. The uncompressed path
@@ -101,9 +105,6 @@
 //!
 //! Still deferred (followups):
 //!
-//! * BC6H_SF16 multi-mode (delta-encoded modes 11/12/13 signed +
-//!   2-subset modes 0..9 signed) — currently [`encode_bc6h_sf16`]
-//!   emits mode 10 only.
 //! * LSQ refinement metric — current pixel-space LSQ is approximate;
 //!   fitting in unq-space could push 1-2 dB more on multi-axis HDR
 //!   content.

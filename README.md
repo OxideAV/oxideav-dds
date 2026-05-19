@@ -9,7 +9,7 @@ single-format codec crates.
 
 ## Status
 
-Coverage as of round 4:
+Coverage as of round 77:
 
 - `DDS_HEADER` (124 bytes) + optional `DDS_HEADER_DXT10` (20 bytes) parser.
 - Bit-exact round-trip of every common uncompressed surface layout:
@@ -64,14 +64,20 @@ Coverage as of round 4:
   full Microsoft / Khronos partition-table sweeps the encoder lifts
   multi-axis natural-image PSNR-RGB past 30 dB and decorrelated-alpha
   content past 30 dB-RGBA.
-- **BC6H_SF16 (signed) encoder.** `encode_bc6h_sf16` and
+- **BC6H_SF16 (signed) multi-mode encoder.** `encode_bc6h_sf16` and
   `encode_bc6h_sf16_from_f32` emit signed-format BC6H blocks (DXGI
   `BC6H_SF16`). Mirrors the decoder's signed-magnitude pipeline:
   signed-magnitude quantise, signed unquantize, signed finalize.
-  Currently emits mode 10 (1-subset, 10-bit signed absolute, 4-bit
-  indices) — sufficient for typical signed-displacement-map content.
-  Multi-mode SF16 (modes 11/12/13 signed-delta + 2-subset signed)
-  is a follow-on round.
+  Round 77 closes the SF16 encoder gap: the block picker now sweeps
+  mode 10 (1-subset, 10-bit signed absolute, 4-bit indices), modes
+  11/12/13 (1-subset signed delta — 10/12/16-bit base + 9/8/4-bit
+  signed delta) and modes 0..9 (2-subset signed across the 32-entry
+  BC6H partition table). Same per-mode rejection logic as the
+  unsigned encoder (cross-subset deltas that overflow the per-channel
+  delta range bail out, letting the picker fall through). Signed
+  cross-subset two-cluster content (e.g. -0.4 / +0.4 split block)
+  hits ≥30 dB PSNR; sign-spanning gradients clear the round-7
+  mode-10-only ~19 dB ceiling.
 - **Mipmap chain emission** for both uncompressed and BC* surfaces.
   `encode_dds_uncompressed` emits a full mipmap chain when
   `image.mip_map_count > 1` (caller-supplied surfaces written
@@ -109,8 +115,6 @@ Coverage as of round 4:
 
 Still deferred (followups):
 
-- BC6H_SF16 multi-mode (delta-encoded modes 11/12/13 signed + 2-subset
-  modes 0..9 signed) — currently `encode_bc6h_sf16` emits mode 10 only.
 - LSQ refinement metric — current pixel-space LSQ is approximate; fitting
   in unq-space could push 1-2 dB more on multi-axis HDR content.
 

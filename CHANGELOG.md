@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **BC6H_SF16 multi-mode encoder (round 77)** — `encode_bc6h_sf16`
+  now sweeps every BC6H mode for signed-format output. Previous
+  round-7 dispatch shipped mode 10 only; this round closes the
+  gap with:
+  - **1-subset signed-delta modes 11/12/13** via
+    `encode_mode_delta_1subset_signed`. Each candidate quantises
+    pixel endpoints to signed two's-complement integers in
+    `prec`-bit space, encodes the second endpoint as a signed
+    delta in `delta_bits` two's-complement space, and rejects
+    when the per-channel signed delta overflows
+    `[-2^(d-1), 2^(d-1) - 1]`.
+  - **2-subset signed modes 0..9** via `try_2subset_signed`.
+    Same 32-entry BC6H partition sweep as the unsigned 2-subset
+    path; per-subset furthest-point seed + 2 LSQ refinement
+    passes against the signed unquantize / finish pipeline.
+    Cross-subset deltas that exceed `delta_bits` signed range
+    cause the candidate to bail.
+  - **New helpers**: `furthest_pair_subset_signed`,
+    `refine_endpoints_1subset_signed`,
+    `refine_endpoints_2subset_signed`,
+    `snap_indices_2subset_signed`, `f32_to_signed_q`. All built
+    on the existing `quantize_half_sf16` / `unquantize_sf16` /
+    `finish_sf16` primitives.
+  - **PSNR lift**: signed two-cluster content (left half = -0.4,
+    right half = +0.4) reaches ≥30 dB PSNR (peak 1.0) via the
+    2-subset signed modes; tight-range signed gradients
+    ([-0.05, 0.05]) reach ≥35 dB via the delta modes; sign-
+    spanning gradients clear the round-7 mode-10-only 19 dB
+    threshold by >3 dB. Pixel-rotated solid negative blocks
+    bit-identical to the round-7 mode-10 baseline.
+
 ## [0.0.3](https://github.com/OxideAV/oxideav-dds/compare/v0.0.2...v0.0.3) - 2026-05-08
 
 ### Other
