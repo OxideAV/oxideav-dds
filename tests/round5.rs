@@ -176,6 +176,7 @@ fn encode_mipmap_chain_8x8() {
         dxgi_format: None,
         is_cubemap: false,
         array_size: 1,
+        depth: 1,
     };
     let bytes = encode_dds_uncompressed(&img).expect("encode mipmap chain");
     let parsed = parse_dds(&bytes).expect("parse mipmap chain");
@@ -220,6 +221,7 @@ fn encode_mipmap_chain_odd_dimensions() {
         dxgi_format: None,
         is_cubemap: false,
         array_size: 1,
+        depth: 1,
     };
     let bytes = encode_dds_uncompressed(&img).expect("encode 5x5 mipmaps");
     let parsed = parse_dds(&bytes).expect("parse 5x5 mipmaps");
@@ -276,6 +278,7 @@ fn encode_bc1_mipmap_chain_via_block_compressed() {
             mip_level: level as u32,
             array_slice: 0,
             face: None,
+            depth_slice: 0,
             plane: DdsPlane {
                 stride: bw * 8,
                 data: bc,
@@ -295,6 +298,7 @@ fn encode_bc1_mipmap_chain_via_block_compressed() {
         dxgi_format: None,
         is_cubemap: false,
         array_size: 1,
+        depth: 1,
     };
 
     let bytes = encode_dds_block_compressed(&img).expect("encode BC1 mip chain");
@@ -353,6 +357,7 @@ fn encode_bc7_mipmap_chain_via_block_compressed() {
             mip_level: level as u32,
             array_slice: 0,
             face: None,
+            depth_slice: 0,
             plane: DdsPlane {
                 stride: bw * 16,
                 data: bc,
@@ -372,6 +377,7 @@ fn encode_bc7_mipmap_chain_via_block_compressed() {
         dxgi_format: None,
         is_cubemap: false,
         array_size: 1,
+        depth: 1,
     };
 
     let bytes = encode_dds_block_compressed(&img).expect("encode BC7 mip chain");
@@ -417,6 +423,7 @@ fn encode_block_compressed_rejects_mismatched_dims() {
             mip_level: 0,
             array_slice: 0,
             face: None,
+            depth_slice: 0,
             plane: DdsPlane {
                 stride: bw * 8,
                 data: bc,
@@ -428,6 +435,7 @@ fn encode_block_compressed_rejects_mismatched_dims() {
         dxgi_format: None,
         is_cubemap: false,
         array_size: 1,
+        depth: 1,
     };
     assert!(encode_dds_block_compressed(&img).is_err());
 }
@@ -450,6 +458,7 @@ fn encode_block_compressed_rejects_uncompressed() {
         dxgi_format: None,
         is_cubemap: false,
         array_size: 1,
+        depth: 1,
     };
     assert!(encode_dds_block_compressed(&img).is_err());
 }
@@ -781,6 +790,7 @@ fn encode_no_mipmaps_round_trip_unchanged() {
         dxgi_format: None,
         is_cubemap: false,
         array_size: 1,
+        depth: 1,
     };
     let bytes = encode_dds_uncompressed(&img).unwrap();
     let parsed = parse_dds(&bytes).unwrap();

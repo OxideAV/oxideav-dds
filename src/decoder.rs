@@ -396,6 +396,12 @@ pub fn parse_dds(bytes: &[u8]) -> Result<DdsImage> {
         0
     };
 
+    // Volume (3D) texture detection: legacy header sets DDSCAPS2_VOLUME
+    // (paired with DDSD_DEPTH in flags); DX10 header sets
+    // resource_dimension == DDS_DIMENSION_TEXTURE3D. The mip-0 slice
+    // count lives in header.depth.
+    let mut is_volume = header.caps2 & DDSCAPS2_VOLUME != 0;
+
     let mut array_size: u32 = 1;
     if has_dxt10 {
         // Re-read the parsed dxt10 to apply cubemap / array adjustments.
@@ -404,7 +410,20 @@ pub fn parse_dds(bytes: &[u8]) -> Result<DdsImage> {
             is_cubemap = true;
             present_faces_mask = DDSCAPS2_CUBEMAP_ALL_FACES;
         }
+        if dxt10.resource_dimension == DDS_DIMENSION_TEXTURE3D {
+            is_volume = true;
+        }
         array_size = dxt10.array_size.max(1);
+    }
+
+    // mip-0 depth (z) slice count. Only meaningful for volume textures;
+    // 1 otherwise. Microsoft notes that DX10 3D textures cannot be
+    // arrays, so a volume texture always has array_size == 1.
+    let base_depth = if is_volume { header.depth.max(1) } else { 1 };
+    if is_volume && (is_cubemap || array_size > 1) {
+        return Err(DdsError::invalid(
+            "volume (3D) texture cannot also be a cubemap or texture array",
+        ));
     }
 
     // Order Microsoft mandates for cubemap faces (PX, NX, PY, NY,
@@ -432,23 +451,35 @@ pub fn parse_dds(bytes: &[u8]) -> Result<DdsImage> {
         .map(|m| ((width >> m).max(1), (height >> m).max(1)))
         .collect();
 
-    let surfaces_per_slice = if face_indices.is_empty() {
-        mip_count as usize
-    } else {
+    let surfaces_per_slice = if !face_indices.is_empty() {
         face_indices.len() * mip_count as usize
+    } else if is_volume {
+        // One surface per (mip, depth_slice). Depth halves each mip
+        // level (floored to 1).
+        (0..mip_count)
+            .map(|m| (base_depth >> m).max(1) as usize)
+            .sum()
+    } else {
+        mip_count as usize
     };
     let total_surfaces = array_size as usize * surfaces_per_slice;
 
     let mut surfaces: Vec<DdsSurface> = Vec::with_capacity(total_surfaces);
     let mut cursor = pixel_data_off;
 
-    for ai in 0..array_size {
-        if face_indices.is_empty() {
-            for (mi, &(mw, mh)) in mip_dims.iter().enumerate() {
+    if is_volume {
+        // Volume (3D) texture: mip-major on-disk order. For each mip
+        // level, `max(1, base_depth >> mip)` consecutive 2D slices are
+        // stored back to back (each at that mip's width × height). The
+        // depth shrinks alongside width/height per Microsoft's volume
+        // mip rule.
+        for (mi, &(mw, mh)) in mip_dims.iter().enumerate() {
+            let mip_depth = (base_depth >> mi).max(1);
+            for z in 0..mip_depth {
                 let sb = surface_size_bytes(pix, mw, mh) as usize;
                 if bytes.len() < cursor + sb {
                     return Err(DdsError::invalid(format!(
-                        "DDS pixel data truncated at array={ai} mip={mi} ({mw}x{mh}): need {sb} bytes, have {}",
+                        "DDS pixel data truncated at mip={mi} slice={z} ({mw}x{mh}): need {sb} bytes, have {}",
                         bytes.len() - cursor,
                     )));
                 }
@@ -457,8 +488,9 @@ pub fn parse_dds(bytes: &[u8]) -> Result<DdsImage> {
                     width: mw,
                     height: mh,
                     mip_level: mi as u32,
-                    array_slice: ai,
+                    array_slice: 0,
                     face: None,
+                    depth_slice: z,
                     plane: DdsPlane {
                         stride,
                         data: bytes[cursor..cursor + sb].to_vec(),
@@ -466,14 +498,15 @@ pub fn parse_dds(bytes: &[u8]) -> Result<DdsImage> {
                 });
                 cursor += sb;
             }
-        } else {
-            for face in face_indices.iter() {
+        }
+    } else {
+        for ai in 0..array_size {
+            if face_indices.is_empty() {
                 for (mi, &(mw, mh)) in mip_dims.iter().enumerate() {
                     let sb = surface_size_bytes(pix, mw, mh) as usize;
                     if bytes.len() < cursor + sb {
                         return Err(DdsError::invalid(format!(
-                            "DDS pixel data truncated at array={ai} face={} mip={mi} ({mw}x{mh}): need {sb} bytes, have {}",
-                            face.short_name(),
+                            "DDS pixel data truncated at array={ai} mip={mi} ({mw}x{mh}): need {sb} bytes, have {}",
                             bytes.len() - cursor,
                         )));
                     }
@@ -483,13 +516,41 @@ pub fn parse_dds(bytes: &[u8]) -> Result<DdsImage> {
                         height: mh,
                         mip_level: mi as u32,
                         array_slice: ai,
-                        face: Some(*face),
+                        face: None,
+                        depth_slice: 0,
                         plane: DdsPlane {
                             stride,
                             data: bytes[cursor..cursor + sb].to_vec(),
                         },
                     });
                     cursor += sb;
+                }
+            } else {
+                for face in face_indices.iter() {
+                    for (mi, &(mw, mh)) in mip_dims.iter().enumerate() {
+                        let sb = surface_size_bytes(pix, mw, mh) as usize;
+                        if bytes.len() < cursor + sb {
+                            return Err(DdsError::invalid(format!(
+                                "DDS pixel data truncated at array={ai} face={} mip={mi} ({mw}x{mh}): need {sb} bytes, have {}",
+                                face.short_name(),
+                                bytes.len() - cursor,
+                            )));
+                        }
+                        let stride = surface_stride_bytes(pix, mw);
+                        surfaces.push(DdsSurface {
+                            width: mw,
+                            height: mh,
+                            mip_level: mi as u32,
+                            array_slice: ai,
+                            face: Some(*face),
+                            depth_slice: 0,
+                            plane: DdsPlane {
+                                stride,
+                                data: bytes[cursor..cursor + sb].to_vec(),
+                            },
+                        });
+                        cursor += sb;
+                    }
                 }
             }
         }
@@ -515,6 +576,7 @@ pub fn parse_dds(bytes: &[u8]) -> Result<DdsImage> {
         dxgi_format: dxgi,
         is_cubemap,
         array_size,
+        depth: base_depth,
     })
 }
 

@@ -165,6 +165,7 @@ pub use bcn_enc::{encode_bc1, encode_bc2, encode_bc3, encode_bc4_unorm, encode_b
 pub use decoder::parse_dds;
 pub use encoder::{
     encode_dds_block_compressed, encode_dds_block_compressed_from_rgba8, encode_dds_uncompressed,
+    encode_dds_volume,
 };
 pub use error::{DdsError, Result};
 pub use image::{CubemapFace, DdsImage, DdsPixelFormat, DdsPlane, DdsSurface};

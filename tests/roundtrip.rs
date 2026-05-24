@@ -46,6 +46,7 @@ fn roundtrip_format(pix: DdsPixelFormat, w: u32, h: u32) {
             mip_level: 0,
             array_slice: 0,
             face: None,
+            depth_slice: 0,
             plane: plane.clone(),
         }],
         pts: None,
@@ -54,6 +55,7 @@ fn roundtrip_format(pix: DdsPixelFormat, w: u32, h: u32) {
         dxgi_format: None,
         is_cubemap: false,
         array_size: 1,
+        depth: 1,
     };
     let bytes = encode_dds_uncompressed(&src)
         .unwrap_or_else(|e| panic!("encode failed for {}: {e}", pix.name()));
@@ -365,6 +367,7 @@ fn rejects_block_compressed_in_uncompressed_encoder() {
             mip_level: 0,
             array_slice: 0,
             face: None,
+            depth_slice: 0,
             plane,
         }],
         pts: None,
@@ -373,6 +376,7 @@ fn rejects_block_compressed_in_uncompressed_encoder() {
         dxgi_format: None,
         is_cubemap: false,
         array_size: 1,
+        depth: 1,
     };
     assert!(encode_dds_uncompressed(&img).is_err());
 }

@@ -269,6 +269,7 @@ impl Encoder for DdsEncoder {
                 mip_level: 0,
                 array_slice: 0,
                 face: None,
+                depth_slice: 0,
                 plane: dds_plane,
             }],
             pts: vf.pts,
@@ -277,6 +278,7 @@ impl Encoder for DdsEncoder {
             dxgi_format: None,
             is_cubemap: false,
             array_size: 1,
+            depth: 1,
         };
         let bytes = encode_dds_uncompressed(&img)?;
         let mut pkt = Packet::new(0, self.time_base, bytes);

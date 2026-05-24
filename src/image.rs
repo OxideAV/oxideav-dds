@@ -244,6 +244,13 @@ pub struct DdsSurface {
     pub array_slice: u32,
     /// Cubemap face — `None` for non-cubemap textures.
     pub face: Option<CubemapFace>,
+    /// Volume-texture depth (z) slice index. `0` for 1D / 2D / cubemap
+    /// textures. For a volume texture the parser emits one
+    /// [`DdsSurface`] per depth slice; `depth_slice` runs `0 ..
+    /// depth_at(mip_level)` where `depth_at(m) = max(1, base_depth >> m)`
+    /// (Microsoft halves the depth at each mip level alongside width and
+    /// height, flooring to 1).
+    pub depth_slice: u32,
     /// Plane bytes for this surface (always one plane today).
     pub plane: DdsPlane,
 }
@@ -293,4 +300,14 @@ pub struct DdsImage {
     /// DX10 texture-array element count (1 for non-array textures, 6
     /// for the per-face slices of a DX10 cubemap, etc.).
     pub array_size: u32,
+    /// Volume-texture depth (z) slice count at mip 0. `1` for 1D / 2D /
+    /// cubemap textures. When `> 1` the file is a volume (3D) texture:
+    /// the legacy header sets `DDSCAPS2_VOLUME` (and `DDSD_DEPTH` in
+    /// `flags`), or the DX10 header sets
+    /// `resource_dimension == DDS_DIMENSION_TEXTURE3D`. Each mip level
+    /// stores `max(1, depth >> mip_level)` consecutive 2D slices, and
+    /// [`Self::surfaces`] carries one entry per `(mip_level,
+    /// depth_slice)` pair in on-disk order (outer loop over mip, inner
+    /// over depth slice).
+    pub depth: u32,
 }

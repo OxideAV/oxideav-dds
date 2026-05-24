@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Volume (3D) texture support (round 123)** — the parser now decodes
+  volume textures from both the legacy header (`DDSCAPS2_VOLUME` +
+  `DDSD_DEPTH`, with the slice count in `header.depth`) and the DX10
+  header (`resource_dimension == DDS_DIMENSION_TEXTURE3D`). Each mip
+  level stores `max(1, depth >> mip)` consecutive 2D slices in
+  mip-major on-disk order; the depth halves alongside width / height
+  per Microsoft's volume mip rule. `DdsImage` gains a `depth` field
+  (mip-0 slice count) and `DdsSurface` gains a `depth_slice` field
+  (the z index of each emitted surface). A new `encode_dds_volume`
+  writer round-trips an uncompressed volume back to disk with the
+  matching legacy header. Volume textures are validated to not also be
+  cubemaps or texture arrays. Seven new tests cover legacy / DX10
+  decode, the depth-halving mip chain, a truncated-payload error, and
+  single-mip / mipped round-trips.
+
 - **BC6H_SF16 multi-mode encoder (round 77)** — `encode_bc6h_sf16`
   now sweeps every BC6H mode for signed-format output. Previous
   round-7 dispatch shipped mode 10 only; this round closes the

@@ -96,6 +96,12 @@ Coverage as of round 77:
   mandated order (array slice → face → mip), tagged with
   `mip_level` / `array_slice` / `face`. `DdsImage::planes[0]` still
   mirrors the base level for callers that don't care.
+- **Volume (3D) textures.** Legacy (`DDSCAPS2_VOLUME` + `DDSD_DEPTH`)
+  and DX10 (`DDS_DIMENSION_TEXTURE3D`) volumes decode into one
+  `DdsSurface` per (mip, depth slice) in mip-major order; depth halves
+  per mip level alongside width/height. `DdsImage::depth` carries the
+  mip-0 slice count and `DdsSurface::depth_slice` the z index.
+  `encode_dds_volume` round-trips an uncompressed volume back to disk.
 - **Full DXGI format table** — every `DXGI_FORMAT` value Microsoft
   assigns (1..=132) is enumerated by name in `DxgiFormat` for
   lossless round-trip; HDR-float, integer, depth/stencil, YUV, and
