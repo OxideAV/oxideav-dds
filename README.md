@@ -119,6 +119,19 @@ Coverage as of round 77:
   `decode_bc1..bc7` / `decode_bc6h` / `encode_bc1..bc5` API plus
   crate-local `DdsImage` / `DdsPixelFormat` / `DdsError` types built on `std`.
 
+Continuous fuzzing (round 156): five `cargo-fuzz` panic-free targets
+under `fuzz/` — `parse_dds` (full container), `decode_bcn` (every
+BC1..BC5 entry point including `u32::MAX` block-grid + zero-output
+sweeps), `decode_bc6h` (14 modes × signed + unsigned), `decode_bc7`
+(8 modes including the reserved zero-bit mode) and `roundtrip`
+(`parse_dds` → `encode_dds_uncompressed` → `parse_dds` idempotency).
+Driven daily by `.github/workflows/fuzz.yml` against the org's
+reusable `crate-fuzz` workflow (30-minute total budget split across
+the five targets). Built with `default-features = false` so the
+harness exercises the framework-free standalone decode path. Corpus
+seeded with the two existing crate fixtures plus six hand-crafted
+single-block BC blobs.
+
 Still deferred (followups):
 
 - LSQ refinement metric — current pixel-space LSQ is approximate; fitting

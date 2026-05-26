@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`cargo-fuzz` harness with five panic-free targets (round 156)** —
+  new `fuzz/` directory carrying a sibling `Cargo.toml` and five
+  fuzz targets exercising every attacker-controlled entry point:
+  - `parse_dds` — full container parse off arbitrary bytes (4-byte
+    magic + 124-byte `DDS_HEADER` + optional 20-byte
+    `DDS_HEADER_DXT10` + mip / array / face / depth-slice surface
+    tail; every length / count / format-code field is fuzzed).
+  - `decode_bcn` — every BC1..BC5 entry point
+    (`decode_bc1` / `decode_bc2` / `decode_bc3` / `decode_bc4_unorm` /
+    `decode_bc4_snorm` / `decode_bc5_unorm` / `decode_bc5_snorm`)
+    with fuzzed `(width, height)` + block stream, including an
+    adversarial `u32::MAX × u32::MAX` block-grid sweep and a
+    zero-length-output sweep.
+  - `decode_bc6h` — 14-mode signed + unsigned BC6H decoder with
+    the same dimension / buffer-size adversarial sweep.
+  - `decode_bc7` — 8-mode BC7 decoder + reserved-mode (eight leading
+    zero bits) handling.
+  - `roundtrip` — `parse_dds` → `encode_dds_uncompressed` →
+    `parse_dds` idempotency on every parser-accepted uncompressed
+    single-plane non-cubemap non-volume input.
+  Plus a daily `Fuzz` GitHub Actions workflow that runs the org
+  reusable `crate-fuzz.yml` (30-minute total budget split across
+  the five targets, cron `53 7 * * *`). Corpus seeded with the
+  two existing crate fixtures (`grad8.dds`, `red16.dds`) and six
+  hand-crafted BC1 / BC3 / BC6H / BC7 single-block blobs. The
+  harness is built with `default-features = false` so it
+  exercises the framework-free standalone decode path.
+
 - **Volume (3D) texture support (round 123)** — the parser now decodes
   volume textures from both the legacy header (`DDSCAPS2_VOLUME` +
   `DDSD_DEPTH`, with the slice count in `header.depth`) and the DX10

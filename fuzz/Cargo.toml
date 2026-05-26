@@ -1,0 +1,82 @@
+[package]
+name = "oxideav-dds-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+# DDS is a panic-free fuzz target: the container is a 4-byte magic plus
+# a 124-byte DDS_HEADER plus an optional 20-byte DDS_HEADER_DXT10 plus a
+# tail of mip / array / face / depth-slice surfaces. Every relevant
+# field is attacker-controlled and feeds offset and allocation maths:
+#
+#   * `width` / `height` / `depth` / `mip_map_count` / `array_size`
+#     drive surface-byte computation; pathological combinations can
+#     produce 16 EiB claimed payloads that the decoder must reject
+#     rather than `panic` / `usize::checked_mul` overflow / OOM.
+#   * `four_cc` mapping to `DXT1..DXT5` / `BC4U` / `BC4S` / `BC5U` /
+#     `BC5S` / `ATI1` / `ATI2` / `DX10` picks the layout resolver.
+#   * `dxt10.dxgi_format` opens the full 1..=132 DXGI table, including
+#     reserved / unsupported / planar / palette / video formats.
+#   * `dxt10.resource_dimension` and `misc_flag` cubemap-vs-volume-vs-
+#     2D selection.
+#   * `flags` / `caps` / `caps2` bitfields gate which dimensions are
+#     valid, and a hostile combination (`DDSD_DEPTH | DDSCAPS_CUBEMAP`)
+#     must be rejected, not crash.
+#
+# In addition the BC1..BC7 + BC6H decoders all take `(input, width,
+# height, output)` quadruples; a malicious DDS file (or even a direct
+# caller) can pick `width = u32::MAX, input.len() = 0` and ask the
+# decoder to crash. The harness probes each of those entry points
+# directly off the same fuzz bytes — the harness's interpretation of
+# the leading two bytes as `(width, height)` is just so the fuzzer can
+# evolve corner-case sizes.
+#
+# Built with the default `registry` feature OFF so the harness exercises
+# the standalone (`oxideav-core`-free) decode path; the fuzz targets
+# import the framework-free public surface only.
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.oxideav-dds]
+path = ".."
+default-features = false
+
+# Prevent this from interfering with the umbrella workspace.
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "parse_dds"
+path = "fuzz_targets/parse_dds.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "decode_bcn"
+path = "fuzz_targets/decode_bcn.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "decode_bc6h"
+path = "fuzz_targets/decode_bc6h.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "decode_bc7"
+path = "fuzz_targets/decode_bc7.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "roundtrip"
+path = "fuzz_targets/roundtrip.rs"
+test = false
+doc = false

@@ -1,0 +1,26 @@
+name: Fuzz
+
+# Daily fuzz run for the cargo-fuzz harnesses under fuzz/. DDS has the
+# wide attack surface of any header-driven binary container — 124-byte
+# DDS_HEADER + optional 20-byte DDS_HEADER_DXT10 + a mip / array / face /
+# depth-slice surface tail, with every relevant length / count /
+# format-code field attacker-controlled and feeding offset and
+# allocation maths. On top of that the BC1..BC7 + BC6H decoders each
+# take their own `(input, width, height, output)` quadruple where the
+# caller picks the dimensions, so they're fuzzed as individual entry
+# points rather than only through the parser. The 30-minute total
+# budget is split across the five targets the org reusable workflow
+# discovers (parse_dds / decode_bcn / decode_bc6h / decode_bc7 /
+# roundtrip).
+
+on:
+  schedule:
+    - cron: "53 7 * * *"   # daily 07:53 UTC, jittered off the hour
+  workflow_dispatch:
+
+jobs:
+  fuzz:
+    uses: OxideAV/.github/.github/workflows/crate-fuzz.yml@master
+    with:
+      time_budget_seconds: 1800
+    secrets: inherit
