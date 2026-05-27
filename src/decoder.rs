@@ -283,13 +283,31 @@ fn pixel_format_from_dxgi(d: DxgiFormat) -> Option<DdsPixelFormat> {
 }
 
 /// Compute the in-memory mip-0 surface size in bytes for `pix` at the
-/// given dimensions.
-fn surface_size_bytes(pix: DdsPixelFormat, width: u32, height: u32) -> u64 {
+/// given dimensions. Returns `Err(DdsError::invalid)` if the multiplication
+/// would overflow `u64`, so adversarial header values cannot panic this
+/// path in a debug build.
+fn surface_size_bytes(pix: DdsPixelFormat, width: u32, height: u32) -> Result<u64> {
     if let Some(bb) = pix.block_bytes() {
-        return block_compressed_surface_size(width, height, bb);
+        let bw = (width.max(1).div_ceil(4)) as u64;
+        let bh = (height.max(1).div_ceil(4)) as u64;
+        return bw
+            .checked_mul(bh)
+            .and_then(|n| n.checked_mul(bb as u64))
+            .ok_or_else(|| {
+                DdsError::invalid(format!(
+                    "BC surface size overflow for {width}x{height} × {bb} byte blocks"
+                ))
+            });
     }
-    let bpp = pix.bytes_per_pixel().expect("uncompressed format");
-    width as u64 * height as u64 * bpp as u64
+    let bpp = pix.bytes_per_pixel().expect("uncompressed format") as u64;
+    (width as u64)
+        .checked_mul(height as u64)
+        .and_then(|n| n.checked_mul(bpp))
+        .ok_or_else(|| {
+            DdsError::invalid(format!(
+                "uncompressed surface size overflow for {width}x{height} × {bpp} bpp"
+            ))
+        })
 }
 
 /// Per-row stride for `pix` at the given width. For block-compressed
@@ -379,6 +397,27 @@ pub fn parse_dds(bytes: &[u8]) -> Result<DdsImage> {
         1
     };
 
+    // Reject mip counts the on-disk dimensions cannot possibly justify.
+    // The maximum useful mip level for a w×h surface is
+    // `1 + floor(log2(max(w, h)))` (the chain bottoms out at 1×1). A
+    // forged `u32::MAX` or any value greater than the dim-implied cap is
+    // either malicious (over-allocation / shift-overflow attempt) or
+    // malformed; either way we surface InvalidData rather than walk the
+    // shift loop and panic at `width >> 32`. Depth is folded in below
+    // once the volume-texture detection has run.
+    let max_dim = width.max(height);
+    let max_mip_for_2d = if max_dim == 0 {
+        1
+    } else {
+        // 32 - leading_zeros gives `1 + floor(log2(max_dim))` for max_dim ≥ 1.
+        (32 - max_dim.leading_zeros()).max(1)
+    };
+    if mip_count > max_mip_for_2d {
+        return Err(DdsError::invalid(format!(
+            "DDS mip_map_count = {mip_count} exceeds dimension-implied cap of {max_mip_for_2d} for {width}x{height}",
+        )));
+    }
+
     // Cubemap detection: legacy header sets DDSCAPS2_CUBEMAP plus the
     // six per-face presence bits; DX10 header sets
     // DDS_RESOURCE_MISC_TEXTURECUBE in misc_flag.
@@ -426,6 +465,34 @@ pub fn parse_dds(bytes: &[u8]) -> Result<DdsImage> {
         ));
     }
 
+    // Bound the per-axis dimensions one more time now that depth is known.
+    // A forged `header.depth = u32::MAX` with a legitimate w×h would let an
+    // attacker request multi-billion slice loops; we cap at the dimension-
+    // implied mip count again (volume mips halve depth alongside w/h).
+    if is_volume {
+        let max_dim_3d = width.max(height).max(base_depth);
+        let max_mip_for_3d = if max_dim_3d == 0 {
+            1
+        } else {
+            (32 - max_dim_3d.leading_zeros()).max(1)
+        };
+        if mip_count > max_mip_for_3d {
+            return Err(DdsError::invalid(format!(
+                "DDS volume mip_map_count = {mip_count} exceeds dimension-implied cap of {max_mip_for_3d} for {width}x{height}x{base_depth}",
+            )));
+        }
+        // Also bound the mip-0 slice count itself: it must not exceed the
+        // dimension-implied cap on the smaller axes (otherwise the parser
+        // tries to walk a 4-billion-slice loop at mip 0 alone).
+        let slice_cap = 1u32 << (max_mip_for_3d - 1);
+        if base_depth > slice_cap.saturating_mul(2) {
+            return Err(DdsError::invalid(format!(
+                "DDS volume base_depth = {base_depth} exceeds 2 × dimension-implied cap ({})",
+                slice_cap.saturating_mul(2),
+            )));
+        }
+    }
+
     // Order Microsoft mandates for cubemap faces (PX, NX, PY, NY,
     // PZ, NZ). Skip faces whose presence bit is clear.
     let face_indices: Vec<CubemapFace> = if is_cubemap {
@@ -451,18 +518,45 @@ pub fn parse_dds(bytes: &[u8]) -> Result<DdsImage> {
         .map(|m| ((width >> m).max(1), (height >> m).max(1)))
         .collect();
 
-    let surfaces_per_slice = if !face_indices.is_empty() {
-        face_indices.len() * mip_count as usize
+    let surfaces_per_slice: usize = if !face_indices.is_empty() {
+        face_indices
+            .len()
+            .checked_mul(mip_count as usize)
+            .ok_or_else(|| {
+                DdsError::invalid(format!(
+                    "DDS surfaces_per_slice overflow: {} faces × {} mips",
+                    face_indices.len(),
+                    mip_count,
+                ))
+            })?
     } else if is_volume {
         // One surface per (mip, depth_slice). Depth halves each mip
-        // level (floored to 1).
+        // level (floored to 1). All summands are bounded by `base_depth`
+        // which has been clamped above, so the running sum fits in a
+        // `usize`.
         (0..mip_count)
-            .map(|m| (base_depth >> m).max(1) as usize)
+            .map(|m| (base_depth >> m.min(31)).max(1) as usize)
             .sum()
     } else {
         mip_count as usize
     };
-    let total_surfaces = array_size as usize * surfaces_per_slice;
+    let total_surfaces = (array_size as usize)
+        .checked_mul(surfaces_per_slice)
+        .ok_or_else(|| {
+            DdsError::invalid(format!(
+                "DDS total_surfaces overflow: array_size {} × {} surfaces/slice",
+                array_size, surfaces_per_slice,
+            ))
+        })?;
+    // Even if the multiplication fits in a `usize`, a Vec::with_capacity
+    // for billions of entries is itself a panic risk on most allocators;
+    // reject anything larger than a generous practical cap.
+    const SURFACE_HARD_CAP: usize = 1 << 20; // 1M surfaces
+    if total_surfaces > SURFACE_HARD_CAP {
+        return Err(DdsError::invalid(format!(
+            "DDS total_surfaces = {total_surfaces} exceeds hard cap of {SURFACE_HARD_CAP}",
+        )));
+    }
 
     let mut surfaces: Vec<DdsSurface> = Vec::with_capacity(total_surfaces);
     let mut cursor = pixel_data_off;
@@ -476,7 +570,7 @@ pub fn parse_dds(bytes: &[u8]) -> Result<DdsImage> {
         for (mi, &(mw, mh)) in mip_dims.iter().enumerate() {
             let mip_depth = (base_depth >> mi).max(1);
             for z in 0..mip_depth {
-                let sb = surface_size_bytes(pix, mw, mh) as usize;
+                let sb = surface_size_bytes(pix, mw, mh)? as usize;
                 if bytes.len() < cursor + sb {
                     return Err(DdsError::invalid(format!(
                         "DDS pixel data truncated at mip={mi} slice={z} ({mw}x{mh}): need {sb} bytes, have {}",
@@ -503,7 +597,7 @@ pub fn parse_dds(bytes: &[u8]) -> Result<DdsImage> {
         for ai in 0..array_size {
             if face_indices.is_empty() {
                 for (mi, &(mw, mh)) in mip_dims.iter().enumerate() {
-                    let sb = surface_size_bytes(pix, mw, mh) as usize;
+                    let sb = surface_size_bytes(pix, mw, mh)? as usize;
                     if bytes.len() < cursor + sb {
                         return Err(DdsError::invalid(format!(
                             "DDS pixel data truncated at array={ai} mip={mi} ({mw}x{mh}): need {sb} bytes, have {}",
@@ -528,7 +622,7 @@ pub fn parse_dds(bytes: &[u8]) -> Result<DdsImage> {
             } else {
                 for face in face_indices.iter() {
                     for (mi, &(mw, mh)) in mip_dims.iter().enumerate() {
-                        let sb = surface_size_bytes(pix, mw, mh) as usize;
+                        let sb = surface_size_bytes(pix, mw, mh)? as usize;
                         if bytes.len() < cursor + sb {
                             return Err(DdsError::invalid(format!(
                                 "DDS pixel data truncated at array={ai} face={} mip={mi} ({mw}x{mh}): need {sb} bytes, have {}",

@@ -9,6 +9,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Injection-robustness property tests for `parse_dds` + every
+  `decode_bc*` entry (round 162).** New `tests/injection_robustness.rs`
+  carries 40 hard-asserted cases that build a known-good DDS byte
+  stream, mutate a single field (bad magic, bad header size, bad pixel-
+  format size, zero width / height, missing required flags, DXT10
+  fourCC without extension bytes, unsupported legacy / DXGI format,
+  truncated payload, forged `mip_map_count = u32::MAX`, forged
+  `array_size = u32::MAX`, forged cubemap × array overflow, forged
+  volume `depth = u32::MAX`, volume + cubemap combined,
+  `width = height = u32::MAX`, etc.) and assert `parse_dds` returns
+  `Err(DdsError::…)` rather than panicking. Also covers
+  `decode_bc1` / `decode_bc2` / `decode_bc3` / `decode_bc4_unorm` /
+  `decode_bc4_snorm` / `decode_bc5_unorm` / `decode_bc5_snorm` /
+  `decode_bc6h` / `decode_bc7` short-input + short-output paths.
+
+### Fixed
+
+- **Panic-on-overflow regressions in `parse_dds` (round 162).** The
+  injection tests above caught four real panic paths that a hostile
+  DDS file could trigger:
+  * `surface_size_bytes` multiplied `width × height × bpp` in `u64`
+    without checked arithmetic; `u32::MAX × u32::MAX × 4` overflowed
+    `u64` in a debug build. Now uses `checked_mul` and surfaces an
+    `InvalidData("uncompressed surface size overflow …")` error.
+  * `(width >> m).max(1)` panicked when `m >= 32` (e.g.,
+    `mip_map_count = u32::MAX`). The parser now rejects any
+    `mip_map_count` greater than `1 + floor(log2(max(width, height)))`
+    — the dimension-implied cap. Same check on the volume path with
+    depth folded in.
+  * `array_size as usize * surfaces_per_slice` could overflow `usize`
+    on 64-bit targets when both factors carry attacker-controlled
+    `u32::MAX` values. Now uses `checked_mul` and additionally rejects
+    a `total_surfaces` above a 1 M hard cap before calling
+    `Vec::with_capacity`, so a forged header can never request a
+    multi-billion-entry surface vector.
+  * `block_compressed_surface_size` is now saturating rather than
+    wrapping, mirroring the `surface_size_bytes` change.
+
 - **`cargo-fuzz` harness with five panic-free targets (round 156)** —
   new `fuzz/` directory carrying a sibling `Cargo.toml` and five
   fuzz targets exercising every attacker-controlled entry point:

@@ -683,5 +683,8 @@ impl DxgiFormat {
 pub fn block_compressed_surface_size(width: u32, height: u32, block_bytes: u32) -> u64 {
     let bw = width.max(1).div_ceil(4) as u64;
     let bh = height.max(1).div_ceil(4) as u64;
-    bw * bh * block_bytes as u64
+    // Saturating so a forged (u32::MAX, u32::MAX) returns `u64::MAX` rather
+    // than panicking in a debug build (callers compare against buffer
+    // length and reject anyway).
+    bw.saturating_mul(bh).saturating_mul(block_bytes as u64)
 }

@@ -119,6 +119,27 @@ Coverage as of round 77:
   `decode_bc1..bc7` / `decode_bc6h` / `encode_bc1..bc5` API plus
   crate-local `DdsImage` / `DdsPixelFormat` / `DdsError` types built on `std`.
 
+Injection-robustness property tests (round 162): a 40-case
+`tests/injection_robustness.rs` builds a known-good DDS byte stream,
+mutates a single field at a time (bad magic, bad header / pixel-format
+sizes, zero width / height, missing required flags, DXT10 fourCC
+without extension bytes, unsupported legacy / DXGI format, truncated
+payload, forged `mip_map_count = u32::MAX`, forged
+`array_size = u32::MAX`, forged cubemap × array overflow, forged
+volume `depth = u32::MAX`, volume + cubemap combined, `width =
+height = u32::MAX`, …) and asserts `parse_dds` returns `Err` instead
+of panicking. The round also closed four real panic paths the tests
+caught: `surface_size_bytes` `u64` multiplication now uses
+`checked_mul`; `mip_map_count` is rejected against the dimension-
+implied cap `1 + floor(log2(max(w, h)))` so `(width >> 32)` shift-
+overflow can't happen; `array_size × surfaces_per_slice` uses
+`checked_mul` and `total_surfaces` is rejected above a 1 M hard cap
+before `Vec::with_capacity` is called; `block_compressed_surface_size`
+is now saturating. The `decode_bc1` / `decode_bc2` / `decode_bc3` /
+`decode_bc4_unorm` / `decode_bc4_snorm` / `decode_bc5_unorm` /
+`decode_bc5_snorm` / `decode_bc6h` / `decode_bc7` short-input and
+short-output paths are also asserted.
+
 Continuous fuzzing (round 156): five `cargo-fuzz` panic-free targets
 under `fuzz/` — `parse_dds` (full container), `decode_bcn` (every
 BC1..BC5 entry point including `u32::MAX` block-grid + zero-output
