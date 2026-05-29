@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`encode_bc4_snorm` + `encode_bc5_snorm` (round 182).** Signed-
+  channel encoders mirroring the existing `encode_bc4_unorm` /
+  `encode_bc5_unorm` paths. Inputs are treated as `i8` per Microsoft's
+  `BC4_SNORM` / `BC5_SNORM` convention and the reserved -128
+  codepoint is clamped to -127 so it never appears as an endpoint
+  or palette entry (matches the decoder's `clamp(-127, 127)` on the
+  palette side). Endpoint selection still uses the
+  furthest-point heuristic; the 8-value interpolation mode is
+  selected whenever `max > min` (i.e. on every non-degenerate block).
+  Encoder uses `i16` arithmetic + `div_euclid` to match the decoder's
+  signed-division behaviour on negative palette entries. Ten new
+  unit tests in `src/bcn_enc.rs` cover solid-zero, ±127 saturation,
+  reserved-`-128` clamping, two-value bit-exact roundtrip, signed
+  gradient (max absolute error ≤ 22 over a 16-pixel uniform range),
+  endpoint-ordering (`a0 > a1` confirms 8-value mode), BC5 independent-
+  channel roundtrip (R varies, G constant), 5×3 non-aligned dimensions
+  and short-buffer rejection for both `encode_bc4_snorm` and
+  `encode_bc5_snorm`. Closes the encoder gap relative to the existing
+  `decode_bc4_snorm` / `decode_bc5_snorm` decoders.
+
 ### Fixed
 
 - **Panic-on-overflow regressions in `decode_bc6h` / `decode_bc7` /

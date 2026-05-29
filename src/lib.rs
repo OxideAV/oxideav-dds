@@ -35,9 +35,12 @@
 //!   and `BC6H_SF16` (signed) finalisation paths are supported.
 //! * **BC1 + BC2 + BC3 + BC4 + BC5 encoders** via
 //!   [`encode_bc1`], [`encode_bc2`], [`encode_bc3`],
-//!   [`encode_bc4_unorm`], [`encode_bc5_unorm`] — RGBA8 / R8 / RG8 in,
-//!   block bytes out, furthest-point endpoint heuristic, bit-exact
-//!   roundtrip on solid blocks.
+//!   [`encode_bc4_unorm`], [`encode_bc4_snorm`], [`encode_bc5_unorm`],
+//!   [`encode_bc5_snorm`] — RGBA8 / R8 / RG8 in, block bytes out,
+//!   furthest-point endpoint heuristic, bit-exact roundtrip on solid
+//!   blocks. The SNORM pair (round 182) treats inputs as i8 and
+//!   clamps the reserved -128 codepoint to -127 per Microsoft's
+//!   BC4/BC5 spec.
 //! * **BC6H multi-mode encoder** via [`encode_bc6h`] (and the f32-input
 //!   convenience [`encode_bc6h_from_f32`]). Round-3 shipped mode 10
 //!   (1-subset, 10.10 absolute endpoint precision, 4-bit indices). Round
@@ -161,7 +164,10 @@ pub use bcn::{
     decode_bc1, decode_bc2, decode_bc3, decode_bc4_snorm, decode_bc4_unorm, decode_bc5_snorm,
     decode_bc5_unorm,
 };
-pub use bcn_enc::{encode_bc1, encode_bc2, encode_bc3, encode_bc4_unorm, encode_bc5_unorm};
+pub use bcn_enc::{
+    encode_bc1, encode_bc2, encode_bc3, encode_bc4_snorm, encode_bc4_unorm, encode_bc5_snorm,
+    encode_bc5_unorm,
+};
 pub use decoder::parse_dds;
 pub use encoder::{
     encode_dds_block_compressed, encode_dds_block_compressed_from_rgba8, encode_dds_uncompressed,

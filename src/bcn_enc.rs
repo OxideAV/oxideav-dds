@@ -1,5 +1,9 @@
 //! BCn block encoders — round 3 shipped BC1 (DXT1); round 4 adds
 //! BC2 (DXT3), BC3 (DXT5), BC4 (single channel) and BC5 (two channel).
+//! Round 182 adds the SNORM siblings (`encode_bc4_snorm`,
+//! `encode_bc5_snorm`) for signed-channel content (normal maps,
+//! signed displacement, signed distance fields), matching the
+//! existing `decode_bc4_snorm` / `decode_bc5_snorm` decoder coverage.
 //!
 //! Reference: Microsoft's public "BC1, BC2 and BC3" + "BC4" + "BC5"
 //! articles on learn.microsoft.com (block layout, c0/c1 ordering,
@@ -580,6 +584,192 @@ pub fn encode_bc5_unorm(input: &[u8], width: u32, height: u32, output: &mut [u8]
     Ok(())
 }
 
+// ----- BC4/BC5 SNORM encoders --------------------------------------------
+//
+// Signed counterpart to `encode_bc4_unorm_block`. SNORM endpoints are
+// stored as i8 in bytes 0/1 of the block; valid range is [-127, 127]
+// with the -128 codepoint reserved (Microsoft directs encoders to
+// clamp -128 to -127 to preserve the symmetric range). The 8-value
+// "a0 > a1" interpolation mode and the 6-value "a0 <= a1" mode are
+// both available, just with the two reserved palette entries pinned
+// to -127 and +127 instead of 0 and 255.
+//
+// The caller hands us 16 already-clamped i8 samples. We pick the two
+// extrema (max + min) as endpoint candidates, then choose the 8-value
+// mode iff that order yields strictly `a0 > a1` (Microsoft's
+// 8-value-mode trigger). If max == min the block is degenerate and we
+// emit a0 == a1 == sample with all indices = 0. Each pixel is mapped
+// to the nearest palette entry by absolute distance.
+
+#[inline]
+fn r8_signed_at(pixels: &[u8], x: u32, y: u32, stride: usize) -> i8 {
+    pixels[y as usize * stride + x as usize] as i8
+}
+
+#[inline]
+fn rg8_signed_at(pixels: &[u8], x: u32, y: u32, stride: usize) -> (i8, i8) {
+    let off = y as usize * stride + x as usize * 2;
+    (pixels[off] as i8, pixels[off + 1] as i8)
+}
+
+/// Encode a single 4×4 block of i8 samples into an 8-byte BC4_SNORM
+/// block. Mirrors `encode_bc4_unorm_block`'s structure but operates
+/// on signed values with the reserved -128 endpoint clamped to -127.
+fn encode_bc4_snorm_block(pixels: &[i8; 16]) -> [u8; 8] {
+    // Microsoft reserves -128: clamp inbound samples to [-127, 127] so
+    // we never *select* -128 as an endpoint.
+    let mut clamped = [0i8; 16];
+    for (i, &p) in pixels.iter().enumerate() {
+        clamped[i] = p.max(-127);
+    }
+    let mut max = i8::MIN;
+    let mut min = i8::MAX;
+    for &p in clamped.iter() {
+        if p > max {
+            max = p;
+        }
+        if p < min {
+            min = p;
+        }
+    }
+    if max == min {
+        // Degenerate block — a0 == a1, all indices zero, decoder yields
+        // exactly `max` for every pixel.
+        let mut out = [0u8; 8];
+        out[0] = max as u8;
+        out[1] = min as u8;
+        return out;
+    }
+    let a0 = max;
+    let a1 = min;
+    // 8-value palette: a0, a1, (6 a0 + a1)/7, (5 a0 + 2 a1)/7, ...,
+    // (a0 + 6 a1)/7. Decoder uses div_euclid to round signed values
+    // toward -inf; we match that here so encoder/decoder agree on the
+    // palette before nearest-neighbour search.
+    let mut palette = [0i16; 8];
+    palette[0] = a0 as i16;
+    palette[1] = a1 as i16;
+    for k in 1..=6i16 {
+        let num = (7 - k) * a0 as i16 + k * a1 as i16;
+        palette[(k + 1) as usize] = num.div_euclid(7);
+    }
+    let mut packed: u64 = 0;
+    for (i, &p) in clamped.iter().enumerate() {
+        let mut best = 0u32;
+        let mut best_d = i32::MAX;
+        for (k, &pal) in palette.iter().enumerate() {
+            let d = (p as i32 - pal as i32).abs();
+            if d < best_d {
+                best_d = d;
+                best = k as u32;
+            }
+        }
+        packed |= (best as u64 & 0x7) << (i * 3);
+    }
+    let mut out = [0u8; 8];
+    out[0] = a0 as u8;
+    out[1] = a1 as u8;
+    let bytes = packed.to_le_bytes();
+    out[2..8].copy_from_slice(&bytes[0..6]);
+    out
+}
+
+/// Encode an R8 surface (reinterpreted as i8 per Microsoft's
+/// `BC4_SNORM` convention) to BC4_SNORM. `input.len() >= width *
+/// height`, `output.len() >= ceil(w/4) * ceil(h/4) * 8`.
+pub fn encode_bc4_snorm(input: &[u8], width: u32, height: u32, output: &mut [u8]) -> Result<()> {
+    let bw = width.max(1).div_ceil(4) as usize;
+    let bh = height.max(1).div_ceil(4) as usize;
+    let want_in = width as usize * height as usize;
+    if input.len() < want_in {
+        return Err(DdsError::invalid(format!(
+            "BC4_SNORM encoder input {} bytes < expected {} bytes for {}x{}",
+            input.len(),
+            want_in,
+            width,
+            height
+        )));
+    }
+    let want_out = bw * bh * 8;
+    if output.len() < want_out {
+        return Err(DdsError::invalid(format!(
+            "BC4_SNORM encoder output {} bytes < expected {} bytes for {}x{}",
+            output.len(),
+            want_out,
+            width,
+            height
+        )));
+    }
+    let stride = width as usize;
+    for by in 0..bh {
+        for bx in 0..bw {
+            let mut block = [0i8; 16];
+            for py in 0..4u32 {
+                let yy = ((by as u32) * 4 + py).min(height.saturating_sub(1));
+                for px in 0..4u32 {
+                    let xx = ((bx as u32) * 4 + px).min(width.saturating_sub(1));
+                    block[(py * 4 + px) as usize] = r8_signed_at(input, xx, yy, stride);
+                }
+            }
+            let bc = encode_bc4_snorm_block(&block);
+            let off = (by * bw + bx) * 8;
+            output[off..off + 8].copy_from_slice(&bc);
+        }
+    }
+    Ok(())
+}
+
+/// Encode an interleaved RG8 surface (reinterpreted as i8 pairs per
+/// Microsoft's `BC5_SNORM` convention) to BC5_SNORM. `input.len() >=
+/// width * height * 2`, `output.len() >= ceil(w/4) * ceil(h/4) * 16`.
+pub fn encode_bc5_snorm(input: &[u8], width: u32, height: u32, output: &mut [u8]) -> Result<()> {
+    let bw = width.max(1).div_ceil(4) as usize;
+    let bh = height.max(1).div_ceil(4) as usize;
+    let want_in = width as usize * height as usize * 2;
+    if input.len() < want_in {
+        return Err(DdsError::invalid(format!(
+            "BC5_SNORM encoder input {} bytes < expected {} bytes for {}x{}",
+            input.len(),
+            want_in,
+            width,
+            height
+        )));
+    }
+    let want_out = bw * bh * 16;
+    if output.len() < want_out {
+        return Err(DdsError::invalid(format!(
+            "BC5_SNORM encoder output {} bytes < expected {} bytes for {}x{}",
+            output.len(),
+            want_out,
+            width,
+            height
+        )));
+    }
+    let stride = width as usize * 2;
+    for by in 0..bh {
+        for bx in 0..bw {
+            let mut r = [0i8; 16];
+            let mut g = [0i8; 16];
+            for py in 0..4u32 {
+                let yy = ((by as u32) * 4 + py).min(height.saturating_sub(1));
+                for px in 0..4u32 {
+                    let xx = ((bx as u32) * 4 + px).min(width.saturating_sub(1));
+                    let (rr, gg) = rg8_signed_at(input, xx, yy, stride);
+                    let i = (py * 4 + px) as usize;
+                    r[i] = rr;
+                    g[i] = gg;
+                }
+            }
+            let r_bc = encode_bc4_snorm_block(&r);
+            let g_bc = encode_bc4_snorm_block(&g);
+            let off = (by * bw + bx) * 16;
+            output[off..off + 8].copy_from_slice(&r_bc);
+            output[off + 8..off + 16].copy_from_slice(&g_bc);
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -874,6 +1064,243 @@ mod tests {
             psnr > 25.0,
             "BC1 16x16 RGB-gradient PSNR = {:.2} dB (want > 25 dB)",
             psnr
+        );
+    }
+
+    // ---- BC4_SNORM / BC5_SNORM encoder tests --------------------------
+    //
+    // Round 182: signed-channel encoders mirroring the existing
+    // `encode_bc4_unorm` / `encode_bc5_unorm`. Decoder side is
+    // `decode_bc4_snorm` / `decode_bc5_snorm` (i8 in, i8-reinterpreted
+    // u8 out).
+
+    use crate::bcn::{decode_bc4_snorm, decode_bc5_snorm};
+
+    /// Solid-zero block: every byte = 0i8. Encoder picks max = min = 0,
+    /// emits degenerate a0==a1==0 block, decoder rebuilds zeroes.
+    #[test]
+    fn bc4_snorm_encode_solid_zero_roundtrip() {
+        let input = vec![0u8; 4 * 4];
+        let mut bc = vec![0u8; 8];
+        encode_bc4_snorm(&input, 4, 4, &mut bc).unwrap();
+        let mut decoded = vec![0u8; 4 * 4];
+        decode_bc4_snorm(&bc, 4, 4, &mut decoded).unwrap();
+        for &b in decoded.iter() {
+            assert_eq!(b as i8, 0);
+        }
+    }
+
+    /// Solid positive saturation: every byte = +127 (0x7f). Bit-exact.
+    #[test]
+    fn bc4_snorm_encode_solid_positive_roundtrip() {
+        let input = vec![127u8; 4 * 4];
+        let mut bc = vec![0u8; 8];
+        encode_bc4_snorm(&input, 4, 4, &mut bc).unwrap();
+        let mut decoded = vec![0u8; 4 * 4];
+        decode_bc4_snorm(&bc, 4, 4, &mut decoded).unwrap();
+        for &b in decoded.iter() {
+            assert_eq!(b as i8, 127);
+        }
+    }
+
+    /// Solid negative saturation: every byte = -127 (0x81). Bit-exact.
+    /// (-128, the reserved value, would be clamped to -127 by the
+    /// encoder — verified by the dedicated test below.)
+    #[test]
+    fn bc4_snorm_encode_solid_negative_roundtrip() {
+        let input = vec![(-127i8) as u8; 4 * 4];
+        let mut bc = vec![0u8; 8];
+        encode_bc4_snorm(&input, 4, 4, &mut bc).unwrap();
+        let mut decoded = vec![0u8; 4 * 4];
+        decode_bc4_snorm(&bc, 4, 4, &mut decoded).unwrap();
+        for &b in decoded.iter() {
+            assert_eq!(b as i8, -127);
+        }
+    }
+
+    /// The reserved -128 codepoint must be clamped to -127 by the
+    /// encoder so it never appears as an endpoint or palette entry.
+    /// After roundtrip every sample should decode as -127.
+    #[test]
+    fn bc4_snorm_reserved_minus_128_is_clamped() {
+        let input = vec![(-128i8) as u8; 4 * 4];
+        let mut bc = vec![0u8; 8];
+        encode_bc4_snorm(&input, 4, 4, &mut bc).unwrap();
+        // Endpoints in bytes 0/1 must be -127, not -128.
+        assert_eq!(bc[0] as i8, -127);
+        assert_eq!(bc[1] as i8, -127);
+        let mut decoded = vec![0u8; 4 * 4];
+        decode_bc4_snorm(&bc, 4, 4, &mut decoded).unwrap();
+        for &b in decoded.iter() {
+            assert_eq!(b as i8, -127);
+        }
+    }
+
+    /// Two-value block — half -64, half +64. Endpoints quantise to
+    /// (max=+64, min=-64); every pixel lands on one of the two
+    /// endpoints, so the roundtrip is bit-exact.
+    #[test]
+    fn bc4_snorm_encode_two_value_roundtrip() {
+        let mut input = vec![0u8; 4 * 4];
+        for (i, slot) in input.iter_mut().enumerate() {
+            *slot = if i & 1 == 0 { 64u8 } else { (-64i8) as u8 };
+        }
+        let mut bc = vec![0u8; 8];
+        encode_bc4_snorm(&input, 4, 4, &mut bc).unwrap();
+        let mut decoded = vec![0u8; 4 * 4];
+        decode_bc4_snorm(&bc, 4, 4, &mut decoded).unwrap();
+        for (i, &b) in decoded.iter().enumerate() {
+            let expected = if i & 1 == 0 { 64i8 } else { -64i8 };
+            assert_eq!(b as i8, expected, "pixel {i}");
+        }
+    }
+
+    /// A signed gradient -120..+126 in steps of ~16 across 16 pixels.
+    /// Not necessarily bit-exact (8-value palette can't represent all
+    /// 16 distinct values), but the maximum absolute error per pixel
+    /// must be bounded — for an 8-entry uniform palette over a range
+    /// of 246 (= 123 - (-123) rounded), worst-case error is about 246
+    /// / 14 ≈ 18.
+    #[test]
+    fn bc4_snorm_encode_signed_gradient_bounded_error() {
+        let mut input = vec![0u8; 4 * 4];
+        for (i, slot) in input.iter_mut().enumerate() {
+            // step ~16, range -120..120
+            let v: i32 = -120 + (i as i32 * 16);
+            *slot = (v.clamp(-127, 127) as i8) as u8;
+        }
+        let mut bc = vec![0u8; 8];
+        encode_bc4_snorm(&input, 4, 4, &mut bc).unwrap();
+        let mut decoded = vec![0u8; 4 * 4];
+        decode_bc4_snorm(&bc, 4, 4, &mut decoded).unwrap();
+        let mut max_err: i32 = 0;
+        for (s_byte, d_byte) in input.iter().zip(decoded.iter()) {
+            let s = *s_byte as i8 as i32;
+            let d = *d_byte as i8 as i32;
+            let e = (s - d).abs();
+            if e > max_err {
+                max_err = e;
+            }
+        }
+        assert!(
+            max_err <= 22,
+            "BC4_SNORM signed-gradient max abs err = {} (want <= 22)",
+            max_err
+        );
+    }
+
+    /// Endpoint ordering when max > min selects the 8-value mode
+    /// (`a0 > a1`), which gives 8 distinct palette entries spanning
+    /// the range and matches the decoder. Verify the emitted block's
+    /// first two bytes reflect (max, min).
+    #[test]
+    fn bc4_snorm_encode_endpoint_order_picks_8_value_mode() {
+        let mut input = vec![0u8; 4 * 4];
+        // values: 0..=30 mixed with -30..=-1 to force max=+30, min=-30.
+        for (i, slot) in input.iter_mut().enumerate() {
+            *slot = if i & 1 == 0 { 30u8 } else { (-30i8) as u8 };
+        }
+        let mut bc = vec![0u8; 8];
+        encode_bc4_snorm(&input, 4, 4, &mut bc).unwrap();
+        assert_eq!(bc[0] as i8, 30, "a0 should be max (+30)");
+        assert_eq!(bc[1] as i8, -30, "a1 should be min (-30)");
+        // a0 > a1 confirms 8-value mode is in effect at the decoder.
+        assert!((bc[0] as i8) > (bc[1] as i8));
+    }
+
+    /// BC5_SNORM solid-zero RG roundtrip.
+    #[test]
+    fn bc5_snorm_encode_solid_zero_roundtrip() {
+        let input = vec![0u8; 4 * 4 * 2];
+        let mut bc = vec![0u8; 16];
+        encode_bc5_snorm(&input, 4, 4, &mut bc).unwrap();
+        let mut decoded = vec![0u8; 4 * 4 * 2];
+        decode_bc5_snorm(&bc, 4, 4, &mut decoded).unwrap();
+        for &b in decoded.iter() {
+            assert_eq!(b as i8, 0);
+        }
+    }
+
+    /// BC5_SNORM independent-channel roundtrip: R varies, G is
+    /// uniform. The two BC4 sub-blocks must encode independently
+    /// (R sub-block picks a non-degenerate palette; G sub-block
+    /// degenerates to a single value).
+    #[test]
+    fn bc5_snorm_encode_independent_channels() {
+        let mut input = vec![0u8; 4 * 4 * 2];
+        for (i, pair) in input.chunks_exact_mut(2).enumerate() {
+            // R alternates ±50, G constant +20.
+            pair[0] = if i & 1 == 0 { 50u8 } else { (-50i8) as u8 };
+            pair[1] = 20u8;
+        }
+        let mut bc = vec![0u8; 16];
+        encode_bc5_snorm(&input, 4, 4, &mut bc).unwrap();
+        let mut decoded = vec![0u8; 4 * 4 * 2];
+        decode_bc5_snorm(&bc, 4, 4, &mut decoded).unwrap();
+        for (i, pair) in decoded.chunks_exact(2).enumerate() {
+            let r_expected = if i & 1 == 0 { 50i8 } else { -50i8 };
+            assert_eq!(pair[0] as i8, r_expected, "R pixel {i}");
+            assert_eq!(pair[1] as i8, 20, "G pixel {i}");
+        }
+    }
+
+    /// BC5_SNORM block-size guards: short input rejected, short output
+    /// rejected (mirrors the unorm tests below this module).
+    #[test]
+    fn bc5_snorm_encode_rejects_short_buffers() {
+        let mut bc = vec![0u8; 16];
+        // 4 short.
+        let input = vec![0u8; 4 * 4 * 2 - 1];
+        assert!(encode_bc5_snorm(&input, 4, 4, &mut bc).is_err());
+        // Output too small.
+        let input = vec![0u8; 4 * 4 * 2];
+        let mut tiny = vec![0u8; 15];
+        assert!(encode_bc5_snorm(&input, 4, 4, &mut tiny).is_err());
+    }
+
+    /// BC4_SNORM block-size guards.
+    #[test]
+    fn bc4_snorm_encode_rejects_short_buffers() {
+        let mut bc = vec![0u8; 8];
+        let input = vec![0u8; 4 * 4 - 1];
+        assert!(encode_bc4_snorm(&input, 4, 4, &mut bc).is_err());
+        let input = vec![0u8; 4 * 4];
+        let mut tiny = vec![0u8; 7];
+        assert!(encode_bc4_snorm(&input, 4, 4, &mut tiny).is_err());
+    }
+
+    /// Non-aligned dimensions: 5×3 surface (one block in each axis
+    /// after rounding up). Encoder must pad the partial block with
+    /// edge replication and the decoder produces consistent values at
+    /// the valid pixel coordinates.
+    #[test]
+    fn bc4_snorm_encode_non_aligned_dimensions() {
+        // 5x3 R8 input → 2x1 block grid in X, 1 block in Y.
+        let mut input = vec![0u8; 5 * 3];
+        for (i, slot) in input.iter_mut().enumerate() {
+            *slot = ((i as i32 - 7) * 8).clamp(-127, 127) as i8 as u8;
+        }
+        let mut bc = vec![0u8; 2 * 8];
+        encode_bc4_snorm(&input, 5, 3, &mut bc).unwrap();
+        let mut decoded = vec![0u8; 5 * 3];
+        decode_bc4_snorm(&bc, 5, 3, &mut decoded).unwrap();
+        // Just sanity-check that valid pixels are within reasonable
+        // distance of their source — the partial-block padding doesn't
+        // affect the valid pixels' decoded values beyond the usual
+        // 8-value-palette quantisation.
+        let mut max_err: i32 = 0;
+        for (s_byte, d_byte) in input.iter().zip(decoded.iter()) {
+            let s = *s_byte as i8 as i32;
+            let d = *d_byte as i8 as i32;
+            let e = (s - d).abs();
+            if e > max_err {
+                max_err = e;
+            }
+        }
+        assert!(
+            max_err <= 30,
+            "BC4_SNORM 5x3 max err = {} (want <= 30)",
+            max_err
         );
     }
 }
