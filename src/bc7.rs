@@ -680,7 +680,11 @@ pub(crate) fn decode_bc7_block(block: &[u8; 16]) -> [[u8; 4]; 16] {
 pub fn decode_bc7(input: &[u8], width: u32, height: u32, output: &mut [u8]) -> Result<()> {
     let bw = width.max(1).div_ceil(4) as usize;
     let bh = height.max(1).div_ceil(4) as usize;
-    let want_in = bw * bh * 16;
+    // Saturate on overflow so the length check below rejects rather
+    // than triggering `panic_const_mul_overflow` (any real slice length
+    // is `< usize::MAX`). Fuzz-driven `width = height = u32::MAX`
+    // exercises this path.
+    let want_in = bw.saturating_mul(bh).saturating_mul(16);
     if input.len() < want_in {
         return Err(DdsError::invalid(format!(
             "BC7 input {} bytes < expected {} bytes for {}x{}",

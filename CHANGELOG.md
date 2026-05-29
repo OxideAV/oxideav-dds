@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Panic-on-overflow regressions in `decode_bc6h` / `decode_bc7` /
+  `decode_bc{1..=5}` (round 176).** The daily `cargo-fuzz` workflow
+  surfaced three crashes simultaneously on three targets
+  (`decode_bcn` / `decode_bc6h` / `decode_bc7`): every BC-block decoder
+  computed its required-input length as a `usize × usize × 16`
+  product, which trips `panic_const_mul_overflow` when the caller
+  supplies `width = height = u32::MAX` (a deliberate adversarial probe
+  in each fuzz harness). The same shape was present in the four
+  surface-size helpers (`rgba8_surface_bytes` / `rgba_half_surface_bytes`
+  / `r8_surface_bytes` / `rg8_surface_bytes`) and the `block_input_bytes`
+  helper. All six paths now use `saturating_mul`, so the
+  pre-existing `input.len() < want_in` / `output.len() < want_out`
+  length checks reject the surface rather than triggering a panic.
+  Thirteen regression tests added to `tests/injection_robustness.rs`
+  (one `does_not_panic` test per `decode_bc*` entry, plus three
+  verbatim-byte reproductions of the fuzz crash artifacts:
+  `decode_bc6h/crash-ebc0c3370c…`,
+  `decode_bc7/crash-c382ab7c10…`,
+  `decode_bcn/crash-3d19281e55…`). The three crash inputs are also
+  committed to the corpus directories under
+  `fuzz/corpus/decode_*/regression-r176-mul-overflow` so the daily
+  workflow re-validates the fix on every run.
+
 ### Added
 
 - **Injection-robustness property tests for `parse_dds` + every

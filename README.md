@@ -153,6 +153,21 @@ harness exercises the framework-free standalone decode path. Corpus
 seeded with the two existing crate fixtures plus six hand-crafted
 single-block BC blobs.
 
+Round 176 closes three real crashes the daily fuzz workflow surfaced
+on 2026-05-28: every BC-block decoder computed its required-input
+length as a `usize × usize × 16` product that overflowed when the
+caller fed `width = height = u32::MAX`. The `bw * bh * 16` product
+plus the four surface-size helpers
+(`rgba8_surface_bytes` / `rgba_half_surface_bytes` /
+`r8_surface_bytes` / `rg8_surface_bytes`) and the `block_input_bytes`
+helper now use `saturating_mul`, so the pre-existing length checks
+reject rather than panic. Thirteen regression tests added to
+`tests/injection_robustness.rs` (one `does_not_panic` case per
+`decode_bc*` entry plus verbatim-byte reproductions of the three
+crash artifacts the fuzzer reported), and the crash artifacts are
+also committed to the corpus directories so the workflow
+re-validates the fix on every run.
+
 Still deferred (followups):
 
 - LSQ refinement metric — current pixel-space LSQ is approximate; fitting

@@ -43,18 +43,32 @@
 use crate::error::{DdsError, Result};
 
 /// Total bytes for an RGBA8 (4 bytes/pixel) surface of `width × height`.
+///
+/// Uses saturating multiplication so the caller's
+/// `output.len() < want_out` length check still fires on `width =
+/// height = u32::MAX` (any real slice length is `< usize::MAX`).
+/// Without this the fuzzer can trip a multiplication panic before the
+/// length check runs.
 pub(crate) fn rgba8_surface_bytes(width: u32, height: u32) -> usize {
-    width as usize * height as usize * 4
+    (width as usize)
+        .saturating_mul(height as usize)
+        .saturating_mul(4)
 }
 
 /// Total bytes for a single-channel R8 surface of `width × height`.
+///
+/// See [`rgba8_surface_bytes`] for the saturating-on-overflow rationale.
 pub(crate) fn r8_surface_bytes(width: u32, height: u32) -> usize {
-    width as usize * height as usize
+    (width as usize).saturating_mul(height as usize)
 }
 
 /// Total bytes for a two-channel RG8 surface of `width × height`.
+///
+/// See [`rgba8_surface_bytes`] for the saturating-on-overflow rationale.
 pub(crate) fn rg8_surface_bytes(width: u32, height: u32) -> usize {
-    width as usize * height as usize * 2
+    (width as usize)
+        .saturating_mul(height as usize)
+        .saturating_mul(2)
 }
 
 /// Expand a 16-bit RGB565 endpoint to an `(r, g, b)` 8-bit triple
@@ -537,11 +551,19 @@ pub fn decode_bc5_snorm(input: &[u8], width: u32, height: u32, output: &mut [u8]
 
 // ---- Helpers ------------------------------------------------------------
 
+/// Required input byte length for a `width × height` BC-block surface
+/// where each block occupies `block_bytes`.
+///
+/// Uses saturating multiplication so the caller's
+/// `input.len() < want_in` length check still rejects the surface on
+/// `width = height = u32::MAX` (any real slice length is `<
+/// usize::MAX`). Without this the fuzzer can drive the multiplication
+/// to `panic_const_mul_overflow`.
 #[inline]
-fn block_input_bytes(width: u32, height: u32, block_bytes: u32) -> usize {
-    (width.max(1).div_ceil(4) as usize)
-        * (height.max(1).div_ceil(4) as usize)
-        * (block_bytes as usize)
+pub(crate) fn block_input_bytes(width: u32, height: u32, block_bytes: u32) -> usize {
+    let bw = width.max(1).div_ceil(4) as usize;
+    let bh = height.max(1).div_ceil(4) as usize;
+    bw.saturating_mul(bh).saturating_mul(block_bytes as usize)
 }
 
 /// Splat a 4×4 RGBA8 grid (`pixels[i] = [r, g, b, a]`) into the

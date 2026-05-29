@@ -585,3 +585,147 @@ fn legacy_dxt1_truncated_block_payload_errors() {
     let err = parse_dds(&bytes).expect_err("DXT1 truncated payload must error");
     assert!(format!("{err}").contains("truncated"));
 }
+
+// ---------------------------------------------------------------------------
+// Round 176: BC block-grid overflow regressions.
+//
+// `decode_bc6h` / `decode_bc7` / `decode_bc{1..=5}` were panicking with
+// `panic_const_mul_overflow` when the caller supplied
+// `width = height = u32::MAX`: the ceil-div block-grid produced a
+// `usize × usize × 16` product that wrapped the `usize::MAX` boundary
+// before the `input.len() < want_in` length check ran. The fuzz
+// harness's "Adversarial: extreme dimensions" probe surfaced the crash
+// on three targets simultaneously
+// (`decode_bcn` / `decode_bc6h` / `decode_bc7`). Each test below
+// reproduces the fuzz input shape — short input slice + tiny output
+// slice + maximal dimensions — and asserts the decoder returns
+// `Err`, never panics.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn decode_bc1_max_dimensions_does_not_panic() {
+    let input = [0u8; 0];
+    let mut tiny = [0u8; 4];
+    let res = decode_bc1(&input, u32::MAX, u32::MAX, &mut tiny);
+    assert!(res.is_err());
+}
+
+#[test]
+fn decode_bc2_max_dimensions_does_not_panic() {
+    let input = [0u8; 0];
+    let mut tiny = [0u8; 4];
+    let res = decode_bc2(&input, u32::MAX, u32::MAX, &mut tiny);
+    assert!(res.is_err());
+}
+
+#[test]
+fn decode_bc3_max_dimensions_does_not_panic() {
+    let input = [0u8; 0];
+    let mut tiny = [0u8; 4];
+    let res = decode_bc3(&input, u32::MAX, u32::MAX, &mut tiny);
+    assert!(res.is_err());
+}
+
+#[test]
+fn decode_bc4_unorm_max_dimensions_does_not_panic() {
+    let input = [0u8; 0];
+    let mut tiny = [0u8; 4];
+    let res = decode_bc4_unorm(&input, u32::MAX, u32::MAX, &mut tiny);
+    assert!(res.is_err());
+}
+
+#[test]
+fn decode_bc4_snorm_max_dimensions_does_not_panic() {
+    let input = [0u8; 0];
+    let mut tiny = [0u8; 4];
+    let res = decode_bc4_snorm(&input, u32::MAX, u32::MAX, &mut tiny);
+    assert!(res.is_err());
+}
+
+#[test]
+fn decode_bc5_unorm_max_dimensions_does_not_panic() {
+    let input = [0u8; 0];
+    let mut tiny = [0u8; 4];
+    let res = decode_bc5_unorm(&input, u32::MAX, u32::MAX, &mut tiny);
+    assert!(res.is_err());
+}
+
+#[test]
+fn decode_bc5_snorm_max_dimensions_does_not_panic() {
+    let input = [0u8; 0];
+    let mut tiny = [0u8; 4];
+    let res = decode_bc5_snorm(&input, u32::MAX, u32::MAX, &mut tiny);
+    assert!(res.is_err());
+}
+
+#[test]
+fn decode_bc6h_unsigned_max_dimensions_does_not_panic() {
+    let input = [0u8; 0];
+    let mut tiny = [0u8; 4];
+    let res = decode_bc6h(&input, u32::MAX, u32::MAX, false, &mut tiny);
+    assert!(res.is_err());
+}
+
+#[test]
+fn decode_bc6h_signed_max_dimensions_does_not_panic() {
+    let input = [0u8; 0];
+    let mut tiny = [0u8; 4];
+    let res = decode_bc6h(&input, u32::MAX, u32::MAX, true, &mut tiny);
+    assert!(res.is_err());
+}
+
+#[test]
+fn decode_bc7_max_dimensions_does_not_panic() {
+    let input = [0u8; 0];
+    let mut tiny = [0u8; 4];
+    let res = decode_bc7(&input, u32::MAX, u32::MAX, &mut tiny);
+    assert!(res.is_err());
+}
+
+#[test]
+fn decode_bc6h_fuzz_crash_ebc0c3370c_does_not_panic() {
+    // Verbatim reproduction of the fuzz crash artifact
+    // `decode_bc6h/crash-ebc0c3370c96b4245e1a2c01efdaaa7a9165213a`
+    // surfaced by the daily fuzz workflow on 2026-05-28.
+    // First 4 bytes drive width / height: w = 1+(0x0004) % 256 + 1 = 6,
+    // h = 1+(0x0004) % 256 + 1 = 6. The harness then probes
+    // `(width = height = u32::MAX, tiny = [0;4])` which is the path
+    // that overflowed before this round.
+    let data: &[u8] = &[
+        0x04, 0x00, 0x04, 0x00, 0x0f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+    ];
+    let rest = &data[4..];
+    let mut tiny = [0u8; 4];
+    let _ = decode_bc6h(rest, u32::MAX, u32::MAX, false, &mut tiny);
+    let _ = decode_bc6h(rest, u32::MAX, u32::MAX, true, &mut tiny);
+}
+
+#[test]
+fn decode_bc7_fuzz_crash_c382ab7c10_does_not_panic() {
+    // Verbatim reproduction of
+    // `decode_bc7/crash-c382ab7c100b0ccc80b8e0bbd9c56e725acee627`.
+    let data: &[u8] = &[
+        0x04, 0x00, 0x04, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+    let rest = &data[4..];
+    let mut tiny = [0u8; 4];
+    let _ = decode_bc7(rest, u32::MAX, u32::MAX, &mut tiny);
+}
+
+#[test]
+fn decode_bcn_fuzz_crash_3d19281e55_does_not_panic() {
+    // Verbatim reproduction of
+    // `decode_bcn/crash-3d19281e55d94671c76bcc859247014a5303e9aa`.
+    let data: &[u8] = &[
+        0x04, 0x00, 0x04, 0x00, 0x00, 0xf8, 0x00, 0xf8, 0x00, 0x00, 0x00, 0x00,
+    ];
+    let rest = &data[4..];
+    let mut tiny = [0u8; 4];
+    let _ = decode_bc1(rest, u32::MAX, u32::MAX, &mut tiny);
+    let _ = decode_bc2(rest, u32::MAX, u32::MAX, &mut tiny);
+    let _ = decode_bc3(rest, u32::MAX, u32::MAX, &mut tiny);
+    let _ = decode_bc4_unorm(rest, u32::MAX, u32::MAX, &mut tiny);
+    let _ = decode_bc5_unorm(rest, u32::MAX, u32::MAX, &mut tiny);
+}

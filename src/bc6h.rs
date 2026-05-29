@@ -49,9 +49,17 @@
 use crate::error::{DdsError, Result};
 
 /// Total bytes for an RGBA half-float surface (`width x height x 8`).
+///
+/// Uses saturating multiplication so the call sites'
+/// `output.len() < want_out` length check still rejects the surface on
+/// `width = height = u32::MAX` (any real slice length is `<
+/// usize::MAX`). Without this the fuzzer can drive the multiplication
+/// to `panic_const_mul_overflow`.
 #[inline]
 pub(crate) fn rgba_half_surface_bytes(width: u32, height: u32) -> usize {
-    width as usize * height as usize * 8
+    (width as usize)
+        .saturating_mul(height as usize)
+        .saturating_mul(8)
 }
 
 // ---- Partition + anchor tables (first 32 entries of the BC7 table) ------
@@ -1171,7 +1179,11 @@ pub fn decode_bc6h(
 ) -> Result<()> {
     let bw = width.max(1).div_ceil(4) as usize;
     let bh = height.max(1).div_ceil(4) as usize;
-    let want_in = bw * bh * 16;
+    // Saturate on overflow so the length check below rejects rather
+    // than triggering `panic_const_mul_overflow` (any real slice length
+    // is `< usize::MAX`). Fuzz-driven `width = height = u32::MAX`
+    // exercises this path.
+    let want_in = bw.saturating_mul(bh).saturating_mul(16);
     if input.len() < want_in {
         return Err(DdsError::invalid(format!(
             "BC6H input {} bytes < expected {} bytes for {}x{}",
