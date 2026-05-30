@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.4](https://github.com/OxideAV/oxideav-dds/compare/v0.0.3...v0.0.4) - 2026-05-30
+
+### Other
+
+- criterion harnesses for decode + encode + roundtrip (round 192)
+- add encode_bc4_snorm + encode_bc5_snorm (round 182)
+- saturating block-grid math to clear three fuzz crashes (round 176)
+- 40 hard-asserted tests + 4 panic fixes (round 162)
+- cargo-fuzz harness with five panic-free targets (round 156)
+- decode + encode 3D textures (round 123)
+- multi-mode encoder (round 77)
+
 ### Added
 
 - **Criterion benchmark harnesses (round 192).** Three new benches
