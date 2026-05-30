@@ -30,3 +30,30 @@ default = ["registry"]
 # registry. Default-on; turn off for image-library use-cases that just
 # want the standalone `parse_dds` API.
 registry = ["dep:oxideav-core"]
+
+[dev-dependencies]
+# Round 192 (depth-mode benchmarks): Criterion drives three bench
+# harnesses (`decode`, `encode`, `roundtrip`) that future BCn /
+# BC6H / BC7 algorithm tweaks (endpoint search, mode-picker
+# refinement, partition-table sweeps, LSQ metric in unq-space) can
+# A/B against. Pinned to the same 0.5 line the other OxideAV
+# crates with benches (flac, magicyuv, cinepak, tta, h264) track.
+criterion = "0.5"
+
+# Round 192 benches. Each binary lives in `benches/<name>.rs` and
+# is self-contained (no committed binary fixtures — every input
+# surface is synthesised in-bench from a deterministic xorshift
+# seed, then fed through the crate's own public standalone
+# decoder / encoder entry points). Run with:
+#     cargo bench -p oxideav-dds --bench <name>
+[[bench]]
+name = "decode"
+harness = false
+
+[[bench]]
+name = "encode"
+harness = false
+
+[[bench]]
+name = "roundtrip"
+harness = false

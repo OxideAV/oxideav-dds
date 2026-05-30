@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Criterion benchmark harnesses (round 192).** Three new benches
+  under `benches/`: `decode`, `encode`, `roundtrip`. Each is
+  self-contained — every input surface is synthesised in-bench from
+  a deterministic xorshift seed, then fed through the crate's own
+  public standalone entry points. Wired into `Cargo.toml` under a
+  new `[dev-dependencies] criterion = "0.5"` (pinned to the line
+  the other OxideAV crates with benches track) plus three
+  `[[bench]] harness = false` declarations. Run with
+  `cargo bench -p oxideav-dds --bench {decode,encode,roundtrip}`.
+  Scenarios — `decode`: BC1 / BC3 / BC4 / BC5 at 512×512, BC6H /
+  BC7 at 256×256 (block-decode hot path on a pre-encoded payload).
+  `encode`: BC1 / BC3 / BC4 / BC5 at 256×256, BC6H / BC7 at 128×128
+  (the mode-picker sweep is the most expensive crate path so the
+  surface is smaller — `sample_size(10)` on the BC6H / BC7 groups).
+  `roundtrip`: end-to-end `parse_dds` ↔ `encode_dds_uncompressed`
+  on A8R8G8B8 (512×512 single-mip + 256×256 mip-9), R8G8B8A8_UNORM
+  via DXT10 extension (128×128) and L8 (64×64) — measures
+  container-level header / surface-table walking + DX10-header
+  emit cost separately from the per-block BCn hot path. The
+  harness is paired with the round-156 fuzz harness (panic-free
+  surfaces) and the round-162 / round-176 injection-robustness
+  property tests: fuzz fixes broken paths, the robustness suite
+  hard-asserts hostile-input rejection, the benches give future
+  encoder algorithm rounds (LSQ-in-unq-space, partition-table
+  prune, endpoint-search prune) an A/B baseline to land against.
+
 - **`encode_bc4_snorm` + `encode_bc5_snorm` (round 182).** Signed-
   channel encoders mirroring the existing `encode_bc4_unorm` /
   `encode_bc5_unorm` paths. Inputs are treated as `i8` per Microsoft's

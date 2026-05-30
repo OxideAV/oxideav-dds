@@ -153,6 +153,24 @@ harness exercises the framework-free standalone decode path. Corpus
 seeded with the two existing crate fixtures plus six hand-crafted
 single-block BC blobs.
 
+Criterion benchmarks (round 192): three new `benches/` harnesses —
+`decode`, `encode`, `roundtrip` — wired under a `[dev-dependencies]
+criterion = "0.5"` and three `[[bench]] harness = false`
+declarations. Each scenario synthesises its input surface
+deterministically (no committed binary fixtures) and exercises the
+crate's public standalone entry points. `decode` times BC1 / BC3 /
+BC4 / BC5 at 512×512 plus BC6H / BC7 at 256×256 with a pre-encoded
+block payload. `encode` times the matching BC1..BC5 encoders at
+256×256 plus the heavier BC6H / BC7 mode pickers at 128×128
+(`sample_size(10)` on the two heavy groups). `roundtrip` times the
+container-level `parse_dds` ↔ `encode_dds_uncompressed` cycle on
+A8R8G8B8 (with and without a 9-level mipmap chain), DXT10-extension
+R8G8B8A8_UNORM and L8 surfaces — separating the header / surface-
+table walk cost from the per-block BCn hot path. Drive them with
+`cargo bench -p oxideav-dds --bench {decode,encode,roundtrip}`;
+future encoder algorithm work (LSQ-in-unq-space, partition-table
+pruning, endpoint-search shortcuts) can A/B against these baselines.
+
 Round 176 closes three real crashes the daily fuzz workflow surfaced
 on 2026-05-28: every BC-block decoder computed its required-input
 length as a `usize × usize × 16` product that overflowed when the
