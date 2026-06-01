@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.5](https://github.com/OxideAV/oxideav-dds/compare/v0.0.4...v0.0.5) - 2026-06-01
+
+### Other
+
+- unq-space LSQ refinement pass (round 207)
+
 ### Added
 
 - **BC6H unq-space LSQ refinement pass (round 207).** Closes the only
