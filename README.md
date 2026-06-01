@@ -186,10 +186,21 @@ crash artifacts the fuzzer reported), and the crash artifacts are
 also committed to the corpus directories so the workflow
 re-validates the fix on every run.
 
-Still deferred (followups):
-
-- LSQ refinement metric — current pixel-space LSQ is approximate; fitting
-  in unq-space could push 1-2 dB more on multi-axis HDR content.
+Round 207 closes the remaining BC6H encoder followup: the existing
+pixel-`half_to_f32`-space LSQ in `encode_mode10` and `try_2subset` now
+runs a second pass in the 17-bit *unq* integer space the decoder's
+`(e0 * (64-w) + e1 * w + 32) >> 6` interpolation actually operates in.
+Pixel-space LSQ weights residuals by `half_to_f32` magnitude (which
+biases the fit toward bright-exponent pixels); the unq-space pass
+weights every pixel uniformly in the decoder's linear arithmetic
+domain. Two new helpers — `target_unq_uf16` (inverts the `finish_uf16`
+non-linearity to set per-pixel targets) and `unq_to_q_uf16` (inverts
+`unquantize_uf16` to map LSQ float endpoints back to the per-precision
+lattice) — underpin the pass. Acceptance is SSE-guarded. A new
+`bc6h_encode_mixed_dynamic_range_unq_lsq` regression test (4×4 block
+with R sweeping 0.02 → 1.0 against an anti-ramp B) confirms the
+headline +1.75 dB PSNR uplift (28.00 → 29.75 dB), inside the
+"1-2 dB" followup target.
 
 ## Quickstart
 

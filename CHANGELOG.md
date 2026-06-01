@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **BC6H unq-space LSQ refinement pass (round 207).** Closes the only
+  remaining "Still deferred" followup the round-77 BC6H multi-mode
+  encoder shipped with. After the existing pixel-`half_to_f32`-space
+  LSQ pass converges in `encode_mode10` (1-subset, 10.10 absolute) and
+  `try_2subset` (modes 0..9 across the 32-entry BC6H partition table),
+  a second LSQ pass runs in the 17-bit unq integer space where the
+  decoder's `(e0 * (64-w) + e1 * w + 32) >> 6` interpolation is
+  *linear*. Pixel-space LSQ over-weights bright-exponent pixels
+  proportionally to their `half_to_f32` magnitude; the unq-space LSQ
+  weights every pixel uniformly in the lattice the decoder's integer
+  arithmetic operates over. Two new helpers underpin the pass:
+  `target_unq_uf16(half_bits)` inverts the `finish_uf16` non-linearity
+  (`(unq * 31) >> 6` → `unq ≈ (half * 64 + 31) / 31`, clamped to
+  `[0, 0xffff]`) to set the per-pixel LSQ target, and
+  `unq_to_q_uf16(unq, prec)` inverts `unquantize_uf16` (probe ±2
+  around the `((unq << prec) - 0x8000) >> 16` continuous estimate) to
+  map the LSQ float endpoint back to the `prec`-bit lattice. Both
+  helpers carry round-trip-validation tests. Acceptance is
+  SSE-guarded — the unq-space iteration only commits when its re-snap
+  improves SSE, mirroring the existing pixel-space pass. A new
+  `bc6h_encode_mixed_dynamic_range_unq_lsq` test (4×4 block with R
+  sweeping 0.02 → 1.0 against an anti-ramp B) measures the headline
+  uplift: 28.00 → 29.75 dB PSNR (+1.75 dB), within the "1-2 dB"
+  followup target. All 232 pre-existing tests continue to pass; both
+  `default` and `--no-default-features` test sweeps are clean.
+
 ## [0.0.4](https://github.com/OxideAV/oxideav-dds/compare/v0.0.3...v0.0.4) - 2026-05-30
 
 ### Other

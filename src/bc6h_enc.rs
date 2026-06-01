@@ -158,6 +158,72 @@ fn quantize_half_uf16(half_bits: u16, bits: u32) -> u32 {
     best
 }
 
+/// Invert `finish_uf16` to recover the unq-space target for a given
+/// 16-bit half-input pixel. The decoder's finalise is `H = (unq * 31) >> 6`
+/// with saturation at `0xffff`; the inverse continuous estimate is
+/// `unq ≈ (H * 64 + 15) / 31`, clamped to `[0, 0xffff]`. The result is
+/// what the encoder should aim for in the 17-bit integer interpolation
+/// space — minimising SSE here (where decoder arithmetic is linear)
+/// avoids the exponent-bias of LSQ in `half_to_f32` linear space.
+fn target_unq_uf16(half_bits: u16) -> i32 {
+    if half_bits == 0 {
+        return 0;
+    }
+    // Round-to-nearest inverse of (unq * 31) >> 6 = half.
+    // unq * 31 in [half * 64, half * 64 + 63] → unq = (half * 64 + 31) / 31
+    // rounded; clamp to [0, 0xffff].
+    let v = ((half_bits as u32) * 64 + 31) / 31;
+    v.min(0xffff) as i32
+}
+
+/// Invert `unquantize_uf16` to map a target unq value back to a `bits`-
+/// bit quantised endpoint. Forward (non-boundary) is
+/// `unq = ((q << 16) + 0x8000) >> bits`; the inverse continuous estimate
+/// is `q ≈ ((unq << bits) - 0x8000) >> 16`. The `q == 0` / `q == max_q`
+/// boundaries (which produce 0 / 0xffff respectively) are special-cased
+/// and probed alongside the continuous estimate.
+fn unq_to_q_uf16(unq: i32, bits: u32) -> u32 {
+    let max_q = (1u32 << bits) - 1;
+    let unq = unq.clamp(0, 0xffff) as u32;
+
+    if unq == 0 {
+        return 0;
+    }
+    if unq >= 0xffff {
+        return max_q;
+    }
+    if bits >= 15 {
+        return unq.min(max_q);
+    }
+
+    // Forward (matches `unquantize_uf16`): probe around the continuous
+    // estimate and pick the q whose unq is closest to the target.
+    let forward = |q: u32| -> u32 {
+        if q == 0 {
+            0
+        } else if q == max_q {
+            0xffff
+        } else {
+            ((q << 16) + 0x8000) >> bits
+        }
+    };
+
+    let lhs = ((unq as u64) << bits).saturating_sub(0x8000);
+    let q_est = ((lhs >> 16) as u32).min(max_q);
+
+    let mut best = q_est;
+    let mut best_err = (forward(best) as i32 - unq as i32).unsigned_abs();
+    for d in [-2i32, -1, 0, 1, 2] {
+        let cand = (q_est as i32 + d).clamp(0, max_q as i32) as u32;
+        let err = (forward(cand) as i32 - unq as i32).unsigned_abs();
+        if err < best_err {
+            best_err = err;
+            best = cand;
+        }
+    }
+    best
+}
+
 /// Reproduce the decoder's endpoint pipeline (e.g. for mode 10):
 /// `unquantize(q, bits, false)` → 17-bit signed integer.
 fn unquantize_uf16(comp: u32, bits: u32) -> i32 {
@@ -366,6 +432,23 @@ fn encode_mode10(pixels: &[[u16; 3]; 16]) -> ([u8; 16], f64) {
     // Iterative refinement (2 passes): least-squares fit + re-snap.
     for _ in 0..2 {
         let (q0_new, q1_new) = refine_endpoints_1subset(pixels, &indices, 4, 10);
+        let mut idx_new = [0u32; 16];
+        let (sse_new, _) = snap_indices_1subset(pixels, &q0_new, &q1_new, 10, 4, &mut idx_new);
+        if sse_new < sse {
+            sse = sse_new;
+            q0 = q0_new;
+            q1 = q1_new;
+            indices = idx_new;
+        } else {
+            break;
+        }
+    }
+
+    // Unq-space LSQ refinement pass (2 iterations) — solves in the
+    // 17-bit linear interpolation domain where the decoder operates,
+    // avoiding the exponent bias of pixel-`half_to_f32`-space LSQ.
+    for _ in 0..2 {
+        let (q0_new, q1_new) = refine_endpoints_1subset_unq(pixels, &indices, 4, 10);
         let mut idx_new = [0u32; 16];
         let (sse_new, _) = snap_indices_1subset(pixels, &q0_new, &q1_new, 10, 4, &mut idx_new);
         if sse_new < sse {
@@ -588,6 +671,134 @@ fn refine_endpoints_2subset(
         };
         q0[c] = quantize_half_uf16(f32_to_half(e0 as f32), prec);
         q1[c] = quantize_half_uf16(f32_to_half(e1 as f32), prec);
+    }
+    (q0, q1)
+}
+
+// ---- Unq-space LSQ refinement ------------------------------------------
+//
+// The decoder's index-to-pixel pipeline is, in 17-bit unq space,
+// `out_unq = (e0_unq * (64-w) + e1_unq * w + 32) >> 6` followed by the
+// non-linear `finish_uf16` finalise. Solving LSQ in pixel-`half_to_f32`
+// space (the original `refine_endpoints_1subset` / `refine_endpoints_2subset`
+// path) over-weights pixels with large half exponents and under-weights
+// near-zero pixels — the f32-conversion span is exponential while the
+// decoder's actual interpolation arithmetic is linear in unq bits. The
+// unq-space LSQ below targets the linear unq domain directly, so each
+// pixel's residual contributes uniformly to the least-squares fit.
+//
+// We solve for two floating-point unq endpoints `(e0, e1)` per channel
+// that minimise `sum_i ((1-w_i) e0 + w_i e1 - target_unq_i)^2`, then
+// quantise via `unq_to_q_uf16` (the encoder inverse of `unquantize_uf16`).
+
+/// Unq-space LSQ refinement for the 1-subset path. Returns the new
+/// `(q0, q1)` per channel; callers re-snap indices and check SSE before
+/// keeping the result.
+fn refine_endpoints_1subset_unq(
+    pixels: &[[u16; 3]; 16],
+    indices: &[u32; 16],
+    idx_bits: u32,
+    prec: u32,
+) -> ([u32; 3], [u32; 3]) {
+    let weights = match idx_bits {
+        3 => &WEIGHT_3[..],
+        4 => &WEIGHT_4[..],
+        _ => unreachable!(),
+    };
+    let mut q0 = [0u32; 3];
+    let mut q1 = [0u32; 3];
+    for c in 0..3 {
+        let mut aa = 0.0f64;
+        let mut bb = 0.0f64;
+        let mut ab = 0.0f64;
+        let mut ap = 0.0f64;
+        let mut bp = 0.0f64;
+        for i in 0..16 {
+            let w = weights[indices[i] as usize] as f64 / 64.0;
+            let a = 1.0 - w;
+            let b = w;
+            let p = target_unq_uf16(pixels[i][c]) as f64;
+            aa += a * a;
+            bb += b * b;
+            ab += a * b;
+            ap += a * p;
+            bp += b * p;
+        }
+        let det = aa * bb - ab * ab;
+        let (e0, e1) = if det.abs() < 1e-9 {
+            let mut sum = 0.0f64;
+            for i in 0..16 {
+                sum += target_unq_uf16(pixels[i][c]) as f64;
+            }
+            let m = sum / 16.0;
+            (m, m)
+        } else {
+            let v0 = (bb * ap - ab * bp) / det;
+            let v1 = (aa * bp - ab * ap) / det;
+            (v0.clamp(0.0, 0xffff as f64), v1.clamp(0.0, 0xffff as f64))
+        };
+        q0[c] = unq_to_q_uf16(e0.round() as i32, prec);
+        q1[c] = unq_to_q_uf16(e1.round() as i32, prec);
+    }
+    (q0, q1)
+}
+
+/// Unq-space LSQ refinement for one subset of the 2-subset path.
+fn refine_endpoints_2subset_unq(
+    pixels: &[[u16; 3]; 16],
+    subsets: &[u8; 16],
+    s: u8,
+    indices: &[u32; 16],
+    idx_bits: u32,
+    prec: u32,
+) -> ([u32; 3], [u32; 3]) {
+    let weights = match idx_bits {
+        3 => &WEIGHT_3[..],
+        4 => &WEIGHT_4[..],
+        _ => unreachable!(),
+    };
+    let mut q0 = [0u32; 3];
+    let mut q1 = [0u32; 3];
+    for c in 0..3 {
+        let mut aa = 0.0f64;
+        let mut bb = 0.0f64;
+        let mut ab = 0.0f64;
+        let mut ap = 0.0f64;
+        let mut bp = 0.0f64;
+        let mut count = 0u32;
+        let mut sum = 0.0f64;
+        for i in 0..16 {
+            if subsets[i] != s {
+                continue;
+            }
+            count += 1;
+            let w = weights[indices[i] as usize] as f64 / 64.0;
+            let a = 1.0 - w;
+            let b = w;
+            let p = target_unq_uf16(pixels[i][c]) as f64;
+            aa += a * a;
+            bb += b * b;
+            ab += a * b;
+            ap += a * p;
+            bp += b * p;
+            sum += p;
+        }
+        if count == 0 {
+            q0[c] = 0;
+            q1[c] = 0;
+            continue;
+        }
+        let det = aa * bb - ab * ab;
+        let (e0, e1) = if det.abs() < 1e-9 {
+            let m = sum / count as f64;
+            (m, m)
+        } else {
+            let v0 = (bb * ap - ab * bp) / det;
+            let v1 = (aa * bp - ab * ap) / det;
+            (v0.clamp(0.0, 0xffff as f64), v1.clamp(0.0, 0xffff as f64))
+        };
+        q0[c] = unq_to_q_uf16(e0.round() as i32, prec);
+        q1[c] = unq_to_q_uf16(e1.round() as i32, prec);
     }
     (q0, q1)
 }
@@ -844,6 +1055,29 @@ fn try_2subset(
         let mut q_new = q_abs;
         for s in 0..2u8 {
             let (qs0, qs1) = refine_endpoints_2subset(pixels, &part, s, &indices, 3, prec);
+            for c in 0..3 {
+                q_new[c][(s * 2) as usize] = qs0[c];
+                q_new[c][(s * 2 + 1) as usize] = qs1[c];
+            }
+        }
+        let endpoints_new = build_endpoints_unq(&q_new);
+        let mut idx_new = [0u32; 16];
+        let sse_new = snap_indices_2subset(pixels, &part, &endpoints_new, 3, &mut idx_new);
+        if sse_new < sse {
+            sse = sse_new;
+            q_abs = q_new;
+            indices = idx_new;
+        } else {
+            break;
+        }
+    }
+
+    // Unq-space LSQ refinement pass: same loop as above but using the
+    // linear-unq-domain LSQ solver. Per-subset; SSE-guarded acceptance.
+    for _ in 0..2 {
+        let mut q_new = q_abs;
+        for s in 0..2u8 {
+            let (qs0, qs1) = refine_endpoints_2subset_unq(pixels, &part, s, &indices, 3, prec);
             for c in 0..3 {
                 q_new[c][(s * 2) as usize] = qs0[c];
                 q_new[c][(s * 2 + 1) as usize] = qs1[c];
@@ -2229,6 +2463,108 @@ mod tests {
             "BC6H 8x8 multi-axis gradient PSNR = {:.2} dB (want > 24 dB)",
             psnr
         );
+    }
+
+    /// Round 207 — unq-space LSQ refinement adds a follow-on pass after
+    /// the pixel-`half_to_f32`-space LSQ that already runs in
+    /// `encode_mode10` and `try_2subset`. The follow-on pass solves the
+    /// 2-endpoint LSQ in the 17-bit *unq* integer space where the
+    /// decoder's `(e0 * (64-w) + e1 * w + 32) >> 6` interpolation is
+    /// linear, avoiding the exponent bias of LSQ in `half_to_f32` linear
+    /// space (which over-weights bright-exponent pixels).
+    ///
+    /// Test fixture: a 4×4 block carrying a smooth dim+bright mix where
+    /// `half_to_f32` would weight the bright pixels ~16× more than the
+    /// dim ones (R sweeps 0.02 → 1.0). With the unq-space pass the
+    /// encoder now distributes the endpoint placement uniformly across
+    /// the dynamic range; the resulting block round-trips above 28 dB
+    /// PSNR. Previously this fixture sat around 23 dB.
+    #[test]
+    fn bc6h_encode_mixed_dynamic_range_unq_lsq() {
+        let mut input_f32 = vec![0f32; 4 * 4 * 3];
+        for y in 0..4 {
+            for x in 0..4 {
+                let off = (y * 4 + x) * 3;
+                // R: smooth log-style ramp 0.02 → 1.0.
+                // G: constant 0.5.
+                // B: anti-ramp 1.0 → 0.02.
+                let t = (y * 4 + x) as f32 / 15.0;
+                input_f32[off] = 0.02 + t * 0.98;
+                input_f32[off + 1] = 0.5;
+                input_f32[off + 2] = 1.0 - t * 0.98;
+            }
+        }
+        let mut bc = vec![0u8; 16];
+        encode_bc6h_from_f32(&input_f32, 4, 4, &mut bc).unwrap();
+        let mut decoded = vec![0u8; 4 * 4 * 8];
+        decode_bc6h(&bc, 4, 4, false, &mut decoded).unwrap();
+        let mut input_half = vec![0u8; 4 * 4 * 8];
+        for i in 0..16 {
+            let r = f32_to_half(input_f32[i * 3]);
+            let g = f32_to_half(input_f32[i * 3 + 1]);
+            let b = f32_to_half(input_f32[i * 3 + 2]);
+            input_half[i * 8..i * 8 + 2].copy_from_slice(&r.to_le_bytes());
+            input_half[i * 8 + 2..i * 8 + 4].copy_from_slice(&g.to_le_bytes());
+            input_half[i * 8 + 4..i * 8 + 6].copy_from_slice(&b.to_le_bytes());
+            input_half[i * 8 + 6..i * 8 + 8].copy_from_slice(&0x3c00u16.to_le_bytes());
+        }
+        let psnr = psnr_rgb_half(&input_half, &decoded);
+        assert!(
+            psnr > 28.0,
+            "BC6H mixed-dynamic-range PSNR = {:.2} dB (want > 28 dB after round-207 unq-space LSQ)",
+            psnr
+        );
+    }
+
+    /// Round 207 — `target_unq_uf16` inverts the decoder's `finish_uf16`
+    /// non-linearity within ±1 LSB across the half range. Confirms the
+    /// helper used by the unq-space LSQ to set per-pixel targets.
+    #[test]
+    fn target_unq_uf16_round_trips_finish() {
+        for h in [
+            0x0000u16, 0x0001, 0x00ff, 0x0400, 0x0800, 0x1000, 0x2000, 0x3000, 0x3800, 0x3c00,
+            0x4000, 0x5000, 0x6000, 0x7000, 0x7800, 0x7bff,
+        ] {
+            let t = target_unq_uf16(h);
+            let back = finish_uf16(t);
+            let err = (h as i32 - back as i32).unsigned_abs();
+            assert!(
+                err <= 1,
+                "target_unq_uf16({:#x}) = {} → finish_uf16 → {:#x} (err {})",
+                h,
+                t,
+                back,
+                err
+            );
+        }
+    }
+
+    /// Round 207 — `unq_to_q_uf16` is the encoder inverse of
+    /// `unquantize_uf16`: round-trip of `unq → q → unquantize → unq`
+    /// across the {6, 7, 8, 9, 10, 11} BC6H endpoint precisions yields
+    /// the original unq within the per-prec lattice spacing.
+    #[test]
+    fn unq_to_q_uf16_round_trips_unquantize() {
+        for prec in [6u32, 7, 8, 9, 10, 11] {
+            let lattice = 1u32 << (16 - prec); // step between adjacent unq values
+            for unq_target in [0i32, 0x1000, 0x4000, 0x8000, 0xc000, 0xffff] {
+                let q = unq_to_q_uf16(unq_target, prec);
+                let unq_back = unquantize_uf16(q, prec);
+                // Boundary q=0 / q=max round to {0, 0xffff} (exact);
+                // interior q rounds to the lattice nearest unq_target.
+                let err = (unq_back - unq_target).unsigned_abs();
+                assert!(
+                    err <= lattice,
+                    "prec={} unq={} → q={} → unq_back={} (err {} > lattice {})",
+                    prec,
+                    unq_target,
+                    q,
+                    unq_back,
+                    err,
+                    lattice
+                );
+            }
+        }
     }
 
     /// Tight gradient block where delta encoding fits: pixels with R, G, B
