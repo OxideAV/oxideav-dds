@@ -9,6 +9,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **HDR half-float uncompressed surfaces (round 225).** Two new
+  `DdsPixelFormat` variants — `R16G16B16A16Float` and `R16Float` —
+  cover the matching `DXGI_FORMAT_R16G16B16A16_FLOAT` (10) and
+  `DXGI_FORMAT_R16_FLOAT` (54) DX10 codes. The `pixel_format_from_dxgi`
+  layout resolver maps each one to the new variant; the parser walks
+  half-float surfaces through the same `surface_size_bytes` /
+  `surface_stride_bytes` path the integer formats use (8 bytes per
+  pixel for RGBA half-float, 2 bytes for single-channel half-float).
+  On the encoder side, `encode_dds_uncompressed` detects HDR-float
+  inputs and promotes them to a DX10 extension header automatically
+  (HDR floats have no legacy `DDS_PIXELFORMAT` mask layout); the DX10
+  header carries the DXGI code derived from the in-memory format or,
+  when supplied, from `image.dxgi_format`. Four new public helpers
+  cover the on-disk ↔ `f32` conversion: `decode_r16g16b16a16_float`
+  and `decode_r16_float` expand on-disk bytes into tightly-packed
+  RGBA / R `f32` slices, and `encode_r16g16b16a16_float_from_f32` /
+  `encode_r16_float_from_f32` quantise the inverse direction. The
+  half-float quantiser `f32_to_half` (round-to-nearest-even on the
+  mantissa, overflow saturates to ±Inf, underflow flushes to ±0 per
+  Microsoft's public reference) is also exported, alongside the
+  pre-existing `half_to_f32` re-export. Mip-chain fabrication on
+  HDR-float surfaces uses a half-aware box filter that averages in
+  `f32` and re-quantises (treating half-float bytes as unsigned 8-bit
+  for averaging would have produced exponent-mantissa blend
+  garbage). Ten new tests in `tests/hdr_float_uncompressed.rs` cover:
+  exact-representable round-trip (`0.0`, `±1.0`, `±65504.0`, …),
+  near-grid quantisation tolerance (relative error `< 1e-3` on
+  `0.1 / 0.25 / 0.3333 / 1.7 / 10.4 / 1000.5`), overflow → ±Inf
+  saturation, underflow → ±0 flush, end-to-end DDS file round-trip
+  for both RGBA half-float and single-channel half-float surfaces,
+  4-level mip-chain emission, and short-buffer rejection on every
+  helper. With this addition, the workspace can now ingest the
+  `R16G16B16A16_FLOAT` HDR rendertargets that texconv / magick
+  produce alongside BC6H — and the matching `R16_FLOAT` single-
+  channel surface common in depth / shadow map workflows — without
+  going through BC6H compression first.
+
 - **BC6H unq-space LSQ refinement pass (round 207).** Closes the only
   remaining "Still deferred" followup the round-77 BC6H multi-mode
   encoder shipped with. After the existing pixel-`half_to_f32`-space

@@ -104,9 +104,25 @@ Coverage as of round 77:
   `encode_dds_volume` round-trips an uncompressed volume back to disk.
 - **Full DXGI format table** — every `DXGI_FORMAT` value Microsoft
   assigns (1..=132) is enumerated by name in `DxgiFormat` for
-  lossless round-trip; HDR-float, integer, depth/stencil, YUV, and
-  palette formats are recognised but produce
-  `DdsError::Unsupported` from the layout resolver.
+  lossless round-trip; integer, depth/stencil, YUV, and palette
+  formats are still unsupported by the layout resolver.
+- **HDR half-float uncompressed surfaces** — round 225 adds
+  `DXGI_FORMAT_R16G16B16A16_FLOAT` (10) and `DXGI_FORMAT_R16_FLOAT` (54)
+  as two new `DdsPixelFormat` variants (`R16G16B16A16Float`, `R16Float`).
+  Parser recognises them under the DX10 extension header (no legacy
+  `DDS_PIXELFORMAT` mask layout exists for HDR floats); writer promotes
+  any HDR-float surface to a DX10 header automatically when handed to
+  `encode_dds_uncompressed`. Four new public helpers wrap the
+  half-float quantisation arithmetic: `decode_r16g16b16a16_float` /
+  `decode_r16_float` expand on-disk bytes to tightly-packed RGBA / R
+  `f32` slices, and `encode_r16g16b16a16_float_from_f32` /
+  `encode_r16_float_from_f32` quantise back. `f32_to_half` (and the
+  pre-existing `half_to_f32`) are re-exported from the crate root for
+  callers that want to do their own conversion. Mip-chain emission on
+  HDR-float surfaces uses a half-aware box filter that averages in
+  `f32` and re-quantises rather than treating the half-float bytes as
+  unsigned 8-bit integers (which would have produced garbage exponent /
+  mantissa blends).
 - Block-compressed pass-through. BC1..BC7 raw block bytes are
   surfaced through `DdsImage::surfaces[i].plane.data`; BC1..BC5 +
   BC7 also decompress to RGBA / R / RG via the dedicated `decode_bc*`

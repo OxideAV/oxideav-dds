@@ -141,6 +141,12 @@ fn legacy_pixel_format_fields(pix: DdsPixelFormat) -> Result<DdsPixelFormatHeade
             b_bit_mask: 0,
             a_bit_mask: 0x00ff,
         },
+        DdsPixelFormat::R16G16B16A16Float | DdsPixelFormat::R16Float => {
+            return Err(DdsError::unsupported(format!(
+                "{} has no legacy DDS_PIXELFORMAT (HDR-float surfaces require the DX10 extension header)",
+                pix.name()
+            )));
+        }
         bc if bc.is_block_compressed() => {
             return Err(DdsError::unsupported(format!(
                 "encode_dds_uncompressed cannot serialise block-compressed {} — round 1 is pass-through only",
@@ -269,7 +275,12 @@ pub fn encode_dds_uncompressed(image: &DdsImage) -> Result<Vec<u8>> {
         )));
     }
 
-    let pf = legacy_pixel_format_fields(image.pixel_format)?;
+    // HDR-float formats (R16G16B16A16_FLOAT, R16_FLOAT) have no legacy
+    // pixel-format mask layout — they require the DX10 extension header.
+    let needs_dx10 = matches!(
+        image.pixel_format,
+        DdsPixelFormat::R16G16B16A16Float | DdsPixelFormat::R16Float
+    ) || image.has_dxt10_header;
     let mip = image.mip_map_count.max(1);
     let with_mips = mip > 1;
     let flags = DDSD_REQUIRED | DDSD_PITCH | if with_mips { DDSD_MIPMAPCOUNT } else { 0 };
@@ -279,6 +290,21 @@ pub fn encode_dds_uncompressed(image: &DdsImage) -> Result<Vec<u8>> {
         } else {
             0
         };
+
+    let pf = if needs_dx10 {
+        DdsPixelFormatHeader {
+            size: DDS_PIXELFORMAT_SIZE as u32,
+            flags: DDPF_FOURCC,
+            four_cc: FOURCC_DX10,
+            rgb_bit_count: 0,
+            r_bit_mask: 0,
+            g_bit_mask: 0,
+            b_bit_mask: 0,
+            a_bit_mask: 0,
+        }
+    } else {
+        legacy_pixel_format_fields(image.pixel_format)?
+    };
 
     // ---- Compose mip-chain payload --------------------------------
     //
@@ -322,7 +348,8 @@ pub fn encode_dds_uncompressed(image: &DdsImage) -> Result<Vec<u8>> {
         .map(|(w, h)| (*w as usize) * (*h as usize) * bpp as usize)
         .sum();
 
-    let mut out = Vec::with_capacity(4 + DDS_HEADER_SIZE + total_payload);
+    let header_bytes = 4 + DDS_HEADER_SIZE + if needs_dx10 { DDS_HEADER_DXT10_SIZE } else { 0 };
+    let mut out = Vec::with_capacity(header_bytes + total_payload);
 
     push_u32(&mut out, DDS_MAGIC);
     push_u32(&mut out, DDS_HEADER_SIZE as u32);
@@ -351,6 +378,22 @@ pub fn encode_dds_uncompressed(image: &DdsImage) -> Result<Vec<u8>> {
     push_u32(&mut out, 0); // caps4
     push_u32(&mut out, 0); // reserved2
 
+    if needs_dx10 {
+        // DX10 extension header (20 bytes). The DXGI format code is
+        // derived from the in-memory pixel_format (or the caller-
+        // supplied dxgi_format hint for variants the layout resolver
+        // doesn't distinguish at the legacy level).
+        let dxgi = image
+            .dxgi_format
+            .map(|f| f.to_u32())
+            .unwrap_or_else(|| uncompressed_dxgi_code(image.pixel_format));
+        push_u32(&mut out, dxgi);
+        push_u32(&mut out, DDS_DIMENSION_TEXTURE2D);
+        push_u32(&mut out, 0); // misc_flag
+        push_u32(&mut out, image.array_size.max(1));
+        push_u32(&mut out, 0); // misc_flags2
+    }
+
     // ---- Emit mip 0.
     let mip0_bytes = need as usize;
     out.extend_from_slice(&plane.data[..mip0_bytes]);
@@ -361,8 +404,28 @@ pub fn encode_dds_uncompressed(image: &DdsImage) -> Result<Vec<u8>> {
             for level_data in chain.iter().skip(1) {
                 out.extend_from_slice(level_data);
             }
+        } else if matches!(
+            image.pixel_format,
+            DdsPixelFormat::R16G16B16A16Float | DdsPixelFormat::R16Float
+        ) {
+            // Half-float fabrication needs per-channel conversion to f32
+            // for averaging, then back to half. The byte-domain
+            // box-filter would produce mathematically-meaningless results
+            // on float exponent / mantissa bytes.
+            let channels = (bpp / 2) as usize;
+            let mut prev: Vec<u8> = plane.data[..mip0_bytes].to_vec();
+            let mut prev_w = width;
+            let mut prev_h = height;
+            for _ in 1..mip {
+                let (next, nw, nh) =
+                    box_downsample_half_float(&prev, prev_w, prev_h, channels as u32);
+                out.extend_from_slice(&next);
+                prev = next;
+                prev_w = nw;
+                prev_h = nh;
+            }
         } else {
-            // Fabricate by box-downsample.
+            // Byte-domain fabrication for integer / unorm pixel formats.
             let mut prev: Vec<u8> = plane.data[..mip0_bytes].to_vec();
             let mut prev_w = width;
             let mut prev_h = height;
@@ -377,6 +440,273 @@ pub fn encode_dds_uncompressed(image: &DdsImage) -> Result<Vec<u8>> {
     }
 
     Ok(out)
+}
+
+/// Map an uncompressed [`DdsPixelFormat`] to its `DXGI_FORMAT` integer
+/// code for emission under the DX10 extension header. Used for formats
+/// that have no legacy `DDS_PIXELFORMAT` mask layout (HDR floats) plus
+/// the existing integer formats when the caller explicitly asks for a
+/// DX10-header round-trip. Returns 0 for formats that have no canonical
+/// DXGI mapping (the caller should supply `image.dxgi_format` in that
+/// case).
+fn uncompressed_dxgi_code(pix: DdsPixelFormat) -> u32 {
+    match pix {
+        DdsPixelFormat::R16G16B16A16Float => 10, // DXGI_FORMAT_R16G16B16A16_FLOAT
+        DdsPixelFormat::R16Float => 54,          // DXGI_FORMAT_R16_FLOAT
+        DdsPixelFormat::A8B8G8R8 => 28,          // DXGI_FORMAT_R8G8B8A8_UNORM
+        DdsPixelFormat::A8R8G8B8 => 87,          // DXGI_FORMAT_B8G8R8A8_UNORM
+        DdsPixelFormat::X8R8G8B8 => 88,          // DXGI_FORMAT_B8G8R8X8_UNORM
+        DdsPixelFormat::R5G6B5 => 85,            // DXGI_FORMAT_B5G6R5_UNORM
+        DdsPixelFormat::A1R5G5B5 => 86,          // DXGI_FORMAT_B5G5R5A1_UNORM
+        DdsPixelFormat::A4R4G4B4 => 115,         // DXGI_FORMAT_B4G4R4A4_UNORM
+        DdsPixelFormat::A8L8 => 49,              // DXGI_FORMAT_R8G8_UNORM
+        DdsPixelFormat::L8 => 61,                // DXGI_FORMAT_R8_UNORM
+        DdsPixelFormat::A8 => 65,                // DXGI_FORMAT_A8_UNORM
+        _ => 0,
+    }
+}
+
+/// Box-downsample a single half-float plane to the next half-size
+/// level. Each pixel carries `channels` IEEE-754 binary16 values (two
+/// little-endian bytes per channel). Averaging happens in `f32` after
+/// promoting through [`crate::bc6h::half_to_f32`], then the result is
+/// quantised back to half. Right-/bottom-edge replication is used for
+/// odd source dimensions, mirroring [`box_downsample`].
+fn box_downsample_half_float(
+    src: &[u8],
+    src_w: u32,
+    src_h: u32,
+    channels: u32,
+) -> (Vec<u8>, u32, u32) {
+    let dst_w = (src_w / 2).max(1);
+    let dst_h = (src_h / 2).max(1);
+    let c = channels as usize;
+    let src_stride = src_w as usize * c * 2;
+    let dst_stride = dst_w as usize * c * 2;
+    let mut dst = vec![0u8; dst_stride * dst_h as usize];
+    for dy in 0..dst_h as usize {
+        for dx in 0..dst_w as usize {
+            let sx0 = (dx * 2).min(src_w as usize - 1);
+            let sx1 = (dx * 2 + 1).min(src_w as usize - 1);
+            let sy0 = (dy * 2).min(src_h as usize - 1);
+            let sy1 = (dy * 2 + 1).min(src_h as usize - 1);
+            for ch in 0..c {
+                let load = |y: usize, x: usize| -> f32 {
+                    let off = y * src_stride + x * c * 2 + ch * 2;
+                    let h = u16::from_le_bytes([src[off], src[off + 1]]);
+                    crate::bc6h::half_to_f32(h)
+                };
+                let avg =
+                    (load(sy0, sx0) + load(sy0, sx1) + load(sy1, sx0) + load(sy1, sx1)) * 0.25_f32;
+                let q = f32_to_half(avg);
+                let off = dy * dst_stride + dx * c * 2 + ch * 2;
+                let b = q.to_le_bytes();
+                dst[off] = b[0];
+                dst[off + 1] = b[1];
+            }
+        }
+    }
+    (dst, dst_w, dst_h)
+}
+
+/// Encode an `f32` value to IEEE-754 binary16 (half) bit pattern.
+/// Round-to-nearest-even on the mantissa. Inverse of
+/// [`crate::bc6h::half_to_f32`]. Infinities and NaNs preserve their
+/// classification; overflow saturates to ±Inf; subnormals decay to ±0
+/// rather than rounding into the half subnormal range (Microsoft's
+/// public reference uses the same flush-to-zero behaviour for the
+/// `R16_FLOAT` path).
+pub fn f32_to_half(f: f32) -> u16 {
+    let bits = f.to_bits();
+    let sign = ((bits >> 31) & 1) as u16;
+    let exp = ((bits >> 23) & 0xff) as i32;
+    let mant = bits & 0x7f_ffff;
+    if exp == 0xff {
+        // Inf / NaN: preserve NaN if mantissa non-zero, else ±Inf.
+        let half_mant = if mant != 0 { 0x200u16 } else { 0 };
+        return (sign << 15) | 0x7c00 | half_mant;
+    }
+    // Adjust the exponent from f32 bias (127) to half bias (15).
+    let half_exp = exp - 127 + 15;
+    if half_exp >= 0x1f {
+        // Overflow into half-Inf.
+        return (sign << 15) | 0x7c00;
+    }
+    if half_exp <= 0 {
+        // Underflow → ±0 (flush subnormal range to zero).
+        return sign << 15;
+    }
+    // Round mantissa to 10 bits with round-half-to-even.
+    let m = mant;
+    let round_bit = 1u32 << 12; // bit just below the kept ones
+    let kept = m >> 13;
+    let rem = m & ((1u32 << 13) - 1);
+    let mut rounded = kept;
+    let half_way = rem == round_bit;
+    if rem > round_bit || (half_way && (kept & 1) != 0) {
+        rounded += 1;
+    }
+    // Mantissa carry can push the half exponent up by one (and may
+    // overflow into Inf at the boundary).
+    if rounded == 0x400 {
+        let exp_up = half_exp + 1;
+        if exp_up >= 0x1f {
+            return (sign << 15) | 0x7c00;
+        }
+        return (sign << 15) | ((exp_up as u16) << 10);
+    }
+    (sign << 15) | ((half_exp as u16) << 10) | (rounded as u16)
+}
+
+/// Expand an `R16G16B16A16_FLOAT` surface from its on-disk byte form to
+/// a tightly-packed RGBA `f32` slice (4 floats per pixel, row-major).
+///
+/// `bytes` must hold `width × height × 8` bytes (two little-endian
+/// bytes per channel, four channels per pixel). `output` must hold
+/// `width × height × 4` `f32` entries; the function writes the
+/// promoted values via [`crate::bc6h::half_to_f32`] verbatim — no
+/// clamping or gamma conversion is applied.
+pub fn decode_r16g16b16a16_float(
+    bytes: &[u8],
+    width: u32,
+    height: u32,
+    output: &mut [f32],
+) -> Result<()> {
+    let pixels = (width as usize) * (height as usize);
+    if bytes.len() < pixels * 8 {
+        return Err(DdsError::invalid(format!(
+            "R16G16B16A16_FLOAT input {} bytes < expected {} for {}x{}",
+            bytes.len(),
+            pixels * 8,
+            width,
+            height
+        )));
+    }
+    if output.len() < pixels * 4 {
+        return Err(DdsError::invalid(format!(
+            "R16G16B16A16_FLOAT output {} floats < expected {} for {}x{}",
+            output.len(),
+            pixels * 4,
+            width,
+            height
+        )));
+    }
+    for i in 0..pixels {
+        let src = &bytes[i * 8..i * 8 + 8];
+        for ch in 0..4 {
+            let h = u16::from_le_bytes([src[ch * 2], src[ch * 2 + 1]]);
+            output[i * 4 + ch] = crate::bc6h::half_to_f32(h);
+        }
+    }
+    Ok(())
+}
+
+/// Expand an `R16_FLOAT` single-channel surface to a tightly-packed
+/// `f32` slice (one float per pixel, row-major). `bytes` must hold
+/// `width × height × 2` bytes; `output` must hold
+/// `width × height` `f32` entries.
+pub fn decode_r16_float(bytes: &[u8], width: u32, height: u32, output: &mut [f32]) -> Result<()> {
+    let pixels = (width as usize) * (height as usize);
+    if bytes.len() < pixels * 2 {
+        return Err(DdsError::invalid(format!(
+            "R16_FLOAT input {} bytes < expected {} for {}x{}",
+            bytes.len(),
+            pixels * 2,
+            width,
+            height
+        )));
+    }
+    if output.len() < pixels {
+        return Err(DdsError::invalid(format!(
+            "R16_FLOAT output {} floats < expected {} for {}x{}",
+            output.len(),
+            pixels,
+            width,
+            height
+        )));
+    }
+    for i in 0..pixels {
+        let h = u16::from_le_bytes([bytes[i * 2], bytes[i * 2 + 1]]);
+        output[i] = crate::bc6h::half_to_f32(h);
+    }
+    Ok(())
+}
+
+/// Quantise a tightly-packed RGBA `f32` slice into on-disk
+/// `R16G16B16A16_FLOAT` byte form (8 bytes per pixel; two little-endian
+/// bytes per channel). Inverse of [`decode_r16g16b16a16_float`] modulo
+/// the half-float quantisation step.
+pub fn encode_r16g16b16a16_float_from_f32(
+    input: &[f32],
+    width: u32,
+    height: u32,
+    output: &mut [u8],
+) -> Result<()> {
+    let pixels = (width as usize) * (height as usize);
+    if input.len() < pixels * 4 {
+        return Err(DdsError::invalid(format!(
+            "R16G16B16A16_FLOAT input {} floats < expected {} for {}x{}",
+            input.len(),
+            pixels * 4,
+            width,
+            height
+        )));
+    }
+    if output.len() < pixels * 8 {
+        return Err(DdsError::invalid(format!(
+            "R16G16B16A16_FLOAT output {} bytes < expected {} for {}x{}",
+            output.len(),
+            pixels * 8,
+            width,
+            height
+        )));
+    }
+    for i in 0..pixels {
+        for ch in 0..4 {
+            let h = f32_to_half(input[i * 4 + ch]);
+            let b = h.to_le_bytes();
+            output[i * 8 + ch * 2] = b[0];
+            output[i * 8 + ch * 2 + 1] = b[1];
+        }
+    }
+    Ok(())
+}
+
+/// Quantise a tightly-packed single-channel `f32` slice into on-disk
+/// `R16_FLOAT` byte form (2 bytes per pixel). Inverse of
+/// [`decode_r16_float`] modulo the half-float quantisation step.
+pub fn encode_r16_float_from_f32(
+    input: &[f32],
+    width: u32,
+    height: u32,
+    output: &mut [u8],
+) -> Result<()> {
+    let pixels = (width as usize) * (height as usize);
+    if input.len() < pixels {
+        return Err(DdsError::invalid(format!(
+            "R16_FLOAT input {} floats < expected {} for {}x{}",
+            input.len(),
+            pixels,
+            width,
+            height
+        )));
+    }
+    if output.len() < pixels * 2 {
+        return Err(DdsError::invalid(format!(
+            "R16_FLOAT output {} bytes < expected {} for {}x{}",
+            output.len(),
+            pixels * 2,
+            width,
+            height
+        )));
+    }
+    for i in 0..pixels {
+        let h = f32_to_half(input[i]);
+        let b = h.to_le_bytes();
+        output[i * 2] = b[0];
+        output[i * 2 + 1] = b[1];
+    }
+    Ok(())
 }
 
 /// Per-mip depth (z) slice count for a volume texture: the base depth

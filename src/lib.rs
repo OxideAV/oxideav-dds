@@ -105,12 +105,15 @@
 //!   `ContainerRegistry` now carries probe + demuxer + muxer entries
 //!   for `.dds` so CLI tools can read / write DDS files end-to-end
 //!   through the pipeline.
-//!
-//! Still deferred (followups):
-//!
-//! * LSQ refinement metric — current pixel-space LSQ is approximate;
-//!   fitting in unq-space could push 1-2 dB more on multi-axis HDR
-//!   content.
+//! * **HDR half-float uncompressed surfaces** (round 225) —
+//!   `R16G16B16A16Float` (DXGI 10) and `R16Float` (DXGI 54) are
+//!   parseable and writable end-to-end via [`parse_dds`] /
+//!   [`encode_dds_uncompressed`] (DX10 header automatic). Crate-local
+//!   helpers [`decode_r16g16b16a16_float`] / [`decode_r16_float`] +
+//!   [`encode_r16g16b16a16_float_from_f32`] /
+//!   [`encode_r16_float_from_f32`] cover the on-disk ↔ `f32`
+//!   conversion (with [`f32_to_half`] / [`half_to_f32`] re-exported
+//!   for callers that want to do their own quantisation).
 //!
 //! ## Standalone vs registry-integrated
 //!
@@ -154,7 +157,7 @@ pub mod registry;
 /// Codec id for DDS image frames.
 pub const CODEC_ID_STR: &str = "dds";
 
-pub use bc6h::decode_bc6h;
+pub use bc6h::{decode_bc6h, half_to_f32};
 pub use bc6h_enc::{
     encode_bc6h, encode_bc6h_from_f32, encode_bc6h_sf16, encode_bc6h_sf16_from_f32,
 };
@@ -170,8 +173,9 @@ pub use bcn_enc::{
 };
 pub use decoder::parse_dds;
 pub use encoder::{
-    encode_dds_block_compressed, encode_dds_block_compressed_from_rgba8, encode_dds_uncompressed,
-    encode_dds_volume,
+    decode_r16_float, decode_r16g16b16a16_float, encode_dds_block_compressed,
+    encode_dds_block_compressed_from_rgba8, encode_dds_uncompressed, encode_dds_volume,
+    encode_r16_float_from_f32, encode_r16g16b16a16_float_from_f32, f32_to_half,
 };
 pub use error::{DdsError, Result};
 pub use image::{CubemapFace, DdsImage, DdsPixelFormat, DdsPlane, DdsSurface};

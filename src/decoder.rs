@@ -259,6 +259,8 @@ fn pixel_format_from_dxgi(d: DxgiFormat) -> Option<DdsPixelFormat> {
         DxgiFormat::R8Unorm | DxgiFormat::R8Typeless => DdsPixelFormat::L8,
         DxgiFormat::A8Unorm => DdsPixelFormat::A8,
         DxgiFormat::R8G8Unorm | DxgiFormat::R8G8Typeless => DdsPixelFormat::A8L8,
+        DxgiFormat::R16G16B16A16Float => DdsPixelFormat::R16G16B16A16Float,
+        DxgiFormat::R16Float => DdsPixelFormat::R16Float,
         DxgiFormat::Bc1Unorm | DxgiFormat::Bc1UnormSrgb | DxgiFormat::Bc1Typeless => {
             DdsPixelFormat::Bc1
         }
