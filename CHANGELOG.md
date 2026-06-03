@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.5](https://github.com/OxideAV/oxideav-dds/compare/v0.0.4...v0.0.5) - 2026-06-03
+
+### Other
+
+- R16G16B16A16_FLOAT + R16_FLOAT uncompressed surfaces (round 225)
+- unq-space LSQ refinement pass (round 207)
+
 ### Added
 
 - **HDR half-float uncompressed surfaces (round 225).** Two new
