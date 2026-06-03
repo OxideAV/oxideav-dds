@@ -42,9 +42,8 @@
 //! Microsoft "BC6H Format" article on learn.microsoft.com and the
 //! Intel Open Source Programmer's Reference Manual (Vol. 5: Memory
 //! Data Formats), which is published under the 0BSD license and
-//! documents the same per-mode bit layout textually. No DirectXTex,
-//! NVTT, ISPC `ispc_texcomp`, basisu, or `bc6h_enc` source was
-//! consulted; only public spec text + tables.
+//! documents the same per-mode bit layout textually — spec text +
+//! tables only.
 
 use crate::error::{DdsError, Result};
 

@@ -3,10 +3,8 @@
 //! Reference: Microsoft's public "BCn texture compression" articles on
 //! learn.microsoft.com (specifically "BC1, BC2 and BC3" + "BC4" + "BC5"
 //! pages under direct3d11 / direct3d10 reference) and the public
-//! D3DSDK BCn block-layout descriptions. No DirectXTex, NVTT,
-//! libsquish, basisu, bc7enc, or any other implementation source was
-//! consulted; only the public spec text + tables + the worked-example
-//! pseudo-code from the Microsoft articles.
+//! D3DSDK BCn block-layout descriptions — the spec text + tables + the
+//! worked-example pseudo-code from the Microsoft articles.
 //!
 //! Block layout summary (every BCn block is 4×4 pixels):
 //!

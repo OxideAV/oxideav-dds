@@ -8,9 +8,7 @@
 //! `KHR_DF_MODEL_BC7` description in the Khronos Data Format
 //! specification (which is the authoritative description of the BC7
 //! block layout that Microsoft mandates Direct3D 11 hardware to
-//! decode bit-for-bit). No DirectXTex, NVTT, bc7enc, ISPC, ARM
-//! astc-encoder, basisu, or any other implementation source was
-//! consulted; only the public spec text + tables.
+//! decode bit-for-bit) — spec text + tables only.
 //!
 //! Block layout (LSB → MSB across the 128-bit block):
 //!

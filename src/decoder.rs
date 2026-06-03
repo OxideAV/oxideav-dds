@@ -4,8 +4,6 @@
 //!
 //! Reference: Microsoft's public "DDS file layout for textures" + "DDS
 //! pixel format" + "DDS programming guide" pages on learn.microsoft.com.
-//! No DirectXTex / D3DX / NVTT / squish / `dds.h` source consulted or
-//! paraphrased.
 //!
 //! Round 2 covers:
 //!

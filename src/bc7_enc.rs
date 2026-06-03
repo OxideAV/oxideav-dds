@@ -15,8 +15,7 @@
 //! Reference: Microsoft's public "BC7" article on learn.microsoft.com
 //! (Direct3D 11 reference) and the public Khronos
 //! `KHR_DF_MODEL_BC7` description in the Khronos Data Format
-//! specification. No DirectXTex / NVTT / bc7enc / ISPC / basisu source
-//! was consulted; only the public spec text + the layout tables.
+//! specification — spec text + layout tables only.
 //!
 //! Encoder strategy (round 5):
 //!

@@ -22,9 +22,7 @@
 //! Reference: Microsoft's public "BC6H Format" article on
 //! learn.microsoft.com (Direct3D 11 reference) and the Intel Open
 //! Source Programmer's Reference Manual Vol. 5 (BC6H section, 0BSD-
-//! licensed). No DirectXTex, NVTT, ISPC `ispc_texcomp`, basisu, or
-//! `bc6h_enc` source was consulted; only the public spec text + the
-//! per-mode bit-allocation tables.
+//! licensed) — spec text + per-mode bit-allocation tables only.
 //!
 //! Encoder strategy (round 6):
 //!

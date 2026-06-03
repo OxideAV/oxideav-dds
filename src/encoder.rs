@@ -25,8 +25,7 @@
 //! per-mip block streams.
 //!
 //! Reference: Microsoft's public "DDS file layout for textures" page on
-//! learn.microsoft.com. No DirectXTex / D3DX / NVTT / squish source
-//! consulted or paraphrased.
+//! learn.microsoft.com.
 
 use crate::error::{DdsError, Result};
 use crate::image::{DdsImage, DdsPixelFormat, DdsPlane, DdsSurface};

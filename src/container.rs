@@ -9,8 +9,7 @@
 //! output stream.
 //!
 //! Reference: Microsoft's public "DDS file layout for textures" guide
-//! (header magic + on-disk layout). No DirectXTex / D3DX / NVTT /
-//! squish source consulted.
+//! (header magic + on-disk layout).
 
 use std::io::{Read, SeekFrom, Write};
 
