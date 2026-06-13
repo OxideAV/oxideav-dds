@@ -56,6 +56,41 @@ pub enum DdsPixelFormat {
     /// 8 bpp single-channel alpha (`D3DFMT_A8`).
     A8,
 
+    // --- Extended uncompressed: 16-bit-per-channel and floating-point
+    //     surfaces. The DDS programming guide lists these among the
+    //     legacy D3DFMT numeric FourCC codes a robust reader must
+    //     handle (codes 36, 110..=116) and assigns them DXGI_FORMAT
+    //     values 10/11/13/2/16/34/41/54. On disk each channel is stored
+    //     in R-then-G-then-B-then-A order, little-endian, with the
+    //     channel width the name spells out. Float channels are IEEE-754
+    //     (binary16 for the 16F variants, binary32 for the 32F variants);
+    //     UNORM channels are `value / max` over the channel range and
+    //     SNORM channels are `value / 32767` clamped at -1. ---------------
+    /// 64 bpp, on-disk `[R16, G16, B16, A16]` little-endian, IEEE-754
+    /// binary16 per channel (DXGI `R16G16B16A16_FLOAT`, D3DFMT FourCC 113).
+    R16G16B16A16Float,
+    /// 64 bpp, on-disk `[R16, G16, B16, A16]` little-endian UNORM
+    /// (DXGI `R16G16B16A16_UNORM`, D3DFMT FourCC 36).
+    R16G16B16A16Unorm,
+    /// 64 bpp, on-disk `[R16, G16, B16, A16]` little-endian SNORM
+    /// (DXGI `R16G16B16A16_SNORM`, D3DFMT FourCC 110).
+    R16G16B16A16Snorm,
+    /// 32 bpp, on-disk `[R16, G16]` little-endian binary16
+    /// (DXGI `R16G16_FLOAT`, D3DFMT FourCC 112).
+    R16G16Float,
+    /// 16 bpp, on-disk `[R16]` little-endian binary16
+    /// (DXGI `R16_FLOAT`, D3DFMT FourCC 111).
+    R16Float,
+    /// 128 bpp, on-disk `[R32, G32, B32, A32]` little-endian binary32
+    /// (DXGI `R32G32B32A32_FLOAT`, D3DFMT FourCC 116).
+    R32G32B32A32Float,
+    /// 64 bpp, on-disk `[R32, G32]` little-endian binary32
+    /// (DXGI `R32G32_FLOAT`, D3DFMT FourCC 115).
+    R32G32Float,
+    /// 32 bpp, on-disk `[R32]` little-endian binary32
+    /// (DXGI `R32_FLOAT`, D3DFMT FourCC 114).
+    R32Float,
+
     // --- Block-compressed pass-through (raw block bytes; not decoded
     //     in round 1) ----------------------------------------------------
     /// BC1 (`DXT1`) — 4 bpp, 8 bytes per 4×4 block, 1-bit alpha.
@@ -89,9 +124,18 @@ impl DdsPixelFormat {
     /// figure in the public DDS programming guide.
     pub fn bits_per_pixel(self) -> u32 {
         match self {
-            Self::A8R8G8B8 | Self::X8R8G8B8 | Self::A8B8G8R8 => 32,
+            Self::R32G32B32A32Float => 128,
+            Self::R16G16B16A16Float
+            | Self::R16G16B16A16Unorm
+            | Self::R16G16B16A16Snorm
+            | Self::R32G32Float => 64,
+            Self::A8R8G8B8
+            | Self::X8R8G8B8
+            | Self::A8B8G8R8
+            | Self::R16G16Float
+            | Self::R32Float => 32,
             Self::R8G8B8 => 24,
-            Self::R5G6B5 | Self::A1R5G5B5 | Self::A4R4G4B4 | Self::A8L8 => 16,
+            Self::R5G6B5 | Self::A1R5G5B5 | Self::A4R4G4B4 | Self::A8L8 | Self::R16Float => 16,
             Self::L8 | Self::A8 => 8,
             Self::Bc1 | Self::Bc4Unorm | Self::Bc4Snorm => 4,
             Self::Bc2
@@ -109,9 +153,18 @@ impl DdsPixelFormat {
     /// block-compressed formats — use [`Self::block_bytes`] instead.
     pub fn bytes_per_pixel(self) -> Option<u32> {
         Some(match self {
-            Self::A8R8G8B8 | Self::X8R8G8B8 | Self::A8B8G8R8 => 4,
+            Self::R32G32B32A32Float => 16,
+            Self::R16G16B16A16Float
+            | Self::R16G16B16A16Unorm
+            | Self::R16G16B16A16Snorm
+            | Self::R32G32Float => 8,
+            Self::A8R8G8B8
+            | Self::X8R8G8B8
+            | Self::A8B8G8R8
+            | Self::R16G16Float
+            | Self::R32Float => 4,
             Self::R8G8B8 => 3,
-            Self::R5G6B5 | Self::A1R5G5B5 | Self::A4R4G4B4 | Self::A8L8 => 2,
+            Self::R5G6B5 | Self::A1R5G5B5 | Self::A4R4G4B4 | Self::A8L8 | Self::R16Float => 2,
             Self::L8 | Self::A8 => 1,
             _ => return None,
         })
@@ -152,6 +205,14 @@ impl DdsPixelFormat {
             Self::A8L8 => "A8L8",
             Self::L8 => "L8",
             Self::A8 => "A8",
+            Self::R16G16B16A16Float => "R16G16B16A16_FLOAT",
+            Self::R16G16B16A16Unorm => "R16G16B16A16_UNORM",
+            Self::R16G16B16A16Snorm => "R16G16B16A16_SNORM",
+            Self::R16G16Float => "R16G16_FLOAT",
+            Self::R16Float => "R16_FLOAT",
+            Self::R32G32B32A32Float => "R32G32B32A32_FLOAT",
+            Self::R32G32Float => "R32G32_FLOAT",
+            Self::R32Float => "R32_FLOAT",
             Self::Bc1 => "BC1",
             Self::Bc2 => "BC2",
             Self::Bc3 => "BC3",
@@ -164,6 +225,25 @@ impl DdsPixelFormat {
             Self::Bc7Unorm => "BC7_UNORM",
             Self::Bc7UnormSrgb => "BC7_UNORM_SRGB",
         }
+    }
+
+    /// `true` for the extended high-bit-depth / floating-point
+    /// uncompressed surfaces (the 16-bit-per-channel and 32-bit-float
+    /// formats added for the legacy D3DFMT numeric FourCC codes). These
+    /// decode to normalised f32 RGBA via [`crate::decode_hdr_to_f32`]
+    /// rather than the byte-domain 8-bit path.
+    pub fn is_hdr_uncompressed(self) -> bool {
+        matches!(
+            self,
+            Self::R16G16B16A16Float
+                | Self::R16G16B16A16Unorm
+                | Self::R16G16B16A16Snorm
+                | Self::R16G16Float
+                | Self::R16Float
+                | Self::R32G32B32A32Float
+                | Self::R32G32Float
+                | Self::R32Float
+        )
     }
 }
 

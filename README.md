@@ -104,9 +104,24 @@ Coverage as of round 77:
   `encode_dds_volume` round-trips an uncompressed volume back to disk.
 - **Full DXGI format table** — every `DXGI_FORMAT` value Microsoft
   assigns (1..=132) is enumerated by name in `DxgiFormat` for
-  lossless round-trip; HDR-float, integer, depth/stencil, YUV, and
-  palette formats are recognised but produce
-  `DdsError::Unsupported` from the layout resolver.
+  lossless round-trip; integer, depth/stencil, YUV, 10:10:10:2 /
+  11:11:10 / shared-exponent packed, and palette formats are
+  recognised but produce `DdsError::Unsupported` from the layout
+  resolver.
+- **Extended high-bit-depth / floating-point uncompressed surfaces
+  (round 289).** The legacy D3DFMT numeric `DDS_PIXELFORMAT` FourCC
+  codes the programming guide marks mandatory for a robust reader —
+  `36` / `110` / `111` / `112` / `113` / `114` / `115` / `116` — and
+  the matching DX10 `DXGI_FORMAT` values (incl. typeless aliases)
+  resolve to eight new `DdsPixelFormat` variants: `R16G16B16A16_FLOAT`
+  / `_UNORM` / `_SNORM`, `R16G16_FLOAT`, `R16_FLOAT`,
+  `R32G32B32A32_FLOAT`, `R32G32_FLOAT`, `R32_FLOAT`. `decode_hdr_to_f32`
+  expands a parsed surface to normalised f32 RGBA — `_FLOAT` channels
+  via the IEEE-754 binary16/binary32 widening path, `_UNORM` =
+  `value / 65535`, `_SNORM` = `value / 32767` (reserved `-32768`
+  clamped to `-1.0`), with unstored channels defaulting to G/B = 0,
+  A = 1.0. Surface-size and output-length math is saturating so
+  adversarial `u32::MAX` dimensions reject rather than panic.
 - Block-compressed pass-through. BC1..BC7 raw block bytes are
   surfaced through `DdsImage::surfaces[i].plane.data`; BC1..BC5 +
   BC7 also decompress to RGBA / R / RG via the dedicated `decode_bc*`

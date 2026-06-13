@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Extended high-bit-depth / floating-point uncompressed surfaces
+  (round 289).** Recognise the legacy D3DFMT numeric `DDS_PIXELFORMAT`
+  FourCC codes the DDS programming guide marks as mandatory for a
+  robust reader — `36` (`R16G16B16A16_UNORM`), `110`
+  (`R16G16B16A16_SNORM`), `111` (`R16_FLOAT`), `112` (`R16G16_FLOAT`),
+  `113` (`R16G16B16A16_FLOAT`), `114` (`R32_FLOAT`), `115`
+  (`R32G32_FLOAT`), `116` (`R32G32B32A32_FLOAT`) — plus the matching
+  DX10 `DXGI_FORMAT` values (2, 10, 11, 13, 16, 34, 41, 54, including
+  the typeless aliases). Eight new `DdsPixelFormat` variants carry the
+  layout (channel count + 16/32-bit width); `parse_dds` resolves both
+  the legacy-FourCC and DX10 entry points and surfaces the raw bytes
+  through `DdsImage::surfaces`. A new standalone `decode_hdr_to_f32`
+  expands a surface to normalised f32 RGBA: `_FLOAT` channels widen via
+  the existing IEEE-754 binary16/binary32 path (no clamping), `_UNORM`
+  channels are `value / 65535`, `_SNORM` channels are `value / 32767`
+  with the reserved `-32768` codepoint clamped to `-1.0`, and unstored
+  channels take the DDS default (G/B = 0, A = 1.0). Surface-size /
+  output-length math is saturating so `u32::MAX` dimensions reject
+  rather than panic. Covered by 11 lib-unit + 6 integration tests
+  (`tests/r289_hdr_formats.rs`); the prior `unsupported_dxgi_format_errors`
+  injection test now pivots to `R10G10B10A2_UNORM` (still unmapped).
 - **BC6H unq-space LSQ refinement pass (round 207).** Closes the only
   remaining "Still deferred" followup the round-77 BC6H multi-mode
   encoder shipped with. After the existing pixel-`half_to_f32`-space

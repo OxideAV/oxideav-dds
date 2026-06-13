@@ -244,12 +244,12 @@ fn unsupported_legacy_pixel_format_errors() {
 #[test]
 fn unsupported_dxgi_format_errors() {
     // DX10 cubemap with a DXGI format the resolver intentionally refuses
-    // to lay out (R32G32B32A32_Float — HDR float, not on the supported
-    // table). The parser yields Unsupported.
+    // to lay out (R10G10B10A2_Unorm — packed 10:10:10:2, no DdsPixelFormat
+    // mapping). The parser yields Unsupported.
     let mut bytes = build_dx10_cubemap_bc1(4, 1, 1);
     let dxt10_off = 4 + DDS_HEADER_SIZE;
     bytes[dxt10_off..dxt10_off + 4]
-        .copy_from_slice(&DxgiFormat::R32G32B32A32Float.to_u32().to_le_bytes());
+        .copy_from_slice(&DxgiFormat::R10G10B10A2Unorm.to_u32().to_le_bytes());
     let err = parse_dds(&bytes).expect_err("unsupported DXGI format must error");
     assert!(format!("{err}").contains("unsupported"));
 }

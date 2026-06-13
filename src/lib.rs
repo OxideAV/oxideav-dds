@@ -147,6 +147,7 @@ pub mod encoder;
 pub mod error;
 pub mod image;
 pub mod types;
+pub mod uncompressed_hdr;
 
 #[cfg(feature = "registry")]
 pub mod registry;
@@ -179,6 +180,7 @@ pub use types::{
     DdsHeader, DdsHeaderDxt10, DdsPixelFormatHeader, DxgiFormat, DDS_HEADER_DXT10_SIZE,
     DDS_HEADER_SIZE, DDS_MAGIC, DDS_PIXELFORMAT_SIZE,
 };
+pub use uncompressed_hdr::decode_hdr_to_f32;
 
 #[cfg(feature = "registry")]
 pub use registry::{__oxideav_entry, register, register_codecs, register_containers};

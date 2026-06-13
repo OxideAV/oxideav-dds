@@ -145,6 +145,20 @@ fn pixel_format_from_legacy(p: &DdsPixelFormatHeader) -> Option<DdsPixelFormat> 
             FOURCC_BC4S => Some(DdsPixelFormat::Bc4Snorm),
             FOURCC_BC5U | FOURCC_ATI2 => Some(DdsPixelFormat::Bc5Unorm),
             FOURCC_BC5S => Some(DdsPixelFormat::Bc5Snorm),
+            // Legacy D3DFMT numeric FourCC codes. The DDS programming
+            // guide's resource-format table lists these as values a
+            // robust reader must handle (the `*`-marked rows): the
+            // four_cc field carries a small integer, not four ASCII
+            // bytes. Each maps to the equivalent DXGI_FORMAT and is laid
+            // out by [`pixel_format_from_dxgi`].
+            36 => Some(DdsPixelFormat::R16G16B16A16Unorm), // D3DFMT_A16B16G16R16
+            110 => Some(DdsPixelFormat::R16G16B16A16Snorm), // D3DFMT_Q16W16V16U16
+            111 => Some(DdsPixelFormat::R16Float),         // D3DFMT_R16F
+            112 => Some(DdsPixelFormat::R16G16Float),      // D3DFMT_G16R16F
+            113 => Some(DdsPixelFormat::R16G16B16A16Float), // D3DFMT_A16B16G16R16F
+            114 => Some(DdsPixelFormat::R32Float),         // D3DFMT_R32F
+            115 => Some(DdsPixelFormat::R32G32Float),      // D3DFMT_G32R32F
+            116 => Some(DdsPixelFormat::R32G32B32A32Float), // D3DFMT_A32B32G32R32F
             _ => None,
         };
     }
@@ -274,8 +288,27 @@ fn pixel_format_from_dxgi(d: DxgiFormat) -> Option<DdsPixelFormat> {
         DxgiFormat::Bc6hSf16 => DdsPixelFormat::Bc6hSf16,
         DxgiFormat::Bc7Unorm | DxgiFormat::Bc7Typeless => DdsPixelFormat::Bc7Unorm,
         DxgiFormat::Bc7UnormSrgb => DdsPixelFormat::Bc7UnormSrgb,
-        // Everything else (HDR float, integer, depth/stencil, YUV
-        // planar, palette-8) has no [`DdsPixelFormat`] mapping yet.
+        // Extended high-bit-depth / floating-point uncompressed
+        // surfaces. On disk each channel is stored in R-then-G-then-B
+        // -then-A order, little-endian, with the channel width the DXGI
+        // name spells out. These decode to normalised f32 RGBA via
+        // [`crate::decode_hdr_to_f32`]; the raw bytes are still surfaced
+        // through `DdsImage::surfaces`.
+        DxgiFormat::R16G16B16A16Float | DxgiFormat::R16G16B16A16Typeless => {
+            DdsPixelFormat::R16G16B16A16Float
+        }
+        DxgiFormat::R16G16B16A16Unorm => DdsPixelFormat::R16G16B16A16Unorm,
+        DxgiFormat::R16G16B16A16Snorm => DdsPixelFormat::R16G16B16A16Snorm,
+        DxgiFormat::R16G16Float | DxgiFormat::R16G16Typeless => DdsPixelFormat::R16G16Float,
+        DxgiFormat::R16Float | DxgiFormat::R16Typeless => DdsPixelFormat::R16Float,
+        DxgiFormat::R32G32B32A32Float | DxgiFormat::R32G32B32A32Typeless => {
+            DdsPixelFormat::R32G32B32A32Float
+        }
+        DxgiFormat::R32G32Float | DxgiFormat::R32G32Typeless => DdsPixelFormat::R32G32Float,
+        DxgiFormat::R32Float | DxgiFormat::R32Typeless => DdsPixelFormat::R32Float,
+        // Everything else (10:10:10:2, 11:11:10, shared-exponent,
+        // integer, depth/stencil, YUV planar, palette-8) has no
+        // [`DdsPixelFormat`] mapping yet.
         _ => return None,
     })
 }
