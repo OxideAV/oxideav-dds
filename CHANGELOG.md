@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Extended high-bit-depth / floating-point uncompressed surfaces
+  (round 289).** `parse_dds` now recognises the 16-bit-per-channel and
+  32-bit-float uncompressed layouts Microsoft assigns to the legacy
+  `D3DFMT` numeric FourCC codes 36 / 110..=116 and to the matching
+  `DXGI_FORMAT` values: `R16G16B16A16_UNORM` (FourCC 36 /
+  `D3DFMT_A16B16G16R16`), `R16G16B16A16_SNORM` (110 /
+  `Q16W16V16U16`), `R16_FLOAT` (111 / `R16F`), `R16G16_FLOAT` (112 /
+  `G16R16F`), `R16G16B16A16_FLOAT` (113 / `A16B16G16R16F`),
+  `R32_FLOAT` (114 / `R32F`), `R32G32_FLOAT` (115 / `G32R32F`) and
+  `R32G32B32A32_FLOAT` (116 / `A32B32G32R32F`). Each is resolved from
+  both the legacy numeric FourCC and the DX10 `dxgi_format`, sized
+  correctly, and surfaced as raw bytes via `DdsImage::surfaces`. New
+  `DdsPixelFormat` variants plus three public decode helpers in the
+  `hdr` module: `decode_float_surface` widens the half-float / `f32`
+  layouts to an interleaved `Vec<f32>` (the half path reuses the
+  crate's IEEE-754 binary16 → `f32` widening, the 32-bit path
+  reinterprets the little-endian bytes as binary32), and
+  `decode_rgba16_unorm_surface` / `decode_rgba16_snorm_surface`
+  expose the stored 16-bit channels (`u16` / `i16`). Channel order,
+  bit count, and the FourCC ↔ DXGI ↔ `D3DFMT` correspondence come
+  from Microsoft's public DDS / DXGI programming-guide pages. The
+  real-range normalisation arithmetic for the UNORM / SNORM pair is
+  not stated on those pages, so the scaling step is left to the
+  caller. 11 new integration tests in `tests/hdr_surfaces.rs` plus 8
+  `hdr`-module unit tests; the pre-existing
+  `unsupported_dxgi_format_errors` injection test was retargeted at
+  `R32G32B32A32_UINT` (a still-unsupported integer format) since its
+  former target is now decoded.
 - **BC6H unq-space LSQ refinement pass (round 207).** Closes the only
   remaining "Still deferred" followup the round-77 BC6H multi-mode
   encoder shipped with. After the existing pixel-`half_to_f32`-space

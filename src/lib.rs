@@ -100,6 +100,18 @@
 //!   (1..=132) is enumerated in [`DxgiFormat`] for lossless
 //!   round-trip; consumers can drop unsupported variants without
 //!   losing the original integer code.
+//! * **Extended high-bit-depth / floating-point uncompressed surfaces**
+//!   — the 16-bit-per-channel and 32-bit-float layouts Microsoft
+//!   assigns to the legacy `D3DFMT` numeric FourCC codes 36 / 110..=116
+//!   and to the matching `DXGI_FORMAT` values: `R16G16B16A16_UNORM`,
+//!   `R16G16B16A16_SNORM`, `R16_FLOAT`, `R16G16_FLOAT`,
+//!   `R16G16B16A16_FLOAT`, `R32_FLOAT`, `R32G32_FLOAT`,
+//!   `R32G32B32A32_FLOAT`. [`parse_dds`] now recognises them from both
+//!   the numeric FourCC and the DX10 `dxgi_format`, sizes the surfaces
+//!   correctly, and surfaces the raw bytes; [`decode_float_surface`]
+//!   widens the half-float / `f32` layouts to interleaved `f32`, and
+//!   [`decode_rgba16_unorm_surface`] / [`decode_rgba16_snorm_surface`]
+//!   expose the stored 16-bit channels (`u16` / `i16`).
 //! * **`.dds` still-image container demuxer + muxer** (round-3 lift
 //!   over the round-2 extension-only registration). The framework
 //!   `ContainerRegistry` now carries probe + demuxer + muxer entries
@@ -111,6 +123,15 @@
 //! * LSQ refinement metric — current pixel-space LSQ is approximate;
 //!   fitting in unq-space could push 1-2 dB more on multi-axis HDR
 //!   content.
+//! * UNORM / SNORM real-range normalisation — the Microsoft DDS / DXGI
+//!   programming-guide pages describe `R16G16B16A16_UNORM` /
+//!   `_SNORM` as "unsigned-normalised-integer" / "signed-normalised-
+//!   integer" but do not state the arithmetic that maps the stored
+//!   16-bit integers onto `[0, 1]` / `[-1, 1]`. The crate therefore
+//!   decodes these two formats to their raw `u16` / `i16` channels;
+//!   the scaling step is left to the caller pending a documentation
+//!   addition. The floating-point layouts have no such gap — their
+//!   stored bits are the value.
 //!
 //! ## Standalone vs registry-integrated
 //!
@@ -143,6 +164,7 @@ pub mod container;
 pub mod decoder;
 pub mod encoder;
 pub mod error;
+pub mod hdr;
 pub mod image;
 pub mod types;
 
@@ -172,6 +194,7 @@ pub use encoder::{
     encode_dds_volume,
 };
 pub use error::{DdsError, Result};
+pub use hdr::{decode_float_surface, decode_rgba16_snorm_surface, decode_rgba16_unorm_surface};
 pub use image::{CubemapFace, DdsImage, DdsPixelFormat, DdsPlane, DdsSurface};
 pub use types::{
     DdsHeader, DdsHeaderDxt10, DdsPixelFormatHeader, DxgiFormat, DDS_HEADER_DXT10_SIZE,

@@ -80,6 +80,38 @@ pub enum DdsPixelFormat {
     Bc7Unorm,
     /// BC7 sRGB variant.
     Bc7UnormSrgb,
+
+    // --- Extended high-bit-depth / floating-point uncompressed layouts ---
+    //
+    // Microsoft assigns these to the legacy `D3DFMT` numeric FourCC
+    // codes 36 / 110..=116 (programming guide "DDS pixel format")
+    // and to the matching `DXGI_FORMAT` values. Each carries one or more
+    // 16-bit or 32-bit channels, little-endian, in the channel order the
+    // DXGI name lists (lowest memory address first).
+    /// 64 bpp, on-disk `[R, G, B, A]` × `u16` unsigned-normalised
+    /// (`D3DFMT_A16B16G16R16`, FourCC 36 / DXGI `R16G16B16A16_UNORM`).
+    R16G16B16A16Unorm,
+    /// 64 bpp, on-disk `[R, G, B, A]` × `i16` signed-normalised
+    /// (`D3DFMT_Q16W16V16U16`, FourCC 110 / DXGI `R16G16B16A16_SNORM`).
+    R16G16B16A16Snorm,
+    /// 16 bpp, on-disk `[R]` × half-float (binary16)
+    /// (`D3DFMT_R16F`, FourCC 111 / DXGI `R16_FLOAT`).
+    R16Float,
+    /// 32 bpp, on-disk `[R, G]` × half-float (binary16)
+    /// (`D3DFMT_G16R16F`, FourCC 112 / DXGI `R16G16_FLOAT`).
+    R16G16Float,
+    /// 64 bpp, on-disk `[R, G, B, A]` × half-float (binary16)
+    /// (`D3DFMT_A16B16G16R16F`, FourCC 113 / DXGI `R16G16B16A16_FLOAT`).
+    R16G16B16A16Float,
+    /// 32 bpp, on-disk `[R]` × `f32` (binary32)
+    /// (`D3DFMT_R32F`, FourCC 114 / DXGI `R32_FLOAT`).
+    R32Float,
+    /// 64 bpp, on-disk `[R, G]` × `f32` (binary32)
+    /// (`D3DFMT_G32R32F`, FourCC 115 / DXGI `R32G32_FLOAT`).
+    R32G32Float,
+    /// 128 bpp, on-disk `[R, G, B, A]` × `f32` (binary32)
+    /// (`D3DFMT_A32B32G32R32F`, FourCC 116 / DXGI `R32G32B32A32_FLOAT`).
+    R32G32B32A32Float,
 }
 
 impl DdsPixelFormat {
@@ -93,6 +125,13 @@ impl DdsPixelFormat {
             Self::R8G8B8 => 24,
             Self::R5G6B5 | Self::A1R5G5B5 | Self::A4R4G4B4 | Self::A8L8 => 16,
             Self::L8 | Self::A8 => 8,
+            Self::R16Float => 16,
+            Self::R16G16Float | Self::R32Float => 32,
+            Self::R16G16B16A16Unorm
+            | Self::R16G16B16A16Snorm
+            | Self::R16G16B16A16Float
+            | Self::R32G32Float => 64,
+            Self::R32G32B32A32Float => 128,
             Self::Bc1 | Self::Bc4Unorm | Self::Bc4Snorm => 4,
             Self::Bc2
             | Self::Bc3
@@ -113,6 +152,13 @@ impl DdsPixelFormat {
             Self::R8G8B8 => 3,
             Self::R5G6B5 | Self::A1R5G5B5 | Self::A4R4G4B4 | Self::A8L8 => 2,
             Self::L8 | Self::A8 => 1,
+            Self::R16Float => 2,
+            Self::R16G16Float | Self::R32Float => 4,
+            Self::R16G16B16A16Unorm
+            | Self::R16G16B16A16Snorm
+            | Self::R16G16B16A16Float
+            | Self::R32G32Float => 8,
+            Self::R32G32B32A32Float => 16,
             _ => return None,
         })
     }
@@ -163,7 +209,29 @@ impl DdsPixelFormat {
             Self::Bc6hSf16 => "BC6H_SF16",
             Self::Bc7Unorm => "BC7_UNORM",
             Self::Bc7UnormSrgb => "BC7_UNORM_SRGB",
+            Self::R16G16B16A16Unorm => "R16G16B16A16_UNORM",
+            Self::R16G16B16A16Snorm => "R16G16B16A16_SNORM",
+            Self::R16Float => "R16_FLOAT",
+            Self::R16G16Float => "R16G16_FLOAT",
+            Self::R16G16B16A16Float => "R16G16B16A16_FLOAT",
+            Self::R32Float => "R32_FLOAT",
+            Self::R32G32Float => "R32G32_FLOAT",
+            Self::R32G32B32A32Float => "R32G32B32A32_FLOAT",
         }
+    }
+
+    /// Number of channels (1, 2, or 4) for the extended high-bit-depth /
+    /// floating-point uncompressed layouts; `None` for any other format.
+    pub fn channel_count(self) -> Option<u32> {
+        Some(match self {
+            Self::R16Float | Self::R32Float => 1,
+            Self::R16G16Float | Self::R32G32Float => 2,
+            Self::R16G16B16A16Unorm
+            | Self::R16G16B16A16Snorm
+            | Self::R16G16B16A16Float
+            | Self::R32G32B32A32Float => 4,
+            _ => return None,
+        })
     }
 }
 

@@ -145,6 +145,18 @@ fn pixel_format_from_legacy(p: &DdsPixelFormatHeader) -> Option<DdsPixelFormat> 
             FOURCC_BC4S => Some(DdsPixelFormat::Bc4Snorm),
             FOURCC_BC5U | FOURCC_ATI2 => Some(DdsPixelFormat::Bc5Unorm),
             FOURCC_BC5S => Some(DdsPixelFormat::Bc5Snorm),
+            // Legacy `D3DFMT` numeric FourCC codes for the extended
+            // high-bit-depth / floating-point uncompressed layouts. The
+            // mapping below is the one Microsoft tabulates in the
+            // programming guide's "DDS pixel format" section.
+            D3DFMT_A16B16G16R16 => Some(DdsPixelFormat::R16G16B16A16Unorm),
+            D3DFMT_Q16W16V16U16 => Some(DdsPixelFormat::R16G16B16A16Snorm),
+            D3DFMT_R16F => Some(DdsPixelFormat::R16Float),
+            D3DFMT_G16R16F => Some(DdsPixelFormat::R16G16Float),
+            D3DFMT_A16B16G16R16F => Some(DdsPixelFormat::R16G16B16A16Float),
+            D3DFMT_R32F => Some(DdsPixelFormat::R32Float),
+            D3DFMT_G32R32F => Some(DdsPixelFormat::R32G32Float),
+            D3DFMT_A32B32G32R32F => Some(DdsPixelFormat::R32G32B32A32Float),
             _ => None,
         };
     }
@@ -274,7 +286,18 @@ fn pixel_format_from_dxgi(d: DxgiFormat) -> Option<DdsPixelFormat> {
         DxgiFormat::Bc6hSf16 => DdsPixelFormat::Bc6hSf16,
         DxgiFormat::Bc7Unorm | DxgiFormat::Bc7Typeless => DdsPixelFormat::Bc7Unorm,
         DxgiFormat::Bc7UnormSrgb => DdsPixelFormat::Bc7UnormSrgb,
-        // Everything else (HDR float, integer, depth/stencil, YUV
+        // Extended high-bit-depth / floating-point uncompressed layouts.
+        // These are the DX10-header DXGI counterparts of the legacy
+        // numeric FourCC codes 36 / 110..=116.
+        DxgiFormat::R16G16B16A16Unorm => DdsPixelFormat::R16G16B16A16Unorm,
+        DxgiFormat::R16G16B16A16Snorm => DdsPixelFormat::R16G16B16A16Snorm,
+        DxgiFormat::R16Float => DdsPixelFormat::R16Float,
+        DxgiFormat::R16G16Float => DdsPixelFormat::R16G16Float,
+        DxgiFormat::R16G16B16A16Float => DdsPixelFormat::R16G16B16A16Float,
+        DxgiFormat::R32Float => DdsPixelFormat::R32Float,
+        DxgiFormat::R32G32Float => DdsPixelFormat::R32G32Float,
+        DxgiFormat::R32G32B32A32Float => DdsPixelFormat::R32G32B32A32Float,
+        // Everything else (other integer, depth/stencil, YUV
         // planar, palette-8) has no [`DdsPixelFormat`] mapping yet.
         _ => return None,
     })

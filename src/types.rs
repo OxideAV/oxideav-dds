@@ -148,6 +148,32 @@ pub const FOURCC_ATI2: u32 = make_fourcc(b"ATI2");
 /// extension (which then carries the real DXGI format identifier).
 pub const FOURCC_DX10: u32 = make_fourcc(b"DX10");
 
+// --- Legacy `D3DFMT` numeric FourCC codes -------------------------------
+//
+// Microsoft's "DDS pixel format" + programming-guide pages list a set of
+// extended uncompressed layouts whose `four_cc` field holds a numeric
+// `D3DFORMAT` enumeration value (rather than a four-character ASCII tag).
+// A robust DDS reader must accept these legacy codes; the values below
+// are the ones Microsoft tabulates for the high-bit-depth and
+// floating-point formats.
+
+/// `D3DFMT_A16B16G16R16` (numeric FourCC 36) — DXGI `R16G16B16A16_UNORM`.
+pub const D3DFMT_A16B16G16R16: u32 = 36;
+/// `D3DFMT_Q16W16V16U16` (numeric FourCC 110) — DXGI `R16G16B16A16_SNORM`.
+pub const D3DFMT_Q16W16V16U16: u32 = 110;
+/// `D3DFMT_R16F` (numeric FourCC 111) — DXGI `R16_FLOAT`.
+pub const D3DFMT_R16F: u32 = 111;
+/// `D3DFMT_G16R16F` (numeric FourCC 112) — DXGI `R16G16_FLOAT`.
+pub const D3DFMT_G16R16F: u32 = 112;
+/// `D3DFMT_A16B16G16R16F` (numeric FourCC 113) — DXGI `R16G16B16A16_FLOAT`.
+pub const D3DFMT_A16B16G16R16F: u32 = 113;
+/// `D3DFMT_R32F` (numeric FourCC 114) — DXGI `R32_FLOAT`.
+pub const D3DFMT_R32F: u32 = 114;
+/// `D3DFMT_G32R32F` (numeric FourCC 115) — DXGI `R32G32_FLOAT`.
+pub const D3DFMT_G32R32F: u32 = 115;
+/// `D3DFMT_A32B32G32R32F` (numeric FourCC 116) — DXGI `R32G32B32A32_FLOAT`.
+pub const D3DFMT_A32B32G32R32F: u32 = 116;
+
 /// Pack a four-byte little-endian ASCII tag into the 32-bit FourCC layout
 /// Microsoft uses (`DDS_PIXELFORMAT.four_cc`).
 pub const fn make_fourcc(s: &[u8; 4]) -> u32 {
