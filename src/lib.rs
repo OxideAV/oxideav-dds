@@ -111,7 +111,10 @@
 //!   correctly, and surfaces the raw bytes; [`decode_float_surface`]
 //!   widens the half-float / `f32` layouts to interleaved `f32`, and
 //!   [`decode_rgba16_unorm_surface`] / [`decode_rgba16_snorm_surface`]
-//!   expose the stored 16-bit channels (`u16` / `i16`).
+//!   expose the stored 16-bit channels (`u16` / `i16`). The packed
+//!   `R11G11B10_FLOAT` HDR layout (`DXGI_FORMAT` value 26 — three
+//!   sign-less partial-precision floats sharing a 32-bit word) widens
+//!   to interleaved `f32` via [`decode_r11g11b10_float_surface`].
 //! * **`.dds` still-image container demuxer + muxer** (round-3 lift
 //!   over the round-2 extension-only registration). The framework
 //!   `ContainerRegistry` now carries probe + demuxer + muxer entries
@@ -194,7 +197,10 @@ pub use encoder::{
     encode_dds_volume,
 };
 pub use error::{DdsError, Result};
-pub use hdr::{decode_float_surface, decode_rgba16_snorm_surface, decode_rgba16_unorm_surface};
+pub use hdr::{
+    decode_float_surface, decode_r11g11b10_float_surface, decode_rgba16_snorm_surface,
+    decode_rgba16_unorm_surface,
+};
 pub use image::{CubemapFace, DdsImage, DdsPixelFormat, DdsPlane, DdsSurface};
 pub use types::{
     DdsHeader, DdsHeaderDxt10, DdsPixelFormatHeader, DxgiFormat, DDS_HEADER_DXT10_SIZE,

@@ -125,6 +125,17 @@ Coverage as of round 77:
   on those pages, so the crate leaves the scaling step to the caller
   (the floating-point layouts have no such gap — their stored bits
   are the value).
+- **Packed `R11G11B10_FLOAT` HDR surface (round 293).** The
+  `DXGI_FORMAT` value 26 layout packs three sign-less partial-precision
+  floats into one little-endian 32-bit word (R in bits 0..=10, G in
+  11..=21, B in 22..=31; each channel has a 5-bit biased-by-15 exponent
+  with a 6-bit mantissa for R / G and a 5-bit mantissa for B).
+  `decode_r11g11b10_float_surface` widens every channel to interleaved
+  `f32`, mirroring IEEE-754 half-precision semantics — denormals are
+  decoded (not flushed), and the all-ones exponent maps to
+  infinity / NaN. The exact bit packing, exponent bias, per-channel
+  mantissa widths and "first named component in the least-significant
+  bits" ordering come from Microsoft's public `DXGI_FORMAT` reference.
 - Block-compressed pass-through. BC1..BC7 raw block bytes are
   surfaced through `DdsImage::surfaces[i].plane.data`; BC1..BC5 +
   BC7 also decompress to RGBA / R / RG via the dedicated `decode_bc*`

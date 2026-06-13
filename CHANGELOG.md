@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Packed `R11G11B10_FLOAT` HDR surface decoder (round 293).** New
+  `decode_r11g11b10_float_surface` widens the `DXGI_FORMAT` value 26
+  layout — three sign-less partial-precision floats packed into one
+  little-endian 32-bit word (R in bits 0..=10, G in 11..=21, B in
+  22..=31; each with a 5-bit biased-by-15 exponent, 6-bit mantissa for
+  R / G and 5-bit mantissa for B) — to an interleaved `Vec<f32>` of
+  `width × height × 3` samples. Mirrors IEEE-754 half-precision rules:
+  denormals are decoded rather than flushed, and the all-ones exponent
+  maps to infinity / NaN. Bit packing, exponent bias, per-channel
+  mantissa widths and the least-significant-bits component ordering are
+  taken from Microsoft's public `DXGI_FORMAT` reference. Exported at
+  the crate root. Eight unit tests cover unity per channel, zero,
+  channel independence, the narrower B mantissa, a subnormal, inf/NaN,
+  row-major multi-pixel layout, and the truncated-input error.
+
 - **Extended high-bit-depth / floating-point uncompressed surfaces
   (round 289).** `parse_dds` now recognises the 16-bit-per-channel and
   32-bit-float uncompressed layouts Microsoft assigns to the legacy
