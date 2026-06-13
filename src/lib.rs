@@ -128,11 +128,9 @@
 //! Every byte of the parser was written from Microsoft's public DDS
 //! programming-guide pages on learn.microsoft.com (the "DDS file
 //! layout for textures", "DDS pixel format", and "Programming guide
-//! for DDS" articles plus the public DXGI format reference). No
-//! DirectXTex, D3DX, NVTT, squish, or other DDS-handling source code
-//! was consulted, paraphrased, or cross-referenced. Binaries (`magick`,
-//! `texconv`) are used only as black-box validators when generating
-//! test fixtures, not as a source of constants or layout.
+//! for DDS" articles plus the public DXGI format reference). Binaries
+//! (`magick`, `texconv`) are used only as black-box validators when
+//! generating test fixtures, not as a source of constants or layout.
 
 pub mod bc6h;
 pub mod bc6h_enc;

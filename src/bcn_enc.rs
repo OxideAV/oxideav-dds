@@ -8,9 +8,7 @@
 //! Reference: Microsoft's public "BC1, BC2 and BC3" + "BC4" + "BC5"
 //! articles on learn.microsoft.com (block layout, c0/c1 ordering,
 //! 4-colour vs 3-colour-plus-transparent rules, 8-value vs 6-value
-//! interpolation modes) and the public Direct3D 11 reference. No
-//! DirectXTex / NVTT / libsquish / bc7enc / basisu / ARM astc-encoder
-//! source was consulted; only the public spec.
+//! interpolation modes) and the public Direct3D 11 reference.
 //!
 //! Encoder strategy (BC1):
 //!
@@ -34,8 +32,7 @@
 //! one" refinement. The output is correct (decodes to a faithful
 //! approximation of the source) and bit-exact roundtrips when the
 //! source is already block-aligned (e.g. solid-colour blocks). It is
-//! NOT competitive with DirectXTex or ISPC encoders for visual
-//! quality on photographic content.
+//! not tuned for visual quality on photographic content.
 
 use crate::bcn::rgb565_to_rgb888;
 use crate::error::{DdsError, Result};

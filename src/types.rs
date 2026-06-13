@@ -3,9 +3,7 @@
 //! Reference: Microsoft's public "DDS file layout for textures" guide
 //! (learn.microsoft.com/windows/win32/direct3ddds/dx-graphics-dds-pguide).
 //! Field names below match the public docs (which are themselves the
-//! header file Microsoft has published as part of the DirectX docs);
-//! no implementation source from DirectXTex / D3DX / NVTT / squish was
-//! consulted, paraphrased, or cross-checked.
+//! header file Microsoft has published as part of the DirectX docs).
 //!
 //! The on-disk file is exactly:
 //!
