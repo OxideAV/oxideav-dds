@@ -184,6 +184,20 @@ fn pixel_format_from_legacy(p: &DdsPixelFormatHeader) -> Option<DdsPixelFormat> 
             return Some(DdsPixelFormat::A8B8G8R8);
         }
     }
+    if rgb && p.rgb_bit_count == 32 && alpha_pixels {
+        // A2B10G10R10 (D3DFMT_A2B10G10R10 / DXGI R10G10B10A2_UNORM):
+        // R=0x000003ff, G=0x000ffc00, B=0x3ff00000, A=0xc0000000. This is
+        // the canonical Direct3D 10 10:10:10:2 packing — the first named
+        // component (R) occupies the least-significant bits. (Masks per
+        // Microsoft's "Programming guide for DDS" pixel-format table.)
+        if p.r_bit_mask == 0x0000_03ff
+            && p.g_bit_mask == 0x000f_fc00
+            && p.b_bit_mask == 0x3ff0_0000
+            && p.a_bit_mask == 0xc000_0000
+        {
+            return Some(DdsPixelFormat::R10G10B10A2Unorm);
+        }
+    }
     if rgb && p.rgb_bit_count == 32 && !alpha_pixels {
         // X8R8G8B8: same masks as A8R8G8B8 but no alpha.
         if p.r_bit_mask == 0x00ff_0000 && p.g_bit_mask == 0x0000_ff00 && p.b_bit_mask == 0x0000_00ff
@@ -297,6 +311,9 @@ fn pixel_format_from_dxgi(d: DxgiFormat) -> Option<DdsPixelFormat> {
         DxgiFormat::R32Float => DdsPixelFormat::R32Float,
         DxgiFormat::R32G32Float => DdsPixelFormat::R32G32Float,
         DxgiFormat::R32G32B32A32Float => DdsPixelFormat::R32G32B32A32Float,
+        // Packed 10:10:10:2 — one 32-bit word per pixel, R in the
+        // least-significant 10 bits.
+        DxgiFormat::R10G10B10A2Unorm => DdsPixelFormat::R10G10B10A2Unorm,
         // Everything else (other integer, depth/stencil, YUV
         // planar, palette-8) has no [`DdsPixelFormat`] mapping yet.
         _ => return None,

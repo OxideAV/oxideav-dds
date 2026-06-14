@@ -9,7 +9,7 @@ single-format codec crates.
 
 ## Status
 
-Coverage as of round 299:
+Coverage as of round 305:
 
 - `DDS_HEADER` (124 bytes) + optional `DDS_HEADER_DXT10` (20 bytes) parser.
 - Bit-exact round-trip of every common uncompressed surface layout:
@@ -150,6 +150,20 @@ Coverage as of round 299:
   all-zero word decodes to `+0`). The exact bit packing, shared-exponent
   semantics and "first named component in the least-significant bits"
   ordering come from Microsoft's public `DXGI_FORMAT` reference.
+- **Packed `R10G10B10A2_UNORM` surface (round 305).** The `DXGI_FORMAT`
+  value 24 layout (legacy `D3DFMT_A2B10G10R10`) packs three 10-bit
+  colour channels and one 2-bit alpha channel into one little-endian
+  32-bit word. The programming guide's pixel-format table gives the bit
+  masks (R = `0x000003ff`, G = `0x000ffc00`, B = `0x3ff00000`,
+  A = `0xc0000000`), so with the "first named component occupies the
+  least-significant bits" rule R lands in bits 0..=9, G in 10..=19, B in
+  20..=29, and A in 30..=31. `decode_r10g10b10a2_unorm_surface` returns
+  the stored unsigned-normalised integers directly (R / G / B in
+  `0..=1023`, A in `0..=3`); as with `R16G16B16A16_UNORM` the crate
+  leaves the `[0, 1]` normalisation (`/ 1023` for colour, `/ 3` for
+  alpha) to the caller. `parse_dds` resolves the format from both the
+  DX10 `dxgi_format == 24` and the legacy `D3DFMT_A2B10G10R10` DDPF_RGB
+  mask layout.
 - Block-compressed pass-through. BC1..BC7 raw block bytes are
   surfaced through `DdsImage::surfaces[i].plane.data`; BC1..BC5 +
   BC7 also decompress to RGBA / R / RG via the dedicated `decode_bc*`

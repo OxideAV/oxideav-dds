@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Packed `R10G10B10A2_UNORM` surface decoder (round 305).** New
+  `decode_r10g10b10a2_unorm_surface` widens the `DXGI_FORMAT` value 24
+  layout (legacy `D3DFMT_A2B10G10R10`) — three 10-bit colour channels
+  plus one 2-bit alpha channel packed into a single little-endian 32-bit
+  word — to an interleaved `Vec<u16>` of `width × height × 4` stored
+  samples (R / G / B in `0..=1023`, A in `0..=3`). The bit masks
+  (R = `0x000003ff`, G = `0x000ffc00`, B = `0x3ff00000`,
+  A = `0xc0000000`) come from the programming guide's pixel-format
+  table, fixing R in bits 0..=9, G in bits 10..=19, B in bits 20..=29,
+  and A in bits 30..=31. As with the `R16G16B16A16_UNORM` path the
+  returned values are the raw stored unsigned-normalised integers; the
+  caller divides colour by `1023` and alpha by `3` to normalise onto
+  `[0, 1]`. `parse_dds` now resolves the format from both the DX10
+  `DDS_HEADER_DXT10` `dxgi_format == 24` and the legacy
+  `D3DFMT_A2B10G10R10` DDPF_RGB mask layout, sizing the surface at four
+  bytes per pixel. A new `DdsPixelFormat::R10G10B10A2Unorm` variant
+  carries it. Five `hdr` unit tests (channel order / widths, all-zero
+  word, all-ones word, row-major multi-pixel, truncated-input rejection)
+  plus three `tests/hdr_surfaces.rs` integration tests (DX10 path,
+  legacy-mask path, 2×2 sizing). Exported at the crate root.
 - **Shared-exponent `R9G9B9E5_SHAREDEXP` HDR surface decoder (round
   299).** New `decode_r9g9b9e5_sharedexp_surface` widens the
   `DXGI_FORMAT` value 67 layout — three sign-less channels packed into

@@ -9,12 +9,12 @@
 //! decoded channel values.
 
 use oxideav_dds::types::{
-    DDPF_FOURCC, DDSD_PIXELFORMAT, DDSD_REQUIRED, DDS_HEADER_SIZE, DDS_MAGIC, DDS_PIXELFORMAT_SIZE,
-    FOURCC_DX10,
+    DDPF_ALPHAPIXELS, DDPF_FOURCC, DDPF_RGB, DDSD_PIXELFORMAT, DDSD_REQUIRED, DDS_HEADER_SIZE,
+    DDS_MAGIC, DDS_PIXELFORMAT_SIZE, FOURCC_DX10,
 };
 use oxideav_dds::{
-    decode_float_surface, decode_rgba16_snorm_surface, decode_rgba16_unorm_surface, parse_dds,
-    DdsPixelFormat,
+    decode_float_surface, decode_r10g10b10a2_unorm_surface, decode_rgba16_snorm_surface,
+    decode_rgba16_unorm_surface, parse_dds, DdsPixelFormat,
 };
 
 const CAPS_TEXTURE: u32 = 0x0000_1000;
@@ -95,6 +95,103 @@ fn build_dx10_dds(dxgi_format: u32, width: u32, height: u32, pixel_data: &[u8]) 
     out.extend_from_slice(&0u32.to_le_bytes());
     out.extend_from_slice(pixel_data);
     out
+}
+
+/// Build a DDS file whose `DDS_PIXELFORMAT` is a masked uncompressed
+/// (DDPF_RGB) layout with the supplied flags / bit count / channel masks.
+#[allow(clippy::too_many_arguments)]
+fn build_masked_dds(
+    flags: u32,
+    rgb_bit_count: u32,
+    r_mask: u32,
+    g_mask: u32,
+    b_mask: u32,
+    a_mask: u32,
+    width: u32,
+    height: u32,
+    pixel_data: &[u8],
+) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&DDS_MAGIC.to_le_bytes());
+    out.extend_from_slice(&(DDS_HEADER_SIZE as u32).to_le_bytes());
+    out.extend_from_slice(&DDSD_REQUIRED.to_le_bytes());
+    out.extend_from_slice(&height.to_le_bytes());
+    out.extend_from_slice(&width.to_le_bytes());
+    out.extend_from_slice(&0u32.to_le_bytes()); // pitch_or_linear_size
+    out.extend_from_slice(&0u32.to_le_bytes()); // depth
+    out.extend_from_slice(&0u32.to_le_bytes()); // mip_map_count
+    for _ in 0..11 {
+        out.extend_from_slice(&0u32.to_le_bytes());
+    }
+    out.extend_from_slice(&(DDS_PIXELFORMAT_SIZE as u32).to_le_bytes());
+    out.extend_from_slice(&flags.to_le_bytes());
+    out.extend_from_slice(&0u32.to_le_bytes()); // four_cc
+    out.extend_from_slice(&rgb_bit_count.to_le_bytes());
+    out.extend_from_slice(&r_mask.to_le_bytes());
+    out.extend_from_slice(&g_mask.to_le_bytes());
+    out.extend_from_slice(&b_mask.to_le_bytes());
+    out.extend_from_slice(&a_mask.to_le_bytes());
+    out.extend_from_slice(&CAPS_TEXTURE.to_le_bytes()); // caps
+    out.extend_from_slice(&0u32.to_le_bytes()); // caps2
+    out.extend_from_slice(&0u32.to_le_bytes()); // caps3
+    out.extend_from_slice(&0u32.to_le_bytes()); // caps4
+    out.extend_from_slice(&0u32.to_le_bytes()); // reserved2
+    out.extend_from_slice(pixel_data);
+    out
+}
+
+/// Build one little-endian `R10G10B10A2_UNORM` 32-bit word from raw
+/// per-channel integers (R/G/B in 0..=1023, A in 0..=3).
+fn pack_r10g10b10a2(r: u32, g: u32, b: u32, a: u32) -> [u8; 4] {
+    let word = (r & 0x3ff) | ((g & 0x3ff) << 10) | ((b & 0x3ff) << 20) | ((a & 0x3) << 30);
+    word.to_le_bytes()
+}
+
+#[test]
+fn dx10_r10g10b10a2_unorm() {
+    // DXGI_FORMAT_R10G10B10A2_UNORM = 24, 4 bytes/pixel.
+    let px = pack_r10g10b10a2(1023, 512, 1, 2);
+    let dds = build_dx10_dds(24, 1, 1, &px);
+    let img = parse_dds(&dds).unwrap();
+    assert_eq!(img.pixel_format, DdsPixelFormat::R10G10B10A2Unorm);
+    assert!(img.has_dxt10_header);
+    assert_eq!(img.surfaces[0].plane.data.len(), 4);
+    let out = decode_r10g10b10a2_unorm_surface(1, 1, &img.surfaces[0].plane.data).unwrap();
+    assert_eq!(out, vec![1023, 512, 1, 2]);
+}
+
+#[test]
+fn legacy_a2b10g10r10_masks_resolve_to_r10g10b10a2() {
+    // D3DFMT_A2B10G10R10 masks (canonical 10:10:10:2, R in the LSBs):
+    // R=0x000003ff, G=0x000ffc00, B=0x3ff00000, A=0xc0000000.
+    let px = pack_r10g10b10a2(7, 1023, 0, 3);
+    let dds = build_masked_dds(
+        DDPF_RGB | DDPF_ALPHAPIXELS,
+        32,
+        0x0000_03ff,
+        0x000f_fc00,
+        0x3ff0_0000,
+        0xc000_0000,
+        1,
+        1,
+        &px,
+    );
+    let img = parse_dds(&dds).unwrap();
+    assert_eq!(img.pixel_format, DdsPixelFormat::R10G10B10A2Unorm);
+    assert!(!img.has_dxt10_header);
+    let out = decode_r10g10b10a2_unorm_surface(1, 1, &img.surfaces[0].plane.data).unwrap();
+    assert_eq!(out, vec![7, 1023, 0, 3]);
+}
+
+#[test]
+fn r10g10b10a2_surface_sizing_2x2() {
+    // 2x2 R10G10B10A2 = 4 pixels × 4 bytes = 16 bytes.
+    let px = vec![0u8; 16];
+    let dds = build_dx10_dds(24, 2, 2, &px);
+    let img = parse_dds(&dds).unwrap();
+    assert_eq!(img.surfaces.len(), 1);
+    assert_eq!(img.surfaces[0].plane.data.len(), 16);
+    assert_eq!(img.surfaces[0].plane.stride, 2 * 4);
 }
 
 #[test]

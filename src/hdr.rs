@@ -69,6 +69,20 @@
 //! G in bits 9..=17, B in bits 18..=26, and the shared 5-bit exponent
 //! in bits 27..=31. [`decode_r9g9b9e5_sharedexp_surface`] widens each
 //! channel to `f32`.
+//!
+//! A packed integer layout, `R10G10B10A2_UNORM` (`DXGI_FORMAT` value 24,
+//! legacy `D3DFMT_A2B10G10R10`), stores three 10-bit colour channels and
+//! one 2-bit alpha channel in a single little-endian 32-bit word. The
+//! programming guide's pixel-format table gives the bit masks
+//! (R = `0x000003ff`, G = `0x000ffc00`, B = `0x3ff00000`,
+//! A = `0xc0000000`), so with the "first named component occupies the
+//! least-significant bits" rule R is in bits 0..=9, G in bits 10..=19,
+//! B in bits 20..=29, and A in bits 30..=31.
+//! [`decode_r10g10b10a2_unorm_surface`] returns the stored
+//! unsigned-normalised integers directly (R / G / B in `0..=1023`,
+//! A in `0..=3`); as with the `R16G16B16A16_UNORM` path the crate does
+//! not scale them onto a real range, leaving the per-channel division
+//! (`/ 1023` for colour, `/ 3` for alpha) to the caller.
 
 use crate::bc6h::half_to_f32;
 use crate::error::{DdsError, Result};
@@ -362,6 +376,52 @@ pub fn decode_r9g9b9e5_sharedexp_surface(width: u32, height: u32, data: &[u8]) -
     Ok(out)
 }
 
+/// Decode a tightly-packed `R10G10B10A2_UNORM` surface into a flat,
+/// interleaved `Vec<u16>` of `width × height × 4` stored samples (R, G,
+/// B, A per pixel, row-major).
+///
+/// Each pixel is one little-endian 32-bit word: R occupies bits 0..=9,
+/// G bits 10..=19, B bits 20..=29, and A bits 30..=31. The returned
+/// values are the raw stored unsigned-normalised integers — R / G / B in
+/// `0..=1023` and A in `0..=3`. The crate does not scale them onto a real
+/// range; the caller divides colour channels by `1023` and alpha by `3`
+/// to obtain the `[0, 1]` normalised values.
+///
+/// `data` must be at least `width × height × 4` bytes. Returns
+/// [`DdsError::InvalidData`] if it is shorter.
+pub fn decode_r10g10b10a2_unorm_surface(width: u32, height: u32, data: &[u8]) -> Result<Vec<u16>> {
+    let px = (width as usize)
+        .checked_mul(height as usize)
+        .ok_or_else(|| DdsError::invalid("decode_r10g10b10a2_unorm: dimension overflow"))?;
+    let need = px
+        .checked_mul(4)
+        .ok_or_else(|| DdsError::invalid("decode_r10g10b10a2_unorm: byte-count overflow"))?;
+    if data.len() < need {
+        return Err(DdsError::invalid(format!(
+            "decode_r10g10b10a2_unorm: needs {need} bytes for {width}x{height}, have {}",
+            data.len()
+        )));
+    }
+    let total_samples = px
+        .checked_mul(4)
+        .ok_or_else(|| DdsError::invalid("decode_r10g10b10a2_unorm: sample-count overflow"))?;
+    let mut out = Vec::with_capacity(total_samples);
+    let mut off = 0usize;
+    for _ in 0..px {
+        let word = read_u32_le(data, off);
+        let r = (word & 0x3ff) as u16;
+        let g = ((word >> 10) & 0x3ff) as u16;
+        let b = ((word >> 20) & 0x3ff) as u16;
+        let a = ((word >> 30) & 0x3) as u16;
+        out.push(r);
+        out.push(g);
+        out.push(b);
+        out.push(a);
+        off += 4;
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -609,6 +669,54 @@ mod tests {
     fn r9g9b9e5_truncated_input_is_invalid() {
         let data = [0u8; 3];
         let err = decode_r9g9b9e5_sharedexp_surface(1, 1, &data).unwrap_err();
+        assert!(matches!(err, DdsError::InvalidData(_)));
+    }
+
+    /// Build the little-endian 32-bit word for an `R10G10B10A2_UNORM`
+    /// pixel from raw per-channel integers (R/G/B in 0..=1023, A in 0..=3).
+    fn pack_r10g10b10a2(r: u32, g: u32, b: u32, a: u32) -> [u8; 4] {
+        let word = (r & 0x3ff) | ((g & 0x3ff) << 10) | ((b & 0x3ff) << 20) | ((a & 0x3) << 30);
+        word.to_le_bytes()
+    }
+
+    #[test]
+    fn r10g10b10a2_channel_order_and_widths() {
+        // R=1023 (max), G=512, B=1, A=2 — confirms each channel is read
+        // from its own bit field with the right width and the right
+        // least-significant-bits-first ordering.
+        let data = pack_r10g10b10a2(1023, 512, 1, 2);
+        let out = decode_r10g10b10a2_unorm_surface(1, 1, &data).unwrap();
+        assert_eq!(out, vec![1023, 512, 1, 2]);
+    }
+
+    #[test]
+    fn r10g10b10a2_zero_word_is_zero() {
+        let data = pack_r10g10b10a2(0, 0, 0, 0);
+        let out = decode_r10g10b10a2_unorm_surface(1, 1, &data).unwrap();
+        assert_eq!(out, vec![0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn r10g10b10a2_all_ones_word() {
+        // 0xffffffff → R=G=B=1023, A=3 (every bit set).
+        let data = 0xffff_ffffu32.to_le_bytes();
+        let out = decode_r10g10b10a2_unorm_surface(1, 1, &data).unwrap();
+        assert_eq!(out, vec![1023, 1023, 1023, 3]);
+    }
+
+    #[test]
+    fn r10g10b10a2_two_pixels_row_major() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&pack_r10g10b10a2(1023, 0, 0, 0)); // R max
+        data.extend_from_slice(&pack_r10g10b10a2(0, 0, 0, 3)); // A max
+        let out = decode_r10g10b10a2_unorm_surface(2, 1, &data).unwrap();
+        assert_eq!(out, vec![1023, 0, 0, 0, 0, 0, 0, 3]);
+    }
+
+    #[test]
+    fn r10g10b10a2_truncated_input_is_invalid() {
+        let data = [0u8; 3];
+        let err = decode_r10g10b10a2_unorm_surface(1, 1, &data).unwrap_err();
         assert!(matches!(err, DdsError::InvalidData(_)));
     }
 }
