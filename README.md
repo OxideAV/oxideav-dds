@@ -9,7 +9,7 @@ single-format codec crates.
 
 ## Status
 
-Coverage as of round 77:
+Coverage as of round 299:
 
 - `DDS_HEADER` (124 bytes) + optional `DDS_HEADER_DXT10` (20 bytes) parser.
 - Bit-exact round-trip of every common uncompressed surface layout:
@@ -136,6 +136,20 @@ Coverage as of round 77:
   infinity / NaN. The exact bit packing, exponent bias, per-channel
   mantissa widths and "first named component in the least-significant
   bits" ordering come from Microsoft's public `DXGI_FORMAT` reference.
+- **Shared-exponent `R9G9B9E5_SHAREDEXP` HDR surface (round 299).** The
+  `DXGI_FORMAT` value 67 layout packs three sign-less channels into one
+  little-endian 32-bit word that *share* a single 5-bit biased-by-15
+  exponent, each carrying its own 9-bit mantissa (R in bits 0..=8, G in
+  9..=17, B in 18..=26, shared exponent in 27..=31).
+  `decode_r9g9b9e5_sharedexp_surface` widens every channel to
+  interleaved `f32`. The format's `DXGI_FORMAT` table entry carries
+  footnotes 6 and 7 — no implied leading one on the mantissa, denormal
+  support — so each channel reconstructs with the single linear
+  expression `mantissa × 2^(exp − 15 − 9)` = `mantissa × 2^(exp − 24)`,
+  uniform across every exponent (no normal / subnormal split; the
+  all-zero word decodes to `+0`). The exact bit packing, shared-exponent
+  semantics and "first named component in the least-significant bits"
+  ordering come from Microsoft's public `DXGI_FORMAT` reference.
 - Block-compressed pass-through. BC1..BC7 raw block bytes are
   surfaced through `DdsImage::surfaces[i].plane.data`; BC1..BC5 +
   BC7 also decompress to RGBA / R / RG via the dedicated `decode_bc*`

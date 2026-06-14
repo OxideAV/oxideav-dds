@@ -45,7 +45,30 @@
 //! a 5-bit mantissa. With the "first named component occupies the
 //! least-significant bits" rule the 32-bit word holds R in bits 0..=10,
 //! G in bits 11..=21, and B in bits 22..=31. [`decode_r11g11b10_float_surface`]
-//! widens each channel to `f32`.
+//! widens each channel to `f32`. That format's table entry carries the
+//! reference's footnotes 5 and 7, so the mantissa has an *implied
+//! leading one* (footnote 5: "If the exponent is not 0, 1.0 is added to
+//! the mantissa before applying the exponent") and the channels support
+//! denormals (footnote 7).
+//!
+//! The shared-exponent layout `R9G9B9E5_SHAREDEXP` (`DXGI_FORMAT` value
+//! 67) also packs three sign-less partial-precision channels into one
+//! little-endian 32-bit word, but the three channels *share* a single
+//! 5-bit biased-by-15 exponent and each carries a 9-bit mantissa. The
+//! reference describes it as a "variant of s10e5" with no sign bit, a
+//! shared 5-bit biased-by-15 exponent and a 9-bit mantissa per channel.
+//! Its table entry carries footnotes 6 and 7: footnote 6 states "These
+//! float formats do not have an implied 1 added to their mantissa", and
+//! footnote 7 grants denormal support. Because there is no implied
+//! leading one, the value of each channel is the *pure* fraction
+//! `mantissa / 2^9` scaled by the shared exponent — a single linear
+//! expression `mantissa × 2^(exp − 15 − 9)` = `mantissa × 2^(exp − 24)`
+//! covers every exponent (including the all-zero word, which is +0).
+//! Following the same "first named component occupies the
+//! least-significant bits" rule the 32-bit word holds R in bits 0..=8,
+//! G in bits 9..=17, B in bits 18..=26, and the shared 5-bit exponent
+//! in bits 27..=31. [`decode_r9g9b9e5_sharedexp_surface`] widens each
+//! channel to `f32`.
 
 use crate::bc6h::half_to_f32;
 use crate::error::{DdsError, Result};
@@ -283,6 +306,62 @@ pub fn decode_r11g11b10_float_surface(width: u32, height: u32, data: &[u8]) -> R
     Ok(out)
 }
 
+/// Decode a tightly-packed `R9G9B9E5_SHAREDEXP` surface into a flat,
+/// interleaved `Vec<f32>` of `width × height × 3` samples (R, G, B per
+/// pixel, row-major).
+///
+/// Each pixel is one little-endian 32-bit word. The three channels share
+/// a single 5-bit biased-by-15 exponent (bits 27..=31) and each carries
+/// its own 9-bit mantissa: R in bits 0..=8, G in bits 9..=17, and B in
+/// bits 18..=26. There is no sign bit and there is no implied leading
+/// one on the mantissa (per the format reference's footnote 6), so each
+/// channel reconstructs to
+///
+/// ```text
+/// value = mantissa × 2^(exp − 15 − 9) = mantissa × 2^(exp − 24)
+/// ```
+///
+/// which is a single linear expression that covers every exponent value
+/// — there is no separate normal / subnormal split, and the all-zero
+/// word decodes to `+0`. The result is always non-negative.
+///
+/// `data` must be at least `width × height × 4` bytes. Returns
+/// [`DdsError::InvalidData`] if it is shorter.
+pub fn decode_r9g9b9e5_sharedexp_surface(width: u32, height: u32, data: &[u8]) -> Result<Vec<f32>> {
+    let px = (width as usize)
+        .checked_mul(height as usize)
+        .ok_or_else(|| DdsError::invalid("decode_r9g9b9e5_sharedexp: dimension overflow"))?;
+    let need = px
+        .checked_mul(4)
+        .ok_or_else(|| DdsError::invalid("decode_r9g9b9e5_sharedexp: byte-count overflow"))?;
+    if data.len() < need {
+        return Err(DdsError::invalid(format!(
+            "decode_r9g9b9e5_sharedexp: needs {need} bytes for {width}x{height}, have {}",
+            data.len()
+        )));
+    }
+    let total_samples = px
+        .checked_mul(3)
+        .ok_or_else(|| DdsError::invalid("decode_r9g9b9e5_sharedexp: sample-count overflow"))?;
+    let mut out = Vec::with_capacity(total_samples);
+    let mut off = 0usize;
+    for _ in 0..px {
+        let word = read_u32_le(data, off);
+        let r = (word & 0x1ff) as f32;
+        let g = ((word >> 9) & 0x1ff) as f32;
+        let b = ((word >> 18) & 0x1ff) as f32;
+        let exp = ((word >> 27) & 0x1f) as i32;
+        // value = mantissa × 2^(exp − 24); a single scale factor applies
+        // to all three channels because they share the exponent.
+        let scale = 2.0f32.powi(exp - 24);
+        out.push(r * scale);
+        out.push(g * scale);
+        out.push(b * scale);
+        off += 4;
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -442,5 +521,94 @@ mod tests {
         let data = [0u8; 64];
         let err = decode_float_surface(DdsPixelFormat::A8R8G8B8, 1, 1, &data).unwrap_err();
         assert!(matches!(err, DdsError::Unsupported(_)));
+    }
+
+    /// Build the little-endian 32-bit word for an `R9G9B9E5_SHAREDEXP`
+    /// pixel from raw per-channel mantissa bit patterns and the shared
+    /// 5-bit exponent.
+    fn pack_r9g9b9e5(r: u32, g: u32, b: u32, e: u32) -> [u8; 4] {
+        let word = (r & 0x1ff) | ((g & 0x1ff) << 9) | ((b & 0x1ff) << 18) | ((e & 0x1f) << 27);
+        word.to_le_bytes()
+    }
+
+    #[test]
+    fn r9g9b9e5_one_in_each_channel() {
+        // value = mantissa × 2^(exp − 24). With exp = 16 the scale is
+        // 2^-8 = 1/256, so mantissa 256 gives 1.0 on every channel; the
+        // shared exponent applies to all three at once.
+        let data = pack_r9g9b9e5(256, 256, 256, 16);
+        let out = decode_r9g9b9e5_sharedexp_surface(1, 1, &data).unwrap();
+        assert_eq!(out, vec![1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn r9g9b9e5_zero_word_is_zero() {
+        let data = pack_r9g9b9e5(0, 0, 0, 0);
+        let out = decode_r9g9b9e5_sharedexp_surface(1, 1, &data).unwrap();
+        assert_eq!(out, vec![0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn r9g9b9e5_shared_exponent_scales_all_channels() {
+        // mantissas 256 / 128 / 64 with exp 16 → 1.0 / 0.5 / 0.25.
+        // Confirms one shared exponent multiplies every channel and the
+        // per-channel mantissa bit fields are read independently.
+        let data = pack_r9g9b9e5(256, 128, 64, 16);
+        let out = decode_r9g9b9e5_sharedexp_surface(1, 1, &data).unwrap();
+        assert_eq!(out, vec![1.0, 0.5, 0.25]);
+    }
+
+    #[test]
+    fn r9g9b9e5_exponent_bump_doubles() {
+        // Same mantissas as the unit-channel case but exp 17 → all 2.0.
+        let data = pack_r9g9b9e5(256, 256, 256, 17);
+        let out = decode_r9g9b9e5_sharedexp_surface(1, 1, &data).unwrap();
+        assert_eq!(out, vec![2.0, 2.0, 2.0]);
+    }
+
+    #[test]
+    fn r9g9b9e5_no_implied_one() {
+        // With no implied leading one, mantissa 0 is exactly +0 even when
+        // the shared exponent is large; only the mantissa carries
+        // magnitude. R = 511 (max 9-bit) at exp 24 = 511 × 2^0 = 511.
+        let data = pack_r9g9b9e5(511, 0, 0, 24);
+        let out = decode_r9g9b9e5_sharedexp_surface(1, 1, &data).unwrap();
+        assert_eq!(out, vec![511.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn r9g9b9e5_smallest_denorm() {
+        // mantissa 1, exp 0 → 1 × 2^-24, the smallest representable
+        // non-zero value (denormals are supported per footnote 7, so it
+        // is not flushed to zero).
+        let data = pack_r9g9b9e5(1, 0, 0, 0);
+        let out = decode_r9g9b9e5_sharedexp_surface(1, 1, &data).unwrap();
+        assert_eq!(out[0], 2.0f32.powi(-24));
+        assert_eq!(out[1], 0.0);
+        assert_eq!(out[2], 0.0);
+    }
+
+    #[test]
+    fn r9g9b9e5_max_value() {
+        // mantissa 511, exp 31 → 511 × 2^7 = 65408 on each channel.
+        let data = pack_r9g9b9e5(511, 511, 511, 31);
+        let out = decode_r9g9b9e5_sharedexp_surface(1, 1, &data).unwrap();
+        assert_eq!(out, vec![65408.0, 65408.0, 65408.0]);
+    }
+
+    #[test]
+    fn r9g9b9e5_two_pixels_row_major() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&pack_r9g9b9e5(256, 0, 0, 16)); // R=1
+        data.extend_from_slice(&pack_r9g9b9e5(0, 256, 0, 16)); // G=1
+        let out = decode_r9g9b9e5_sharedexp_surface(2, 1, &data).unwrap();
+        assert_eq!(out, vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn r9g9b9e5_truncated_input_is_invalid() {
+        let data = [0u8; 3];
+        let err = decode_r9g9b9e5_sharedexp_surface(1, 1, &data).unwrap_err();
+        assert!(matches!(err, DdsError::InvalidData(_)));
     }
 }

@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Shared-exponent `R9G9B9E5_SHAREDEXP` HDR surface decoder (round
+  299).** New `decode_r9g9b9e5_sharedexp_surface` widens the
+  `DXGI_FORMAT` value 67 layout — three sign-less channels packed into
+  one little-endian 32-bit word that *share* a single 5-bit
+  biased-by-15 exponent, each with its own 9-bit mantissa (R in bits
+  0..=8, G in 9..=17, B in 18..=26, shared exponent in 27..=31) — to an
+  interleaved `Vec<f32>` of `width × height × 3` samples. The format's
+  `DXGI_FORMAT` table entry carries footnotes 6 and 7 (no implied
+  leading one on the mantissa; denormal support), so each channel
+  reconstructs with the single linear expression
+  `mantissa × 2^(exp − 15 − 9)` = `mantissa × 2^(exp − 24)`, uniform
+  across every exponent — there is no normal / subnormal split and the
+  all-zero word decodes to `+0`. Bit packing, the shared-exponent
+  semantics and the least-significant-bits component ordering are taken
+  from Microsoft's public `DXGI_FORMAT` reference. Exported at the crate
+  root. Nine unit tests cover unity per channel, the all-zero word, the
+  shared exponent scaling all three channels at once, an exponent bump
+  doubling the value, the no-implied-one magnitude, the smallest
+  denormal, the maximum value, row-major multi-pixel layout, and the
+  truncated-input error.
+
 - **Packed `R11G11B10_FLOAT` HDR surface decoder (round 293).** New
   `decode_r11g11b10_float_surface` widens the `DXGI_FORMAT` value 26
   layout — three sign-less partial-precision floats packed into one

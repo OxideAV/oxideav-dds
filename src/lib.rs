@@ -114,7 +114,11 @@
 //!   expose the stored 16-bit channels (`u16` / `i16`). The packed
 //!   `R11G11B10_FLOAT` HDR layout (`DXGI_FORMAT` value 26 — three
 //!   sign-less partial-precision floats sharing a 32-bit word) widens
-//!   to interleaved `f32` via [`decode_r11g11b10_float_surface`].
+//!   to interleaved `f32` via [`decode_r11g11b10_float_surface`]. The
+//!   shared-exponent `R9G9B9E5_SHAREDEXP` HDR layout (`DXGI_FORMAT`
+//!   value 67 — three sign-less 9-bit mantissas sharing a single 5-bit
+//!   exponent in one 32-bit word) widens to interleaved `f32` via
+//!   [`decode_r9g9b9e5_sharedexp_surface`].
 //! * **`.dds` still-image container demuxer + muxer** (round-3 lift
 //!   over the round-2 extension-only registration). The framework
 //!   `ContainerRegistry` now carries probe + demuxer + muxer entries
@@ -198,8 +202,8 @@ pub use encoder::{
 };
 pub use error::{DdsError, Result};
 pub use hdr::{
-    decode_float_surface, decode_r11g11b10_float_surface, decode_rgba16_snorm_surface,
-    decode_rgba16_unorm_surface,
+    decode_float_surface, decode_r11g11b10_float_surface, decode_r9g9b9e5_sharedexp_surface,
+    decode_rgba16_snorm_surface, decode_rgba16_unorm_surface,
 };
 pub use image::{CubemapFace, DdsImage, DdsPixelFormat, DdsPlane, DdsSurface};
 pub use types::{
