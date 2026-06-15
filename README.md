@@ -1,275 +1,77 @@
 # oxideav-dds
 
 Pure-Rust reader / writer for Microsoft's DirectDraw Surface (DDS) texture
-container, the format every Direct3D game ships its baked block-compressed
-art in. Part of the [oxideav workspace][oxideav-workspace] family of
+container, the format Direct3D games ship their baked block-compressed art
+in. Part of the [oxideav workspace][oxideav-workspace] family of
 single-format codec crates.
 
 [oxideav-workspace]: https://github.com/OxideAV/oxideav-workspace
 
-## Status
+## Capabilities
 
-Coverage as of round 309:
+**Container.** `DDS_HEADER` (124 bytes) + optional `DDS_HEADER_DXT10`
+(20 bytes) parser and writer. Every on-disk surface is parsed into
+`DdsImage::surfaces` in the mandated order (array slice → face → mip),
+tagged with `mip_level` / `array_slice` / `face`; mipmap chains, cubemap
+faces, DX10 texture arrays, and 3D (volume) textures are all surfaced.
+A framework-side `ContainerRegistry` probe + demuxer + muxer is
+installed via `register_containers`, so CLI tools can open / write `.dds`
+files without touching the codec API directly.
 
-- `DDS_HEADER` (124 bytes) + optional `DDS_HEADER_DXT10` (20 bytes) parser.
-- Bit-exact round-trip of every common uncompressed surface layout:
-  A8R8G8B8, X8R8G8B8, A8B8G8R8 (DXGI `R8G8B8A8_UNORM`), R5G6B5,
-  A1R5G5B5, A4R4G4B4, R8G8B8, A8L8, L8, A8.
-- **BC1..BC5 + BC7 decompression** to RGBA8 / R8 / RG8 via
-  `decode_bc1`, `decode_bc2`, `decode_bc3`, `decode_bc4_unorm`,
-  `decode_bc4_snorm`, `decode_bc5_unorm`, `decode_bc5_snorm`,
-  `decode_bc7`. BC7 covers all 8 modes (single-, dual- and
-  three-subset partitions, p-bits, channel rotation, secondary
-  alpha index plane).
-- **BC6H decompression — all 14 modes — to RGBA half-float** via
-  `decode_bc6h`. Modes 0..13 are implemented per the per-mode
-  bit-allocation tables Microsoft mandates for Direct3D 11 hardware
-  (covering 10.5.5.5, 7.6.6.6, 11.5.5.5 / 11.4.4.4 / 11.4.5.4 /
-  11.4.4.5, 9.5.5.5, 8.6.6.6 / 8.5.6.5 / 8.5.5.6, 6.6.6.6 absolute
-  TWO-subset variants and 10.10 / 11.9 / 12.8 / 16.4 ONE-subset
-  variants). Both `BC6H_UF16` (unsigned) and `BC6H_SF16` (signed)
-  finalisation paths are supported. Reserved 5-bit prefixes
-  (10011, 10111, 11011, 11111) decode to zero RGB per spec.
-- **BC1 / BC2 / BC3 / BC4 / BC5 encoders.** Round 4 lifts encoding
-  beyond BC1: `encode_bc1`, `encode_bc2`, `encode_bc3`,
-  `encode_bc4_unorm`, `encode_bc5_unorm` all emit valid block-
-  compressed surfaces from RGBA8 / R8 / RG8 input. Each uses a
-  furthest-point endpoint heuristic (no PCA / cluster fit / RDO);
-  bit-exact roundtrip on solid blocks, ~19 dB PSNR-RGB on small
-  natural-image gradients (>25 dB on the 16×16 test), 8-value
-  interpolated alpha throughout BC3 / BC4 / BC5. BC1 honours
-  punchthrough alpha when requested.
-- **BC6H multi-mode encoder.** Round 3 shipped mode 10; round 6
-  closes the encoder gap with a partition + mode picker that sweeps
-  every BC6H mode per block. `encode_bc6h` (and the f32-input
-  convenience `encode_bc6h_from_f32`) iterates: (a) mode 10 (1-subset
-  10.10 absolute) as the SSE reference, (b) modes 11/12/13 (1-subset
-  10/12/16-bit base + 9/8/4-bit delta), (c) modes 0..9 (2-subset over
-  the 32-entry BC6H partition table). Each candidate uses
-  furthest-point endpoint seeding + iterative LSQ refinement;
-  delta-mode candidates that overflow the per-channel delta range
-  are rejected so the picker falls through to a wider-fitting mode.
-  Bit-exact roundtrip on solid blocks across every mode; ≥35 dB
-  on tight-range gradients (mode 11/12 wins) and 2-subset
-  partition-friendly content (mode 0/2..9 wins).
-- **BC7 multi-mode encoder.** Round-3 shipped mode 6 only; round 4
-  added the three 2-subset modes — mode 1 (6-bit RGB + shared p-bits,
-  opaque), mode 3 (7-bit RGB + per-endpoint p-bits, opaque) and mode
-  7 (5-bit RGBA + per-endpoint p-bits, translucent). Round 5 added
-  the 3-subset modes 0 and 2. Round 7 closes the encoder coverage
-  with the 1-subset channel-rotation modes 4 and 5: each block sweeps
-  all 4 rotation values × (mode 4: 2 idx_sel choices) × mode 5,
-  letting content with one independent channel use the higher alpha
-  precision via channel-rotation. With 8-mode coverage (0..7) and
-  full Microsoft / Khronos partition-table sweeps the encoder lifts
-  multi-axis natural-image PSNR-RGB past 30 dB and decorrelated-alpha
-  content past 30 dB-RGBA.
-- **BC6H_SF16 (signed) multi-mode encoder.** `encode_bc6h_sf16` and
-  `encode_bc6h_sf16_from_f32` emit signed-format BC6H blocks (DXGI
-  `BC6H_SF16`). Mirrors the decoder's signed-magnitude pipeline:
-  signed-magnitude quantise, signed unquantize, signed finalize.
-  Round 77 closes the SF16 encoder gap: the block picker now sweeps
-  mode 10 (1-subset, 10-bit signed absolute, 4-bit indices), modes
-  11/12/13 (1-subset signed delta — 10/12/16-bit base + 9/8/4-bit
-  signed delta) and modes 0..9 (2-subset signed across the 32-entry
-  BC6H partition table). Same per-mode rejection logic as the
-  unsigned encoder (cross-subset deltas that overflow the per-channel
-  delta range bail out, letting the picker fall through). Signed
-  cross-subset two-cluster content (e.g. -0.4 / +0.4 split block)
-  hits ≥30 dB PSNR; sign-spanning gradients clear the round-7
-  mode-10-only ~19 dB ceiling.
-- **Mipmap chain emission** for both uncompressed and BC* surfaces.
-  `encode_dds_uncompressed` emits a full mipmap chain when
-  `image.mip_map_count > 1` (caller-supplied surfaces written
-  verbatim, otherwise fabricated by 2×2 box-filter downsampling).
-  Round-4 `encode_dds_block_compressed` accepts pre-encoded per-mip
-  block bytes via `image.surfaces` and writes them with a legacy
-  FourCC header (BC1..BC5) or DX10 extension header (BC6H + BC7 or
-  any format with `has_dxt10_header == true`).
-- **`.dds` container demuxer + muxer.** Round-3 lift over the
-  round-2 extension-only entry: the framework-side `ContainerRegistry`
-  now installs probe + demuxer + muxer + extension table entries via
-  `register_containers`, so CLI tools (such as `cli-convert`) can
-  open / write `.dds` files without touching the codec API directly.
-- **Mipmap chain + cubemap faces + DX10 texture arrays.** Every
-  on-disk surface is parsed into `DdsImage::surfaces` in Microsoft's
-  mandated order (array slice → face → mip), tagged with
-  `mip_level` / `array_slice` / `face`. `DdsImage::planes[0]` still
-  mirrors the base level for callers that don't care.
-- **Volume (3D) textures.** Legacy (`DDSCAPS2_VOLUME` + `DDSD_DEPTH`)
-  and DX10 (`DDS_DIMENSION_TEXTURE3D`) volumes decode into one
-  `DdsSurface` per (mip, depth slice) in mip-major order; depth halves
-  per mip level alongside width/height. `DdsImage::depth` carries the
-  mip-0 slice count and `DdsSurface::depth_slice` the z index.
-  `encode_dds_volume` round-trips an uncompressed volume back to disk.
-- **Full DXGI format table** — every `DXGI_FORMAT` value Microsoft
-  assigns (1..=132) is enumerated by name in `DxgiFormat` for
-  lossless round-trip; the remaining integer, depth/stencil, YUV, and
-  palette formats are recognised but produce
-  `DdsError::Unsupported` from the layout resolver.
-- **Extended high-bit-depth / floating-point uncompressed surfaces.**
-  The 16-bit-per-channel and 32-bit-float layouts Microsoft assigns to
-  the legacy `D3DFMT` numeric FourCC codes 36 / 110..=116 and to the
-  matching `DXGI_FORMAT` values — `R16G16B16A16_UNORM`,
-  `R16G16B16A16_SNORM`, `R16_FLOAT`, `R16G16_FLOAT`,
-  `R16G16B16A16_FLOAT`, `R32_FLOAT`, `R32G32_FLOAT`,
-  `R32G32B32A32_FLOAT` — are recognised by `parse_dds` from both the
-  numeric FourCC and the DX10 `dxgi_format`, sized correctly, and
-  surfaced as raw bytes. `decode_float_surface` widens the
-  half-float / `f32` layouts to interleaved `f32`;
-  `decode_rgba16_unorm_surface` / `decode_rgba16_snorm_surface`
-  expose the stored 16-bit channels (`u16` / `i16`). Channel order
-  and bit count come from Microsoft's public DDS / DXGI
-  programming-guide pages. The real-range `[0,1]` / `[-1,1]`
-  normalisation arithmetic for the UNORM / SNORM pair is not stated
-  on those pages, so the crate leaves the scaling step to the caller
-  (the floating-point layouts have no such gap — their stored bits
-  are the value).
-- **Packed `R11G11B10_FLOAT` HDR surface (round 293).** The
-  `DXGI_FORMAT` value 26 layout packs three sign-less partial-precision
-  floats into one little-endian 32-bit word (R in bits 0..=10, G in
-  11..=21, B in 22..=31; each channel has a 5-bit biased-by-15 exponent
-  with a 6-bit mantissa for R / G and a 5-bit mantissa for B).
-  `decode_r11g11b10_float_surface` widens every channel to interleaved
-  `f32`, mirroring IEEE-754 half-precision semantics — denormals are
-  decoded (not flushed), and the all-ones exponent maps to
-  infinity / NaN. The exact bit packing, exponent bias, per-channel
-  mantissa widths and "first named component in the least-significant
-  bits" ordering come from Microsoft's public `DXGI_FORMAT` reference.
-- **Shared-exponent `R9G9B9E5_SHAREDEXP` HDR surface (round 299).** The
-  `DXGI_FORMAT` value 67 layout packs three sign-less channels into one
-  little-endian 32-bit word that *share* a single 5-bit biased-by-15
-  exponent, each carrying its own 9-bit mantissa (R in bits 0..=8, G in
-  9..=17, B in 18..=26, shared exponent in 27..=31).
-  `decode_r9g9b9e5_sharedexp_surface` widens every channel to
-  interleaved `f32`. The format's `DXGI_FORMAT` table entry carries
-  footnotes 6 and 7 — no implied leading one on the mantissa, denormal
-  support — so each channel reconstructs with the single linear
-  expression `mantissa × 2^(exp − 15 − 9)` = `mantissa × 2^(exp − 24)`,
-  uniform across every exponent (no normal / subnormal split; the
-  all-zero word decodes to `+0`). The exact bit packing, shared-exponent
-  semantics and "first named component in the least-significant bits"
-  ordering come from Microsoft's public `DXGI_FORMAT` reference.
-- **Packed `R10G10B10A2_UNORM` surface (round 305).** The `DXGI_FORMAT`
-  value 24 layout (legacy `D3DFMT_A2B10G10R10`) packs three 10-bit
-  colour channels and one 2-bit alpha channel into one little-endian
-  32-bit word. The programming guide's pixel-format table gives the bit
-  masks (R = `0x000003ff`, G = `0x000ffc00`, B = `0x3ff00000`,
-  A = `0xc0000000`), so with the "first named component occupies the
-  least-significant bits" rule R lands in bits 0..=9, G in 10..=19, B in
-  20..=29, and A in 30..=31. `decode_r10g10b10a2_unorm_surface` returns
-  the stored unsigned-normalised integers directly (R / G / B in
-  `0..=1023`, A in `0..=3`); as with `R16G16B16A16_UNORM` the crate
-  leaves the `[0, 1]` normalisation (`/ 1023` for colour, `/ 3` for
-  alpha) to the caller. `parse_dds` resolves the format from both the
-  DX10 `dxgi_format == 24` and the legacy `D3DFMT_A2B10G10R10` DDPF_RGB
-  mask layout.
-- **Packed `R10G10B10A2_UINT` surface (round 309).** The integer sibling
-  of value 24: `DXGI_FORMAT` value 25 uses the *same* 10:10:10:2 bit
-  packing but the `DXGI_FORMAT` reference calls it a "four-component,
-  32-bit unsigned-integer format" rather than "unsigned-normalized-
-  integer", so the stored channels are plain integers with no
-  normalisation step at all. `decode_r10g10b10a2_uint_surface` returns
-  the stored integers (R / G / B in `0..=1023`, A in `0..=3`) as the
-  values themselves — the caller does not divide. The format has no
-  legacy `D3DFMT` four-cc, so `parse_dds` resolves it only from the DX10
-  `dxgi_format == 25`. A new `DdsPixelFormat::R10G10B10A2Uint` variant
-  carries it; the UNORM and UINT decoders share one private bit-
-  extraction helper.
-- Block-compressed pass-through. BC1..BC7 raw block bytes are
-  surfaced through `DdsImage::surfaces[i].plane.data`; BC1..BC5 +
-  BC7 also decompress to RGBA / R / RG via the dedicated `decode_bc*`
-  entry points; BC6H decompresses to RGBA half-float for all 14
-  modes via `decode_bc6h`.
-- Standalone-friendly via the default-on `registry` Cargo feature.
-  Disable it (`default-features = false`) to drop the `oxideav-core`
-  dependency tree entirely; the crate then exposes only the
-  framework-free `parse_dds` / `encode_dds_uncompressed` /
-  `decode_bc1..bc7` / `decode_bc6h` / `encode_bc1..bc5` API plus
-  crate-local `DdsImage` / `DdsPixelFormat` / `DdsError` types built on `std`.
+**Uncompressed surfaces.** Bit-exact round-trip of the common layouts —
+A8R8G8B8, X8R8G8B8, A8B8G8R8, R5G6B5, A1R5G5B5, A4R4G4B4, R8G8B8, A8L8,
+L8, A8. High-bit-depth and floating-point layouts (16-bit-per-channel
+UNORM / SNORM, half-float and `f32` variants) are recognised, sized, and
+exposed via `decode_float_surface` / `decode_rgba16_unorm_surface` /
+`decode_rgba16_snorm_surface`. Packed HDR layouts decode to interleaved
+`f32` / integers: `R11G11B10_FLOAT` (`decode_r11g11b10_float_surface`),
+`R9G9B9E5_SHAREDEXP` (`decode_r9g9b9e5_sharedexp_surface`),
+`R10G10B10A2_UNORM` (`decode_r10g10b10a2_unorm_surface`), and
+`R10G10B10A2_UINT` (`decode_r10g10b10a2_uint_surface`).
 
-Injection-robustness property tests (round 162): a 40-case
-`tests/injection_robustness.rs` builds a known-good DDS byte stream,
-mutates a single field at a time (bad magic, bad header / pixel-format
-sizes, zero width / height, missing required flags, DXT10 fourCC
-without extension bytes, unsupported legacy / DXGI format, truncated
-payload, forged `mip_map_count = u32::MAX`, forged
-`array_size = u32::MAX`, forged cubemap × array overflow, forged
-volume `depth = u32::MAX`, volume + cubemap combined, `width =
-height = u32::MAX`, …) and asserts `parse_dds` returns `Err` instead
-of panicking. The round also closed four real panic paths the tests
-caught: `surface_size_bytes` `u64` multiplication now uses
-`checked_mul`; `mip_map_count` is rejected against the dimension-
-implied cap `1 + floor(log2(max(w, h)))` so `(width >> 32)` shift-
-overflow can't happen; `array_size × surfaces_per_slice` uses
-`checked_mul` and `total_surfaces` is rejected above a 1 M hard cap
-before `Vec::with_capacity` is called; `block_compressed_surface_size`
-is now saturating. The `decode_bc1` / `decode_bc2` / `decode_bc3` /
-`decode_bc4_unorm` / `decode_bc4_snorm` / `decode_bc5_unorm` /
-`decode_bc5_snorm` / `decode_bc6h` / `decode_bc7` short-input and
-short-output paths are also asserted.
+**Block-compressed decode.**
 
-Continuous fuzzing (round 156): five `cargo-fuzz` panic-free targets
-under `fuzz/` — `parse_dds` (full container), `decode_bcn` (every
-BC1..BC5 entry point including `u32::MAX` block-grid + zero-output
-sweeps), `decode_bc6h` (14 modes × signed + unsigned), `decode_bc7`
-(8 modes including the reserved zero-bit mode) and `roundtrip`
-(`parse_dds` → `encode_dds_uncompressed` → `parse_dds` idempotency).
-Driven daily by `.github/workflows/fuzz.yml` against the org's
-reusable `crate-fuzz` workflow (30-minute total budget split across
-the five targets). Built with `default-features = false` so the
-harness exercises the framework-free standalone decode path. Corpus
-seeded with the two existing crate fixtures plus six hand-crafted
-single-block BC blobs.
+- `decode_bc1`..`decode_bc5` + `decode_bc7` expand to RGBA8 / R8 / RG8.
+  BC7 covers all 8 modes.
+- `decode_bc6h` decodes all 14 BC6H modes to RGBA half-float, for both
+  `BC6H_UF16` (unsigned) and `BC6H_SF16` (signed).
+- Raw BC1..BC7 block bytes are always available verbatim through
+  `DdsImage::surfaces[i].plane.data` for callers that want to keep the
+  texture compressed.
 
-Criterion benchmarks (round 192): three new `benches/` harnesses —
-`decode`, `encode`, `roundtrip` — wired under a `[dev-dependencies]
-criterion = "0.5"` and three `[[bench]] harness = false`
-declarations. Each scenario synthesises its input surface
-deterministically (no committed binary fixtures) and exercises the
-crate's public standalone entry points. `decode` times BC1 / BC3 /
-BC4 / BC5 at 512×512 plus BC6H / BC7 at 256×256 with a pre-encoded
-block payload. `encode` times the matching BC1..BC5 encoders at
-256×256 plus the heavier BC6H / BC7 mode pickers at 128×128
-(`sample_size(10)` on the two heavy groups). `roundtrip` times the
-container-level `parse_dds` ↔ `encode_dds_uncompressed` cycle on
-A8R8G8B8 (with and without a 9-level mipmap chain), DXT10-extension
-R8G8B8A8_UNORM and L8 surfaces — separating the header / surface-
-table walk cost from the per-block BCn hot path. Drive them with
-`cargo bench -p oxideav-dds --bench {decode,encode,roundtrip}`;
-future encoder algorithm work (LSQ-in-unq-space, partition-table
-pruning, endpoint-search shortcuts) can A/B against these baselines.
+**Block-compressed encode.**
 
-Round 176 closes three real crashes the daily fuzz workflow surfaced
-on 2026-05-28: every BC-block decoder computed its required-input
-length as a `usize × usize × 16` product that overflowed when the
-caller fed `width = height = u32::MAX`. The `bw * bh * 16` product
-plus the four surface-size helpers
-(`rgba8_surface_bytes` / `rgba_half_surface_bytes` /
-`r8_surface_bytes` / `rg8_surface_bytes`) and the `block_input_bytes`
-helper now use `saturating_mul`, so the pre-existing length checks
-reject rather than panic. Thirteen regression tests added to
-`tests/injection_robustness.rs` (one `does_not_panic` case per
-`decode_bc*` entry plus verbatim-byte reproductions of the three
-crash artifacts the fuzzer reported), and the crash artifacts are
-also committed to the corpus directories so the workflow
-re-validates the fix on every run.
+- `encode_bc1`..`encode_bc5` emit valid block-compressed surfaces from
+  RGBA8 / R8 / RG8 (furthest-point endpoint heuristic; no PCA / RDO).
+  Bit-exact on solid blocks; 8-value interpolated alpha for BC3/4/5.
+- `encode_bc7` sweeps all 8 modes (single-, dual- and three-subset
+  partitions, p-bits, channel rotation).
+- `encode_bc6h` / `encode_bc6h_sf16` sweep every BC6H mode per block
+  (1-subset absolute + delta modes, 2-subset partitions) for both
+  unsigned and signed formats.
 
-Round 207 closes the remaining BC6H encoder followup: the existing
-pixel-`half_to_f32`-space LSQ in `encode_mode10` and `try_2subset` now
-runs a second pass in the 17-bit *unq* integer space the decoder's
-`(e0 * (64-w) + e1 * w + 32) >> 6` interpolation actually operates in.
-Pixel-space LSQ weights residuals by `half_to_f32` magnitude (which
-biases the fit toward bright-exponent pixels); the unq-space pass
-weights every pixel uniformly in the decoder's linear arithmetic
-domain. Two new helpers — `target_unq_uf16` (inverts the `finish_uf16`
-non-linearity to set per-pixel targets) and `unq_to_q_uf16` (inverts
-`unquantize_uf16` to map LSQ float endpoints back to the per-precision
-lattice) — underpin the pass. Acceptance is SSE-guarded. A new
-`bc6h_encode_mixed_dynamic_range_unq_lsq` regression test (4×4 block
-with R sweeping 0.02 → 1.0 against an anti-ramp B) confirms the
-headline +1.75 dB PSNR uplift (28.00 → 29.75 dB), inside the
-"1-2 dB" followup target.
+**Mipmap emission.** `encode_dds_uncompressed` emits a full mipmap chain
+(caller-supplied surfaces verbatim, otherwise box-filter downsampled);
+`encode_dds_block_compressed` writes pre-encoded per-mip block bytes;
+`encode_dds_volume` round-trips an uncompressed volume.
+
+**Format table.** Every `DXGI_FORMAT` value Microsoft assigns (1..=132)
+is enumerated by name in `DxgiFormat` for lossless round-trip; integer,
+depth/stencil, YUV, and palette formats are recognised but return
+`DdsError::Unsupported` from the layout resolver.
+
+## Robustness
+
+- A 40-case injection-robustness suite (`tests/injection_robustness.rs`)
+  mutates one header field at a time and asserts `parse_dds` returns
+  `Err` rather than panicking. Surface-size and block-grid arithmetic
+  uses `checked_` / `saturating_` multiplication throughout.
+- Five `cargo-fuzz` panic-free targets under `fuzz/` (`parse_dds`,
+  `decode_bcn`, `decode_bc6h`, `decode_bc7`, `roundtrip`), driven daily
+  by `.github/workflows/fuzz.yml`.
+- Criterion benchmarks under `benches/` (`decode`, `encode`,
+  `roundtrip`); run with
+  `cargo bench -p oxideav-dds --bench {decode,encode,roundtrip}`.
 
 ## Quickstart
 
@@ -279,16 +81,10 @@ use oxideav_dds::{parse_dds, encode_dds_uncompressed, DdsImage, DdsPixelFormat, 
 // Parse a DDS file.
 let bytes: Vec<u8> = std::fs::read("input.dds").unwrap();
 let img = parse_dds(&bytes).unwrap();
-println!(
-    "{}x{} {} (mip levels: {})",
-    img.width, img.height, img.pixel_format.name(), img.mip_map_count,
-);
+println!("{}x{} {}", img.width, img.height, img.pixel_format.name());
 
 // Build + write a 4x3 A8R8G8B8 surface.
-let mut data = vec![0u8; 4 * 3 * 4];
-for (i, b) in data.iter_mut().enumerate() {
-    *b = (i & 0xff) as u8;
-}
+let data = vec![0u8; 4 * 3 * 4];
 let img = DdsImage {
     width: 4,
     height: 3,
@@ -303,30 +99,10 @@ let out: Vec<u8> = encode_dds_uncompressed(&img).unwrap();
 std::fs::write("output.dds", out).unwrap();
 ```
 
-For block-compressed input the same `parse_dds` returns an image whose
-`pixel_format` is one of the `Bc*` variants and whose
-`surfaces[i].plane.data` holds the raw 4x4-block byte array. For
-BC1..BC5 + BC7 you can call the matching `decode_bc*` helper to expand
-it into RGBA8 / R8 / RG8:
-
-```rust
-use oxideav_dds::{decode_bc1, decode_bc7, parse_dds, DdsPixelFormat};
-
-let dds = std::fs::read("texture.dds").unwrap();
-let img = parse_dds(&dds).unwrap();
-let mut rgba = vec![0u8; (img.width * img.height * 4) as usize];
-match img.pixel_format {
-    DdsPixelFormat::Bc1 => {
-        decode_bc1(&img.surfaces[0].plane.data, img.width, img.height, &mut rgba).unwrap();
-    }
-    DdsPixelFormat::Bc7Unorm | DdsPixelFormat::Bc7UnormSrgb => {
-        decode_bc7(&img.surfaces[0].plane.data, img.width, img.height, &mut rgba).unwrap();
-    }
-    _ => { /* see decode_bc2..bc5 helpers */ }
-}
-```
-
-To encode an RGBA8 surface to BC1 (DXT1) on disk:
+For block-compressed input, `parse_dds` returns an image whose
+`pixel_format` is a `Bc*` variant and whose `surfaces[i].plane.data`
+holds the raw 4x4-block bytes; call the matching `decode_bc*` helper to
+expand it. To encode an RGBA8 surface to BC1:
 
 ```rust
 use oxideav_dds::encode_bc1;
@@ -334,42 +110,28 @@ use oxideav_dds::encode_bc1;
 let rgba: Vec<u8> = vec![0xff; 16 * 16 * 4];
 let mut bc1 = vec![0u8; (16 / 4) * (16 / 4) * 8];
 encode_bc1(&rgba, 16, 16, /* punchthrough_alpha = */ false, &mut bc1).unwrap();
-// `bc1` now holds the raw block bytes; wrap them in a DDS file with
-// FOURCC_DXT1 to write a valid texture.
 ```
 
-For BC2 (DXT3 explicit alpha), BC3 (DXT5 interpolated alpha), BC4
-(single-channel) or BC5 (two-channel) the entry points mirror the BC1
-encoder:
-
-```rust
-use oxideav_dds::{encode_bc2, encode_bc3, encode_bc4_unorm, encode_bc5_unorm};
-
-let rgba = vec![0u8; 16 * 16 * 4];
-let mut bc3 = vec![0u8; (16 / 4) * (16 / 4) * 16];
-encode_bc3(&rgba, 16, 16, &mut bc3).unwrap();
-```
-
-For mipmapped or cubemap textures iterate `img.surfaces` directly:
-each entry carries its own `mip_level`, `array_slice`, `face`, and
-`(width, height)`.
+For mipmapped or cubemap textures iterate `img.surfaces` directly; each
+entry carries its own `mip_level`, `array_slice`, `face`, and `(width,
+height)`.
 
 ## Clean-room provenance
 
 Every byte of the parser was written from Microsoft's public DDS
 programming-guide pages on [learn.microsoft.com][ms-dds-pguide] (the
 "DDS file layout for textures", "DDS pixel format", and "Programming
-guide for DDS" articles plus the public DXGI format reference).
-Binaries (`magick`, `texconv`) are used only as black-box validators
-when generating test fixtures, not as a source of constants or layout.
+guide for DDS" articles plus the public DXGI format reference). Binaries
+(`magick`, `texconv`) are used only as black-box validators when
+generating test fixtures, never as a source of constants or layout.
 
 [ms-dds-pguide]: https://learn.microsoft.com/en-us/windows/win32/direct3ddds/dx-graphics-dds-pguide
 
 ## Cargo features
 
-| Feature    | Default | Effect                                                                                                                                |
-|------------|---------|---------------------------------------------------------------------------------------------------------------------------------------|
-| `registry` | yes     | Pulls in `oxideav-core`, exposes the `Decoder` / `Encoder` trait surface, registers the codec with the framework via `register`.      |
+| Feature    | Default | Effect                                                                                                       |
+|------------|---------|------------------------------------------------------------------------------------------------------------|
+| `registry` | yes     | Pulls in `oxideav-core`, exposes the `Decoder` / `Encoder` trait surface, registers the codec via `register`. Disable (`default-features = false`) to drop the `oxideav-core` dependency tree; the standalone `parse_dds` / `encode_*` / `decode_*` API plus crate-local types stay available on `std`. |
 
 ## License
 
