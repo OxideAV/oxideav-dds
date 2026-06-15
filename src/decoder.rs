@@ -312,8 +312,11 @@ fn pixel_format_from_dxgi(d: DxgiFormat) -> Option<DdsPixelFormat> {
         DxgiFormat::R32G32Float => DdsPixelFormat::R32G32Float,
         DxgiFormat::R32G32B32A32Float => DdsPixelFormat::R32G32B32A32Float,
         // Packed 10:10:10:2 — one 32-bit word per pixel, R in the
-        // least-significant 10 bits.
+        // least-significant 10 bits. The UINT variant (value 25) shares
+        // the UNORM packing but stores plain integers (no normalisation);
+        // it is DX10-only (no legacy D3DFMT four-cc).
         DxgiFormat::R10G10B10A2Unorm => DdsPixelFormat::R10G10B10A2Unorm,
+        DxgiFormat::R10G10B10A2Uint => DdsPixelFormat::R10G10B10A2Uint,
         // Everything else (other integer, depth/stencil, YUV
         // planar, palette-8) has no [`DdsPixelFormat`] mapping yet.
         _ => return None,

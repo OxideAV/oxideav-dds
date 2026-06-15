@@ -118,6 +118,13 @@ pub enum DdsPixelFormat {
     /// the canonical Direct3D 10 packing where the first named component
     /// sits in the least-significant bits.
     R10G10B10A2Unorm,
+    /// 32 bpp packed 10:10:10:2, one little-endian `u32` per pixel
+    /// (DXGI `R10G10B10A2_UINT`, value 25). Identical bit packing to
+    /// [`Self::R10G10B10A2Unorm`] (R in bits 0..=9, G in 10..=19, B in
+    /// 20..=29, A in 30..=31), but the stored values are plain unsigned
+    /// integers — there is no `[0, 1]` normalisation, so the decoded
+    /// `0..=1023` colour and `0..=3` alpha samples ARE the values.
+    R10G10B10A2Uint,
 }
 
 impl DdsPixelFormat {
@@ -132,7 +139,9 @@ impl DdsPixelFormat {
             Self::R5G6B5 | Self::A1R5G5B5 | Self::A4R4G4B4 | Self::A8L8 => 16,
             Self::L8 | Self::A8 => 8,
             Self::R16Float => 16,
-            Self::R16G16Float | Self::R32Float | Self::R10G10B10A2Unorm => 32,
+            Self::R16G16Float | Self::R32Float | Self::R10G10B10A2Unorm | Self::R10G10B10A2Uint => {
+                32
+            }
             Self::R16G16B16A16Unorm
             | Self::R16G16B16A16Snorm
             | Self::R16G16B16A16Float
@@ -159,7 +168,9 @@ impl DdsPixelFormat {
             Self::R5G6B5 | Self::A1R5G5B5 | Self::A4R4G4B4 | Self::A8L8 => 2,
             Self::L8 | Self::A8 => 1,
             Self::R16Float => 2,
-            Self::R16G16Float | Self::R32Float | Self::R10G10B10A2Unorm => 4,
+            Self::R16G16Float | Self::R32Float | Self::R10G10B10A2Unorm | Self::R10G10B10A2Uint => {
+                4
+            }
             Self::R16G16B16A16Unorm
             | Self::R16G16B16A16Snorm
             | Self::R16G16B16A16Float
@@ -224,6 +235,7 @@ impl DdsPixelFormat {
             Self::R32G32Float => "R32G32_FLOAT",
             Self::R32G32B32A32Float => "R32G32B32A32_FLOAT",
             Self::R10G10B10A2Unorm => "R10G10B10A2_UNORM",
+            Self::R10G10B10A2Uint => "R10G10B10A2_UINT",
         }
     }
 
@@ -237,7 +249,8 @@ impl DdsPixelFormat {
             | Self::R16G16B16A16Snorm
             | Self::R16G16B16A16Float
             | Self::R32G32B32A32Float
-            | Self::R10G10B10A2Unorm => 4,
+            | Self::R10G10B10A2Unorm
+            | Self::R10G10B10A2Uint => 4,
             _ => return None,
         })
     }

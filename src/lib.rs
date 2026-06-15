@@ -123,7 +123,10 @@
 //!   `D3DFMT_A2B10G10R10` — three 10-bit colour channels plus a 2-bit
 //!   alpha channel in one 32-bit word, R in the least-significant bits)
 //!   yields the stored unsigned-normalised integers via
-//!   [`decode_r10g10b10a2_unorm_surface`].
+//!   [`decode_r10g10b10a2_unorm_surface`]. Its integer sibling
+//!   `R10G10B10A2_UINT` (`DXGI_FORMAT` value 25 — same packing, plain
+//!   unsigned integers, no normalisation, DX10-header only) yields the
+//!   stored integers via [`decode_r10g10b10a2_uint_surface`].
 //! * **`.dds` still-image container demuxer + muxer** (round-3 lift
 //!   over the round-2 extension-only registration). The framework
 //!   `ContainerRegistry` now carries probe + demuxer + muxer entries
@@ -207,8 +210,9 @@ pub use encoder::{
 };
 pub use error::{DdsError, Result};
 pub use hdr::{
-    decode_float_surface, decode_r10g10b10a2_unorm_surface, decode_r11g11b10_float_surface,
-    decode_r9g9b9e5_sharedexp_surface, decode_rgba16_snorm_surface, decode_rgba16_unorm_surface,
+    decode_float_surface, decode_r10g10b10a2_uint_surface, decode_r10g10b10a2_unorm_surface,
+    decode_r11g11b10_float_surface, decode_r9g9b9e5_sharedexp_surface, decode_rgba16_snorm_surface,
+    decode_rgba16_unorm_surface,
 };
 pub use image::{CubemapFace, DdsImage, DdsPixelFormat, DdsPlane, DdsSurface};
 pub use types::{

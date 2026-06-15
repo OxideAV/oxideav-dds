@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Packed `R10G10B10A2_UINT` surface decoder (round 309).** New
+  `decode_r10g10b10a2_uint_surface` widens the `DXGI_FORMAT` value 25
+  layout — the integer sibling of value 24 (`R10G10B10A2_UNORM`). It
+  shares the exact same little-endian 32-bit word packing (R in bits
+  0..=9, G in 10..=19, B in 20..=29, A in 30..=31), but Microsoft's
+  `DXGI_FORMAT` reference describes value 25 as a "four-component,
+  32-bit unsigned-integer format" rather than "unsigned-normalized-
+  integer", so the returned `Vec<u16>` carries the stored integers
+  (R / G / B in `0..=1023`, A in `0..=3`) as the values themselves —
+  there is no `[0, 1]` normalisation step at all (the caller does not
+  divide). The format has no legacy `D3DFMT` four-cc — it is
+  DX10-header only — so `parse_dds` resolves it solely from the
+  `DDS_HEADER_DXT10` `dxgi_format == 25`, sizing the surface at four
+  bytes per pixel. A new `DdsPixelFormat::R10G10B10A2Uint` variant
+  carries it; the UNORM and UINT decoders share one private bit-
+  extraction helper. Six `hdr` unit tests (channel order / widths,
+  all-zero word, all-ones word, UNORM/UINT bit-extraction parity,
+  row-major multi-pixel, truncated-input rejection) plus two
+  `tests/hdr_surfaces.rs` integration tests (DX10 path, 2×2 sizing).
+  Exported at the crate root.
 - **Packed `R10G10B10A2_UNORM` surface decoder (round 305).** New
   `decode_r10g10b10a2_unorm_surface` widens the `DXGI_FORMAT` value 24
   layout (legacy `D3DFMT_A2B10G10R10`) — three 10-bit colour channels

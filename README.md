@@ -9,7 +9,7 @@ single-format codec crates.
 
 ## Status
 
-Coverage as of round 305:
+Coverage as of round 309:
 
 - `DDS_HEADER` (124 bytes) + optional `DDS_HEADER_DXT10` (20 bytes) parser.
 - Bit-exact round-trip of every common uncompressed surface layout:
@@ -164,6 +164,18 @@ Coverage as of round 305:
   alpha) to the caller. `parse_dds` resolves the format from both the
   DX10 `dxgi_format == 24` and the legacy `D3DFMT_A2B10G10R10` DDPF_RGB
   mask layout.
+- **Packed `R10G10B10A2_UINT` surface (round 309).** The integer sibling
+  of value 24: `DXGI_FORMAT` value 25 uses the *same* 10:10:10:2 bit
+  packing but the `DXGI_FORMAT` reference calls it a "four-component,
+  32-bit unsigned-integer format" rather than "unsigned-normalized-
+  integer", so the stored channels are plain integers with no
+  normalisation step at all. `decode_r10g10b10a2_uint_surface` returns
+  the stored integers (R / G / B in `0..=1023`, A in `0..=3`) as the
+  values themselves — the caller does not divide. The format has no
+  legacy `D3DFMT` four-cc, so `parse_dds` resolves it only from the DX10
+  `dxgi_format == 25`. A new `DdsPixelFormat::R10G10B10A2Uint` variant
+  carries it; the UNORM and UINT decoders share one private bit-
+  extraction helper.
 - Block-compressed pass-through. BC1..BC7 raw block bytes are
   surfaced through `DdsImage::surfaces[i].plane.data`; BC1..BC5 +
   BC7 also decompress to RGBA / R / RG via the dedicated `decode_bc*`

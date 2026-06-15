@@ -83,6 +83,16 @@
 //! A in `0..=3`); as with the `R16G16B16A16_UNORM` path the crate does
 //! not scale them onto a real range, leaving the per-channel division
 //! (`/ 1023` for colour, `/ 3` for alpha) to the caller.
+//!
+//! The sibling integer layout `R10G10B10A2_UINT` (`DXGI_FORMAT` value
+//! 25) uses the *same* bit packing as value 24 but the reference
+//! describes it as a "four-component, 32-bit unsigned-integer format"
+//! rather than "unsigned-normalized-integer": the stored channels are
+//! plain unsigned integers, so there is no `[0, 1]` normalisation step
+//! at all. [`decode_r10g10b10a2_uint_surface`] returns the stored
+//! integers (R / G / B in `0..=1023`, A in `0..=3`) as the values
+//! themselves. The format has no legacy `D3DFMT` four-cc — it is
+//! DX10-header only.
 
 use crate::bc6h::half_to_f32;
 use crate::error::{DdsError, Result};
@@ -390,21 +400,50 @@ pub fn decode_r9g9b9e5_sharedexp_surface(width: u32, height: u32, data: &[u8]) -
 /// `data` must be at least `width × height × 4` bytes. Returns
 /// [`DdsError::InvalidData`] if it is shorter.
 pub fn decode_r10g10b10a2_unorm_surface(width: u32, height: u32, data: &[u8]) -> Result<Vec<u16>> {
+    decode_r10g10b10a2_raw(width, height, data, "decode_r10g10b10a2_unorm")
+}
+
+/// Decode a tightly-packed `R10G10B10A2_UINT` surface into a flat,
+/// interleaved `Vec<u16>` of `width × height × 4` stored samples (R, G,
+/// B, A per pixel, row-major).
+///
+/// The bit packing is identical to [`decode_r10g10b10a2_unorm_surface`]
+/// (`DXGI_FORMAT` value 24): R occupies bits 0..=9, G bits 10..=19, B
+/// bits 20..=29, and A bits 30..=31 of one little-endian 32-bit word.
+/// The difference is purely semantic — the format reference describes
+/// value 25 as a four-component, 32-bit *unsigned-integer* format, so
+/// the returned values (R / G / B in `0..=1023`, A in `0..=3`) are the
+/// integers themselves, with no `[0, 1]` normalisation step. The format
+/// has no legacy `D3DFMT` four-cc; it is DX10-header only.
+///
+/// `data` must be at least `width × height × 4` bytes. Returns
+/// [`DdsError::InvalidData`] if it is shorter.
+pub fn decode_r10g10b10a2_uint_surface(width: u32, height: u32, data: &[u8]) -> Result<Vec<u16>> {
+    decode_r10g10b10a2_raw(width, height, data, "decode_r10g10b10a2_uint")
+}
+
+/// Shared bit-extraction for the two `R10G10B10A2` packed layouts. The
+/// UNORM (value 24) and UINT (value 25) variants share the exact same
+/// little-endian 32-bit word packing — R in bits 0..=9, G in 10..=19, B
+/// in 20..=29, A in 30..=31 — and differ only in how the caller is
+/// expected to interpret the returned integers, so both return the raw
+/// stored channels here.
+fn decode_r10g10b10a2_raw(width: u32, height: u32, data: &[u8], what: &str) -> Result<Vec<u16>> {
     let px = (width as usize)
         .checked_mul(height as usize)
-        .ok_or_else(|| DdsError::invalid("decode_r10g10b10a2_unorm: dimension overflow"))?;
+        .ok_or_else(|| DdsError::invalid(format!("{what}: dimension overflow")))?;
     let need = px
         .checked_mul(4)
-        .ok_or_else(|| DdsError::invalid("decode_r10g10b10a2_unorm: byte-count overflow"))?;
+        .ok_or_else(|| DdsError::invalid(format!("{what}: byte-count overflow")))?;
     if data.len() < need {
         return Err(DdsError::invalid(format!(
-            "decode_r10g10b10a2_unorm: needs {need} bytes for {width}x{height}, have {}",
+            "{what}: needs {need} bytes for {width}x{height}, have {}",
             data.len()
         )));
     }
     let total_samples = px
         .checked_mul(4)
-        .ok_or_else(|| DdsError::invalid("decode_r10g10b10a2_unorm: sample-count overflow"))?;
+        .ok_or_else(|| DdsError::invalid(format!("{what}: sample-count overflow")))?;
     let mut out = Vec::with_capacity(total_samples);
     let mut off = 0usize;
     for _ in 0..px {
@@ -717,6 +756,57 @@ mod tests {
     fn r10g10b10a2_truncated_input_is_invalid() {
         let data = [0u8; 3];
         let err = decode_r10g10b10a2_unorm_surface(1, 1, &data).unwrap_err();
+        assert!(matches!(err, DdsError::InvalidData(_)));
+    }
+
+    #[test]
+    fn r10g10b10a2_uint_channel_order_and_widths() {
+        // R=1023 (max), G=512, B=1, A=2 — same packing as the UNORM
+        // variant; confirms each channel reads from its own bit field
+        // with the least-significant-bits-first ordering.
+        let data = pack_r10g10b10a2(1023, 512, 1, 2);
+        let out = decode_r10g10b10a2_uint_surface(1, 1, &data).unwrap();
+        assert_eq!(out, vec![1023, 512, 1, 2]);
+    }
+
+    #[test]
+    fn r10g10b10a2_uint_zero_word_is_zero() {
+        let data = pack_r10g10b10a2(0, 0, 0, 0);
+        let out = decode_r10g10b10a2_uint_surface(1, 1, &data).unwrap();
+        assert_eq!(out, vec![0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn r10g10b10a2_uint_all_ones_word() {
+        // 0xffffffff → R=G=B=1023, A=3 (every bit set).
+        let data = 0xffff_ffffu32.to_le_bytes();
+        let out = decode_r10g10b10a2_uint_surface(1, 1, &data).unwrap();
+        assert_eq!(out, vec![1023, 1023, 1023, 3]);
+    }
+
+    #[test]
+    fn r10g10b10a2_uint_matches_unorm_bit_extraction() {
+        // The two layouts share the exact same packing, so the raw
+        // extracted integers are identical for any word.
+        let data = pack_r10g10b10a2(700, 300, 42, 1);
+        let uint = decode_r10g10b10a2_uint_surface(1, 1, &data).unwrap();
+        let unorm = decode_r10g10b10a2_unorm_surface(1, 1, &data).unwrap();
+        assert_eq!(uint, unorm);
+    }
+
+    #[test]
+    fn r10g10b10a2_uint_two_pixels_row_major() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&pack_r10g10b10a2(1023, 0, 0, 0)); // R max
+        data.extend_from_slice(&pack_r10g10b10a2(0, 0, 0, 3)); // A max
+        let out = decode_r10g10b10a2_uint_surface(2, 1, &data).unwrap();
+        assert_eq!(out, vec![1023, 0, 0, 0, 0, 0, 0, 3]);
+    }
+
+    #[test]
+    fn r10g10b10a2_uint_truncated_input_is_invalid() {
+        let data = [0u8; 3];
+        let err = decode_r10g10b10a2_uint_surface(1, 1, &data).unwrap_err();
         assert!(matches!(err, DdsError::InvalidData(_)));
     }
 }

@@ -13,8 +13,8 @@ use oxideav_dds::types::{
     DDS_MAGIC, DDS_PIXELFORMAT_SIZE, FOURCC_DX10,
 };
 use oxideav_dds::{
-    decode_float_surface, decode_r10g10b10a2_unorm_surface, decode_rgba16_snorm_surface,
-    decode_rgba16_unorm_surface, parse_dds, DdsPixelFormat,
+    decode_float_surface, decode_r10g10b10a2_uint_surface, decode_r10g10b10a2_unorm_surface,
+    decode_rgba16_snorm_surface, decode_rgba16_unorm_surface, parse_dds, DdsPixelFormat,
 };
 
 const CAPS_TEXTURE: u32 = 0x0000_1000;
@@ -181,6 +181,32 @@ fn legacy_a2b10g10r10_masks_resolve_to_r10g10b10a2() {
     assert!(!img.has_dxt10_header);
     let out = decode_r10g10b10a2_unorm_surface(1, 1, &img.surfaces[0].plane.data).unwrap();
     assert_eq!(out, vec![7, 1023, 0, 3]);
+}
+
+#[test]
+fn dx10_r10g10b10a2_uint() {
+    // DXGI_FORMAT_R10G10B10A2_UINT = 25, 4 bytes/pixel, same packing as
+    // value 24 but plain unsigned integers (no normalisation).
+    let px = pack_r10g10b10a2(1023, 512, 1, 2);
+    let dds = build_dx10_dds(25, 1, 1, &px);
+    let img = parse_dds(&dds).unwrap();
+    assert_eq!(img.pixel_format, DdsPixelFormat::R10G10B10A2Uint);
+    assert!(img.has_dxt10_header);
+    assert_eq!(img.surfaces[0].plane.data.len(), 4);
+    let out = decode_r10g10b10a2_uint_surface(1, 1, &img.surfaces[0].plane.data).unwrap();
+    assert_eq!(out, vec![1023, 512, 1, 2]);
+}
+
+#[test]
+fn r10g10b10a2_uint_surface_sizing_2x2() {
+    // 2x2 R10G10B10A2_UINT = 4 pixels × 4 bytes = 16 bytes.
+    let px = vec![0u8; 16];
+    let dds = build_dx10_dds(25, 2, 2, &px);
+    let img = parse_dds(&dds).unwrap();
+    assert_eq!(img.pixel_format, DdsPixelFormat::R10G10B10A2Uint);
+    assert_eq!(img.surfaces.len(), 1);
+    assert_eq!(img.surfaces[0].plane.data.len(), 16);
+    assert_eq!(img.surfaces[0].plane.stride, 2 * 4);
 }
 
 #[test]
