@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.5](https://github.com/OxideAV/oxideav-dds/compare/v0.0.4...v0.0.5) - 2026-06-15
+
+### Other
+
+- decode packed R10G10B10A2_UINT surface (round 309)
+- decode packed R10G10B10A2_UNORM surface (round 305)
+- decode shared-exponent R9G9B9E5_SHAREDEXP HDR surface (round 299)
+- decode packed R11G11B10_FLOAT HDR surface (round 293)
+- decode extended high-bit-depth / float uncompressed surfaces (round 289)
+- remove enumerated-denial prose from src/ module headers
+- drop release-plz.toml — use release-plz defaults across the workspace
+- scrub pre-existing enumerated-denial prose across 8 src/ files
+- unq-space LSQ refinement pass (round 207)
+
 ### Added
 
 - **Packed `R10G10B10A2_UINT` surface decoder (round 309).** New
