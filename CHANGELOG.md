@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Sub-sampled packed RGB decoders `R8G8_B8G8_UNORM` /
+  `G8R8_G8B8_UNORM` (round 314).** New `decode_r8g8_b8g8_unorm_surface`
+  and `decode_g8r8_g8b8_unorm_surface` expand the two horizontally
+  sub-sampled packed RGB layouts (`DXGI_FORMAT` values 68 and 69) into
+  interleaved RGBA8. Each 32-bit on-disk block encodes an adjacent pixel
+  pair that shares its red and blue bytes but carries an independent
+  green byte for each pixel; the two formats differ only in the byte
+  order within the block (`[R, G0, B, G1]` for value 68,
+  `[G0, R, G1, B]` for value 69). Both require an even width and force
+  the decoded alpha to `0xff`. New `DdsPixelFormat::R8G8B8G8Unorm` /
+  `G8R8G8B8Unorm` variants carry them, sized at two bytes per pixel, and
+  `parse_dds` resolves them from the `DDS_HEADER_DXT10` `dxgi_format`.
+
 ## [0.0.5](https://github.com/OxideAV/oxideav-dds/compare/v0.0.4...v0.0.5) - 2026-06-15
 
 ### Other

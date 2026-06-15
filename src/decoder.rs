@@ -317,6 +317,10 @@ fn pixel_format_from_dxgi(d: DxgiFormat) -> Option<DdsPixelFormat> {
         // it is DX10-only (no legacy D3DFMT four-cc).
         DxgiFormat::R10G10B10A2Unorm => DdsPixelFormat::R10G10B10A2Unorm,
         DxgiFormat::R10G10B10A2Uint => DdsPixelFormat::R10G10B10A2Uint,
+        // Horizontally sub-sampled packed RGB (values 68 / 69). One
+        // 32-bit block per pixel pair: R/B shared, G unique per pixel.
+        DxgiFormat::R8G8B8G8Unorm => DdsPixelFormat::R8G8B8G8Unorm,
+        DxgiFormat::G8R8G8B8Unorm => DdsPixelFormat::G8R8G8B8Unorm,
         // Everything else (other integer, depth/stencil, YUV
         // planar, palette-8) has no [`DdsPixelFormat`] mapping yet.
         _ => return None,

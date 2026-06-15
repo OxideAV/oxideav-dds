@@ -27,7 +27,12 @@ exposed via `decode_float_surface` / `decode_rgba16_unorm_surface` /
 `f32` / integers: `R11G11B10_FLOAT` (`decode_r11g11b10_float_surface`),
 `R9G9B9E5_SHAREDEXP` (`decode_r9g9b9e5_sharedexp_surface`),
 `R10G10B10A2_UNORM` (`decode_r10g10b10a2_unorm_surface`), and
-`R10G10B10A2_UINT` (`decode_r10g10b10a2_uint_surface`).
+`R10G10B10A2_UINT` (`decode_r10g10b10a2_uint_surface`). The two
+horizontally sub-sampled packed RGB layouts `R8G8_B8G8_UNORM`
+(`decode_r8g8_b8g8_unorm_surface`) and `G8R8_G8B8_UNORM`
+(`decode_g8r8_g8b8_unorm_surface`) — one 32-bit block per adjacent
+pixel pair, red/blue shared and green sampled per pixel — expand to
+interleaved RGBA8 (alpha `0xff`); both require an even width.
 
 **Block-compressed decode.**
 

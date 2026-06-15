@@ -461,6 +461,120 @@ fn decode_r10g10b10a2_raw(width: u32, height: u32, data: &[u8], what: &str) -> R
     Ok(out)
 }
 
+/// Decode a tightly-packed `R8G8_B8G8_UNORM` surface (`DXGI_FORMAT`
+/// value 68) into a flat, interleaved RGBA8 `Vec<u8>` of
+/// `width × height × 4` bytes (R, G, B, A per pixel, row-major;
+/// A is forced to `0xff` since the layout carries no alpha channel).
+///
+/// This is one of the two packed, horizontally sub-sampled RGB layouts
+/// in the DXGI format table. Microsoft's `DXGI_FORMAT` reference
+/// describes value 68 as a four-component, 32-bit unsigned-normalized
+/// format in which "each 32-bit block describes a pair of pixels:
+/// `(R8, G8, B8)` and `(R8, G8, B8)` where the `R8`/`B8` values are
+/// repeated, and the `G8` values are unique to each pixel" — i.e. the
+/// red and blue channels are shared across the horizontal pixel pair
+/// and only green is sampled per pixel. The on-disk byte order follows
+/// the format name `R8G8_B8G8`: the four bytes of each block are
+/// `[R, G0, B, G1]`, so pixel 0 reconstructs to `(R, G0, B)` and pixel
+/// 1 to `(R, G1, B)`.
+///
+/// Width must be even (the layout pairs adjacent pixels); an odd width
+/// is rejected with [`DdsError::InvalidData`]. `data` must hold at least
+/// `(width / 2) × height × 4` bytes.
+pub fn decode_r8g8_b8g8_unorm_surface(width: u32, height: u32, data: &[u8]) -> Result<Vec<u8>> {
+    // Byte 0 carries the shared red, bytes 1/3 the two greens, byte 2
+    // the shared blue.
+    decode_packed_subsampled_rgb(width, height, data, 0, 1, 3, 2, "decode_r8g8_b8g8_unorm")
+}
+
+/// Decode a tightly-packed `G8R8_G8B8_UNORM` surface (`DXGI_FORMAT`
+/// value 69) into a flat, interleaved RGBA8 `Vec<u8>` of
+/// `width × height × 4` bytes (R, G, B, A per pixel, row-major;
+/// A is forced to `0xff`).
+///
+/// This is the sibling of [`decode_r8g8_b8g8_unorm_surface`] with the
+/// channels reordered within each 32-bit block. Microsoft's
+/// `DXGI_FORMAT` reference describes value 69 with the same pair-of-
+/// pixels reconstruction — `R8`/`B8` repeated, `G8` unique per pixel —
+/// but the on-disk byte order follows the format name `G8R8_G8B8`: the
+/// four bytes of each block are `[G0, R, G1, B]`, so pixel 0
+/// reconstructs to `(R, G0, B)` and pixel 1 to `(R, G1, B)`.
+///
+/// Width must be even; an odd width is rejected with
+/// [`DdsError::InvalidData`]. `data` must hold at least
+/// `(width / 2) × height × 4` bytes.
+pub fn decode_g8r8_g8b8_unorm_surface(width: u32, height: u32, data: &[u8]) -> Result<Vec<u8>> {
+    // Byte 1 carries the shared red, bytes 0/2 the two greens, byte 3
+    // the shared blue.
+    decode_packed_subsampled_rgb(width, height, data, 1, 0, 2, 3, "decode_g8r8_g8b8_unorm")
+}
+
+/// Shared reconstruction for the two horizontally sub-sampled packed
+/// RGB layouts (`DXGI_FORMAT` values 68 / 69). Each 32-bit block on disk
+/// encodes a left/right pixel pair that shares one red byte and one blue
+/// byte but carries an independent green byte each. The `r_off`,
+/// `g0_off`, `g1_off`, and `b_off` arguments give the within-block byte
+/// offsets of the shared red, the left green, the right green, and the
+/// shared blue respectively, which is the only thing that distinguishes
+/// the two layouts. Output is interleaved RGBA8 with the alpha byte set
+/// to `0xff`.
+#[allow(clippy::too_many_arguments)]
+fn decode_packed_subsampled_rgb(
+    width: u32,
+    height: u32,
+    data: &[u8],
+    r_off: usize,
+    g0_off: usize,
+    g1_off: usize,
+    b_off: usize,
+    what: &str,
+) -> Result<Vec<u8>> {
+    if width % 2 != 0 {
+        return Err(DdsError::invalid(format!(
+            "{what}: width must be even (sub-sampled pixel pairs), got {width}"
+        )));
+    }
+    let pairs_per_row = (width / 2) as usize;
+    let rows = height as usize;
+    let blocks = pairs_per_row
+        .checked_mul(rows)
+        .ok_or_else(|| DdsError::invalid(format!("{what}: dimension overflow")))?;
+    let need = blocks
+        .checked_mul(4)
+        .ok_or_else(|| DdsError::invalid(format!("{what}: byte-count overflow")))?;
+    if data.len() < need {
+        return Err(DdsError::invalid(format!(
+            "{what}: needs {need} bytes for {width}x{height}, have {}",
+            data.len()
+        )));
+    }
+    let px = (width as usize)
+        .checked_mul(rows)
+        .ok_or_else(|| DdsError::invalid(format!("{what}: pixel-count overflow")))?;
+    let total = px
+        .checked_mul(4)
+        .ok_or_else(|| DdsError::invalid(format!("{what}: sample-count overflow")))?;
+    let mut out = Vec::with_capacity(total);
+    let mut off = 0usize;
+    for _ in 0..blocks {
+        let r = data[off + r_off];
+        let g0 = data[off + g0_off];
+        let g1 = data[off + g1_off];
+        let b = data[off + b_off];
+        // Left pixel: (R, G0, B), right pixel: (R, G1, B).
+        out.push(r);
+        out.push(g0);
+        out.push(b);
+        out.push(0xff);
+        out.push(r);
+        out.push(g1);
+        out.push(b);
+        out.push(0xff);
+        off += 4;
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -807,6 +921,57 @@ mod tests {
     fn r10g10b10a2_uint_truncated_input_is_invalid() {
         let data = [0u8; 3];
         let err = decode_r10g10b10a2_uint_surface(1, 1, &data).unwrap_err();
+        assert!(matches!(err, DdsError::InvalidData(_)));
+    }
+
+    #[test]
+    fn r8g8_b8g8_reconstructs_pixel_pair() {
+        // One 32-bit block, byte order [R, G0, B, G1] = [10, 20, 30, 40].
+        // Pixel 0 = (R=10, G=20, B=30), pixel 1 = (R=10, G=40, B=30),
+        // alpha forced to 0xff. 2x1 surface.
+        let data = [10u8, 20, 30, 40];
+        let out = decode_r8g8_b8g8_unorm_surface(2, 1, &data).unwrap();
+        assert_eq!(out, vec![10, 20, 30, 0xff, 10, 40, 30, 0xff]);
+    }
+
+    #[test]
+    fn g8r8_g8b8_reconstructs_pixel_pair() {
+        // One 32-bit block, byte order [G0, R, G1, B] = [20, 10, 40, 30].
+        // Same reconstruction as the R8G8_B8G8 case: pixel 0 = (10,20,30),
+        // pixel 1 = (10,40,30).
+        let data = [20u8, 10, 40, 30];
+        let out = decode_g8r8_g8b8_unorm_surface(2, 1, &data).unwrap();
+        assert_eq!(out, vec![10, 20, 30, 0xff, 10, 40, 30, 0xff]);
+    }
+
+    #[test]
+    fn subsampled_two_rows_are_row_major() {
+        // 2x2 R8G8_B8G8: row 0 block [1,2,3,4], row 1 block [5,6,7,8].
+        let data = [1u8, 2, 3, 4, 5, 6, 7, 8];
+        let out = decode_r8g8_b8g8_unorm_surface(2, 2, &data).unwrap();
+        assert_eq!(
+            out,
+            vec![
+                1, 2, 3, 0xff, 1, 4, 3, 0xff, // row 0
+                5, 6, 7, 0xff, 5, 8, 7, 0xff, // row 1
+            ]
+        );
+    }
+
+    #[test]
+    fn subsampled_odd_width_rejected() {
+        let data = [0u8; 4];
+        let err = decode_r8g8_b8g8_unorm_surface(1, 1, &data).unwrap_err();
+        assert!(matches!(err, DdsError::InvalidData(_)));
+        let err = decode_g8r8_g8b8_unorm_surface(3, 1, &data).unwrap_err();
+        assert!(matches!(err, DdsError::InvalidData(_)));
+    }
+
+    #[test]
+    fn subsampled_truncated_input_is_invalid() {
+        // 4x1 needs two 4-byte blocks (8 bytes); give only 5.
+        let data = [0u8; 5];
+        let err = decode_r8g8_b8g8_unorm_surface(4, 1, &data).unwrap_err();
         assert!(matches!(err, DdsError::InvalidData(_)));
     }
 }

@@ -125,6 +125,21 @@ pub enum DdsPixelFormat {
     /// integers — there is no `[0, 1]` normalisation, so the decoded
     /// `0..=1023` colour and `0..=3` alpha samples ARE the values.
     R10G10B10A2Uint,
+    /// 32 bpp per pixel-PAIR packed, horizontally sub-sampled RGB
+    /// (DXGI `R8G8_B8G8_UNORM`, value 68). Each little-endian 32-bit
+    /// block `[R, G0, B, G1]` describes two adjacent pixels that share
+    /// the red and blue bytes but carry an independent green byte each
+    /// (pixel 0 = `(R, G0, B)`, pixel 1 = `(R, G1, B)`). Width must be
+    /// even; expand to RGBA8 with
+    /// [`crate::decode_r8g8_b8g8_unorm_surface`].
+    R8G8B8G8Unorm,
+    /// 32 bpp per pixel-PAIR packed, horizontally sub-sampled RGB
+    /// (DXGI `G8R8_G8B8_UNORM`, value 69). The sibling of
+    /// [`Self::R8G8B8G8Unorm`] with the channels reordered inside the
+    /// block to `[G0, R, G1, B]`; same pixel-pair reconstruction. Width
+    /// must be even; expand to RGBA8 with
+    /// [`crate::decode_g8r8_g8b8_unorm_surface`].
+    G8R8G8B8Unorm,
 }
 
 impl DdsPixelFormat {
@@ -138,6 +153,9 @@ impl DdsPixelFormat {
             Self::R8G8B8 => 24,
             Self::R5G6B5 | Self::A1R5G5B5 | Self::A4R4G4B4 | Self::A8L8 => 16,
             Self::L8 | Self::A8 => 8,
+            // Sub-sampled packed RGB: 32 bits per pixel PAIR = 16 bpp
+            // amortised over the two pixels each block encodes.
+            Self::R8G8B8G8Unorm | Self::G8R8G8B8Unorm => 16,
             Self::R16Float => 16,
             Self::R16G16Float | Self::R32Float | Self::R10G10B10A2Unorm | Self::R10G10B10A2Uint => {
                 32
@@ -167,6 +185,10 @@ impl DdsPixelFormat {
             Self::R8G8B8 => 3,
             Self::R5G6B5 | Self::A1R5G5B5 | Self::A4R4G4B4 | Self::A8L8 => 2,
             Self::L8 | Self::A8 => 1,
+            // Sub-sampled packed RGB stores 4 bytes per 2-pixel block,
+            // i.e. 2 bytes per pixel — exact only for an even width,
+            // which the layout requires anyway.
+            Self::R8G8B8G8Unorm | Self::G8R8G8B8Unorm => 2,
             Self::R16Float => 2,
             Self::R16G16Float | Self::R32Float | Self::R10G10B10A2Unorm | Self::R10G10B10A2Uint => {
                 4
@@ -236,6 +258,8 @@ impl DdsPixelFormat {
             Self::R32G32B32A32Float => "R32G32B32A32_FLOAT",
             Self::R10G10B10A2Unorm => "R10G10B10A2_UNORM",
             Self::R10G10B10A2Uint => "R10G10B10A2_UINT",
+            Self::R8G8B8G8Unorm => "R8G8_B8G8_UNORM",
+            Self::G8R8G8B8Unorm => "G8R8_G8B8_UNORM",
         }
     }
 
