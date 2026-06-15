@@ -140,6 +140,36 @@ pub enum DdsPixelFormat {
     /// must be even; expand to RGBA8 with
     /// [`crate::decode_g8r8_g8b8_unorm_surface`].
     G8R8G8B8Unorm,
+
+    // --- 16-bit-per-channel integer uncompressed layouts ----------------
+    //
+    // Plain tightly-packed little-endian integer samples, one, two or
+    // four 16-bit channels per pixel, in the named channel order with the
+    // first-named component at the lowest memory address (DXGI puts the
+    // first listed component in the lowest address, matching the float and
+    // UNORM 16-bit families above). Unlike the `_UNORM` / `_SNORM`
+    // siblings there is no `[0, 1]` / `[-1, 1]` normalisation: the stored
+    // integers ARE the decoded values. UINT decodes to `u16`, SINT to
+    // `i16` via [`crate::decode_uint16_surface`] /
+    // [`crate::decode_sint16_surface`].
+    /// 16 bpp, on-disk `[R]` × `u16` unsigned-integer
+    /// (DXGI `R16_UINT`, value 57).
+    R16Uint,
+    /// 16 bpp, on-disk `[R]` × `i16` signed-integer
+    /// (DXGI `R16_SINT`, value 59).
+    R16Sint,
+    /// 32 bpp, on-disk `[R, G]` × `u16` unsigned-integer
+    /// (DXGI `R16G16_UINT`, value 36).
+    R16G16Uint,
+    /// 32 bpp, on-disk `[R, G]` × `i16` signed-integer
+    /// (DXGI `R16G16_SINT`, value 38).
+    R16G16Sint,
+    /// 64 bpp, on-disk `[R, G, B, A]` × `u16` unsigned-integer
+    /// (DXGI `R16G16B16A16_UINT`, value 12).
+    R16G16B16A16Uint,
+    /// 64 bpp, on-disk `[R, G, B, A]` × `i16` signed-integer
+    /// (DXGI `R16G16B16A16_SINT`, value 14).
+    R16G16B16A16Sint,
 }
 
 impl DdsPixelFormat {
@@ -156,13 +186,18 @@ impl DdsPixelFormat {
             // Sub-sampled packed RGB: 32 bits per pixel PAIR = 16 bpp
             // amortised over the two pixels each block encodes.
             Self::R8G8B8G8Unorm | Self::G8R8G8B8Unorm => 16,
-            Self::R16Float => 16,
-            Self::R16G16Float | Self::R32Float | Self::R10G10B10A2Unorm | Self::R10G10B10A2Uint => {
-                32
-            }
+            Self::R16Float | Self::R16Uint | Self::R16Sint => 16,
+            Self::R16G16Float
+            | Self::R32Float
+            | Self::R10G10B10A2Unorm
+            | Self::R10G10B10A2Uint
+            | Self::R16G16Uint
+            | Self::R16G16Sint => 32,
             Self::R16G16B16A16Unorm
             | Self::R16G16B16A16Snorm
             | Self::R16G16B16A16Float
+            | Self::R16G16B16A16Uint
+            | Self::R16G16B16A16Sint
             | Self::R32G32Float => 64,
             Self::R32G32B32A32Float => 128,
             Self::Bc1 | Self::Bc4Unorm | Self::Bc4Snorm => 4,
@@ -189,13 +224,18 @@ impl DdsPixelFormat {
             // i.e. 2 bytes per pixel — exact only for an even width,
             // which the layout requires anyway.
             Self::R8G8B8G8Unorm | Self::G8R8G8B8Unorm => 2,
-            Self::R16Float => 2,
-            Self::R16G16Float | Self::R32Float | Self::R10G10B10A2Unorm | Self::R10G10B10A2Uint => {
-                4
-            }
+            Self::R16Float | Self::R16Uint | Self::R16Sint => 2,
+            Self::R16G16Float
+            | Self::R32Float
+            | Self::R10G10B10A2Unorm
+            | Self::R10G10B10A2Uint
+            | Self::R16G16Uint
+            | Self::R16G16Sint => 4,
             Self::R16G16B16A16Unorm
             | Self::R16G16B16A16Snorm
             | Self::R16G16B16A16Float
+            | Self::R16G16B16A16Uint
+            | Self::R16G16B16A16Sint
             | Self::R32G32Float => 8,
             Self::R32G32B32A32Float => 16,
             _ => return None,
@@ -260,6 +300,12 @@ impl DdsPixelFormat {
             Self::R10G10B10A2Uint => "R10G10B10A2_UINT",
             Self::R8G8B8G8Unorm => "R8G8_B8G8_UNORM",
             Self::G8R8G8B8Unorm => "G8R8_G8B8_UNORM",
+            Self::R16Uint => "R16_UINT",
+            Self::R16Sint => "R16_SINT",
+            Self::R16G16Uint => "R16G16_UINT",
+            Self::R16G16Sint => "R16G16_SINT",
+            Self::R16G16B16A16Uint => "R16G16B16A16_UINT",
+            Self::R16G16B16A16Sint => "R16G16B16A16_SINT",
         }
     }
 

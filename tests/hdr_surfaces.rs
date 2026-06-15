@@ -14,7 +14,8 @@ use oxideav_dds::types::{
 };
 use oxideav_dds::{
     decode_float_surface, decode_r10g10b10a2_uint_surface, decode_r10g10b10a2_unorm_surface,
-    decode_rgba16_snorm_surface, decode_rgba16_unorm_surface, parse_dds, DdsPixelFormat,
+    decode_rgba16_snorm_surface, decode_rgba16_unorm_surface, decode_sint16_surface,
+    decode_uint16_surface, parse_dds, DdsPixelFormat,
 };
 
 const CAPS_TEXTURE: u32 = 0x0000_1000;
@@ -365,4 +366,99 @@ fn truncated_hdr_surface_rejected() {
     let px = vec![0u8; 16];
     let dds = build_dx10_dds(2, 2, 2, &px);
     assert!(parse_dds(&dds).is_err());
+}
+
+#[test]
+fn dx10_r16_uint() {
+    // DXGI_FORMAT_R16_UINT = 57, 2 bytes/pixel. Two pixels 0x0102, 0xfffe.
+    let px = [0x02u8, 0x01, 0xfe, 0xff];
+    let dds = build_dx10_dds(57, 2, 1, &px);
+    let img = parse_dds(&dds).unwrap();
+    assert_eq!(img.pixel_format, DdsPixelFormat::R16Uint);
+    assert!(img.has_dxt10_header);
+    assert_eq!(img.surfaces[0].plane.data.len(), 4);
+    let out =
+        decode_uint16_surface(DdsPixelFormat::R16Uint, 2, 1, &img.surfaces[0].plane.data).unwrap();
+    assert_eq!(out, vec![0x0102, 0xfffe]);
+}
+
+#[test]
+fn dx10_r16g16_uint() {
+    // DXGI_FORMAT_R16G16_UINT = 36, 4 bytes/pixel. One pixel (0x1234,0x5678).
+    let px = [0x34u8, 0x12, 0x78, 0x56];
+    let dds = build_dx10_dds(36, 1, 1, &px);
+    let img = parse_dds(&dds).unwrap();
+    assert_eq!(img.pixel_format, DdsPixelFormat::R16G16Uint);
+    let out = decode_uint16_surface(
+        DdsPixelFormat::R16G16Uint,
+        1,
+        1,
+        &img.surfaces[0].plane.data,
+    )
+    .unwrap();
+    assert_eq!(out, vec![0x1234, 0x5678]);
+}
+
+#[test]
+fn dx10_r16g16b16a16_uint() {
+    // DXGI_FORMAT_R16G16B16A16_UINT = 12, 8 bytes/pixel. One pixel (1,2,3,4).
+    let mut px = Vec::new();
+    for v in [1u16, 2, 3, 4] {
+        px.extend_from_slice(&v.to_le_bytes());
+    }
+    let dds = build_dx10_dds(12, 1, 1, &px);
+    let img = parse_dds(&dds).unwrap();
+    assert_eq!(img.pixel_format, DdsPixelFormat::R16G16B16A16Uint);
+    assert_eq!(img.surfaces[0].plane.data.len(), 8);
+    let out = decode_uint16_surface(
+        DdsPixelFormat::R16G16B16A16Uint,
+        1,
+        1,
+        &img.surfaces[0].plane.data,
+    )
+    .unwrap();
+    assert_eq!(out, vec![1, 2, 3, 4]);
+}
+
+#[test]
+fn dx10_r16_sint_negative() {
+    // DXGI_FORMAT_R16_SINT = 59. One pixel 0xffff -> -1.
+    let px = [0xffu8, 0xff];
+    let dds = build_dx10_dds(59, 1, 1, &px);
+    let img = parse_dds(&dds).unwrap();
+    assert_eq!(img.pixel_format, DdsPixelFormat::R16Sint);
+    let out =
+        decode_sint16_surface(DdsPixelFormat::R16Sint, 1, 1, &img.surfaces[0].plane.data).unwrap();
+    assert_eq!(out, vec![-1]);
+}
+
+#[test]
+fn dx10_r16g16b16a16_sint() {
+    // DXGI_FORMAT_R16G16B16A16_SINT = 14. One pixel (-2, 2, i16::MIN, i16::MAX).
+    let mut px = Vec::new();
+    for v in [-2i16, 2, i16::MIN, i16::MAX] {
+        px.extend_from_slice(&v.to_le_bytes());
+    }
+    let dds = build_dx10_dds(14, 1, 1, &px);
+    let img = parse_dds(&dds).unwrap();
+    assert_eq!(img.pixel_format, DdsPixelFormat::R16G16B16A16Sint);
+    let out = decode_sint16_surface(
+        DdsPixelFormat::R16G16B16A16Sint,
+        1,
+        1,
+        &img.surfaces[0].plane.data,
+    )
+    .unwrap();
+    assert_eq!(out, vec![-2, 2, i16::MIN, i16::MAX]);
+}
+
+#[test]
+fn r16g16b16a16_uint_surface_sizing_2x2() {
+    // 2x2 R16G16B16A16_UINT = 4 pixels × 8 bytes = 32 bytes.
+    let px = vec![0u8; 32];
+    let dds = build_dx10_dds(12, 2, 2, &px);
+    let img = parse_dds(&dds).unwrap();
+    assert_eq!(img.surfaces.len(), 1);
+    assert_eq!(img.surfaces[0].plane.data.len(), 32);
+    assert_eq!(img.surfaces[0].plane.stride, 2 * 8);
 }

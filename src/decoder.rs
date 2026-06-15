@@ -321,6 +321,15 @@ fn pixel_format_from_dxgi(d: DxgiFormat) -> Option<DdsPixelFormat> {
         // 32-bit block per pixel pair: R/B shared, G unique per pixel.
         DxgiFormat::R8G8B8G8Unorm => DdsPixelFormat::R8G8B8G8Unorm,
         DxgiFormat::G8R8G8B8Unorm => DdsPixelFormat::G8R8G8B8Unorm,
+        // 16-bit-per-channel plain-integer layouts (DX10-only). Tightly
+        // packed little-endian samples, named channel order, no
+        // normalisation: UINT → u16, SINT → i16.
+        DxgiFormat::R16Uint => DdsPixelFormat::R16Uint,
+        DxgiFormat::R16Sint => DdsPixelFormat::R16Sint,
+        DxgiFormat::R16G16Uint => DdsPixelFormat::R16G16Uint,
+        DxgiFormat::R16G16Sint => DdsPixelFormat::R16G16Sint,
+        DxgiFormat::R16G16B16A16Uint => DdsPixelFormat::R16G16B16A16Uint,
+        DxgiFormat::R16G16B16A16Sint => DdsPixelFormat::R16G16B16A16Sint,
         // Everything else (other integer, depth/stencil, YUV
         // planar, palette-8) has no [`DdsPixelFormat`] mapping yet.
         _ => return None,

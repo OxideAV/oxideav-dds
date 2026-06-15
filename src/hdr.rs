@@ -287,6 +287,111 @@ fn decode_rgba16_raw(
     Ok(out)
 }
 
+/// Channels carried by a 16-bit plain-integer format.
+fn uint16_channels(pix: DdsPixelFormat) -> Option<u32> {
+    Some(match pix {
+        DdsPixelFormat::R16Uint | DdsPixelFormat::R16Sint => 1,
+        DdsPixelFormat::R16G16Uint | DdsPixelFormat::R16G16Sint => 2,
+        DdsPixelFormat::R16G16B16A16Uint | DdsPixelFormat::R16G16B16A16Sint => 4,
+        _ => return None,
+    })
+}
+
+/// Read every tightly-packed little-endian `u16` sample of a 16-bit
+/// integer surface (1, 2 or 4 channels per pixel) into a flat,
+/// interleaved, row-major buffer. Shared by the UINT and SINT paths;
+/// the SINT wrapper reinterprets the words as `i16`.
+fn decode_uint16_raw(
+    pix: DdsPixelFormat,
+    width: u32,
+    height: u32,
+    data: &[u8],
+) -> Result<Vec<u16>> {
+    let channels = uint16_channels(pix).ok_or_else(|| {
+        DdsError::unsupported(format!(
+            "decode_uint16_surface: {} is not a 16-bit integer format",
+            pix.name()
+        ))
+    })? as usize;
+    let px = (width as usize)
+        .checked_mul(height as usize)
+        .ok_or_else(|| DdsError::invalid("decode_uint16: dimension overflow"))?;
+    let total_samples = px
+        .checked_mul(channels)
+        .ok_or_else(|| DdsError::invalid("decode_uint16: sample-count overflow"))?;
+    let need = total_samples
+        .checked_mul(2)
+        .ok_or_else(|| DdsError::invalid("decode_uint16: byte-count overflow"))?;
+    if data.len() < need {
+        return Err(DdsError::invalid(format!(
+            "decode_uint16: {} needs {need} bytes for {width}x{height}, have {}",
+            pix.name(),
+            data.len()
+        )));
+    }
+    let mut out = Vec::with_capacity(total_samples);
+    let mut off = 0usize;
+    for _ in 0..total_samples {
+        out.push(read_u16_le(data, off));
+        off += 2;
+    }
+    Ok(out)
+}
+
+/// Decode a tightly-packed 16-bit **unsigned-integer** surface
+/// (`R16_UINT`, `R16G16_UINT`, or `R16G16B16A16_UINT`) into a flat,
+/// interleaved `Vec<u16>` of `width × height × channels` stored samples,
+/// row-major, channels in the named order (R, then G, then B, A).
+///
+/// These are plain little-endian integers — there is no `[0, 1]`
+/// normalisation, so the decoded words ARE the values. Returns
+/// [`DdsError::Unsupported`] for a non-`_UINT` format and
+/// [`DdsError::InvalidData`] when `data` is shorter than
+/// `width × height × channels × 2` bytes.
+pub fn decode_uint16_surface(
+    pix: DdsPixelFormat,
+    width: u32,
+    height: u32,
+    data: &[u8],
+) -> Result<Vec<u16>> {
+    match pix {
+        DdsPixelFormat::R16Uint | DdsPixelFormat::R16G16Uint | DdsPixelFormat::R16G16B16A16Uint => {
+            decode_uint16_raw(pix, width, height, data)
+        }
+        _ => Err(DdsError::unsupported(format!(
+            "decode_uint16_surface: {} is not a 16-bit unsigned-integer format",
+            pix.name()
+        ))),
+    }
+}
+
+/// Decode a tightly-packed 16-bit **signed-integer** surface
+/// (`R16_SINT`, `R16G16_SINT`, or `R16G16B16A16_SINT`) into a flat,
+/// interleaved `Vec<i16>` of `width × height × channels` stored samples,
+/// row-major, channels in the named order (R, then G, then B, A).
+///
+/// The stored two's-complement words are returned verbatim (no
+/// normalisation onto `[-1, 1]`). Returns [`DdsError::Unsupported`] for a
+/// non-`_SINT` format and [`DdsError::InvalidData`] when `data` is
+/// shorter than `width × height × channels × 2` bytes.
+pub fn decode_sint16_surface(
+    pix: DdsPixelFormat,
+    width: u32,
+    height: u32,
+    data: &[u8],
+) -> Result<Vec<i16>> {
+    match pix {
+        DdsPixelFormat::R16Sint | DdsPixelFormat::R16G16Sint | DdsPixelFormat::R16G16B16A16Sint => {
+            let raw = decode_uint16_raw(pix, width, height, data)?;
+            Ok(raw.into_iter().map(|u| u as i16).collect())
+        }
+        _ => Err(DdsError::unsupported(format!(
+            "decode_sint16_surface: {} is not a 16-bit signed-integer format",
+            pix.name()
+        ))),
+    }
+}
+
 /// Decode a tightly-packed `R11G11B10_FLOAT` surface into a flat,
 /// interleaved `Vec<f32>` of `width × height × 3` samples (R, G, B per
 /// pixel, row-major).
@@ -972,6 +1077,79 @@ mod tests {
         // 4x1 needs two 4-byte blocks (8 bytes); give only 5.
         let data = [0u8; 5];
         let err = decode_r8g8_b8g8_unorm_surface(4, 1, &data).unwrap_err();
+        assert!(matches!(err, DdsError::InvalidData(_)));
+    }
+
+    // --- 16-bit integer surfaces ----------------------------------------
+
+    #[test]
+    fn r16_uint_single_channel_row_major() {
+        // 2x1 R16_UINT: little-endian words 0x0102, 0xfffe.
+        let data = [0x02u8, 0x01, 0xfe, 0xff];
+        let out = decode_uint16_surface(DdsPixelFormat::R16Uint, 2, 1, &data).unwrap();
+        assert_eq!(out, vec![0x0102, 0xfffe]);
+    }
+
+    #[test]
+    fn r16g16_uint_two_channels() {
+        // One pixel, R=0x1234, G=0x5678.
+        let data = [0x34u8, 0x12, 0x78, 0x56];
+        let out = decode_uint16_surface(DdsPixelFormat::R16G16Uint, 1, 1, &data).unwrap();
+        assert_eq!(out, vec![0x1234, 0x5678]);
+    }
+
+    #[test]
+    fn r16g16b16a16_uint_four_channels_row_major() {
+        // Two pixels: (1,2,3,4) then (5,6,7,8) as raw u16.
+        let mut data = Vec::new();
+        for v in [1u16, 2, 3, 4, 5, 6, 7, 8] {
+            data.extend_from_slice(&v.to_le_bytes());
+        }
+        let out = decode_uint16_surface(DdsPixelFormat::R16G16B16A16Uint, 2, 1, &data).unwrap();
+        assert_eq!(out, vec![1, 2, 3, 4, 5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn r16_sint_sign_interpretation() {
+        // 0xffff -> -1, 0x8000 -> i16::MIN, 0x7fff -> i16::MAX.
+        let data = [0xffu8, 0xff, 0x00, 0x80, 0xff, 0x7f];
+        let out = decode_sint16_surface(DdsPixelFormat::R16Sint, 3, 1, &data).unwrap();
+        assert_eq!(out, vec![-1, i16::MIN, i16::MAX]);
+    }
+
+    #[test]
+    fn r16g16b16a16_sint_four_channels() {
+        // One pixel: R=-2, G=2, B=-32768, A=32767.
+        let mut data = Vec::new();
+        for v in [-2i16, 2, i16::MIN, i16::MAX] {
+            data.extend_from_slice(&v.to_le_bytes());
+        }
+        let out = decode_sint16_surface(DdsPixelFormat::R16G16B16A16Sint, 1, 1, &data).unwrap();
+        assert_eq!(out, vec![-2, 2, i16::MIN, i16::MAX]);
+    }
+
+    #[test]
+    fn uint16_rejects_non_uint_format() {
+        let data = [0u8; 8];
+        let err = decode_uint16_surface(DdsPixelFormat::R16Sint, 1, 1, &data).unwrap_err();
+        assert!(matches!(err, DdsError::Unsupported(_)));
+        // A float format is likewise rejected.
+        let err = decode_uint16_surface(DdsPixelFormat::R16Float, 1, 1, &data).unwrap_err();
+        assert!(matches!(err, DdsError::Unsupported(_)));
+    }
+
+    #[test]
+    fn sint16_rejects_non_sint_format() {
+        let data = [0u8; 8];
+        let err = decode_sint16_surface(DdsPixelFormat::R16Uint, 1, 1, &data).unwrap_err();
+        assert!(matches!(err, DdsError::Unsupported(_)));
+    }
+
+    #[test]
+    fn uint16_truncated_input_is_invalid() {
+        // 2x2 R16G16B16A16_UINT needs 4 px * 4 ch * 2 = 32 bytes; give 31.
+        let data = [0u8; 31];
+        let err = decode_uint16_surface(DdsPixelFormat::R16G16B16A16Uint, 2, 2, &data).unwrap_err();
         assert!(matches!(err, DdsError::InvalidData(_)));
     }
 }

@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **16-bit plain-integer surface decoders (round 319).** New
+  `decode_uint16_surface` / `decode_sint16_surface` decode the
+  tightly-packed 16-bit integer layouts `R16_UINT` / `R16G16_UINT` /
+  `R16G16B16A16_UINT` (`DXGI_FORMAT` values 57 / 36 / 12) and their
+  signed siblings `R16_SINT` / `R16G16_SINT` / `R16G16B16A16_SINT`
+  (values 59 / 38 / 14) into flat, interleaved, row-major `Vec<u16>` /
+  `Vec<i16>` — one, two or four little-endian channels per pixel in the
+  named order, returned verbatim with no `[0, 1]` / `[-1, 1]`
+  normalisation. Six new `DdsPixelFormat` variants carry the formats
+  (sized 2 / 4 / 8 bytes per pixel) and `parse_dds` resolves them from
+  the `DDS_HEADER_DXT10` `dxgi_format`.
+
 - **Sub-sampled packed RGB decoders `R8G8_B8G8_UNORM` /
   `G8R8_G8B8_UNORM` (round 314).** New `decode_r8g8_b8g8_unorm_surface`
   and `decode_g8r8_g8b8_unorm_surface` expand the two horizontally

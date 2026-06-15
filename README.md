@@ -32,7 +32,13 @@ horizontally sub-sampled packed RGB layouts `R8G8_B8G8_UNORM`
 (`decode_r8g8_b8g8_unorm_surface`) and `G8R8_G8B8_UNORM`
 (`decode_g8r8_g8b8_unorm_surface`) — one 32-bit block per adjacent
 pixel pair, red/blue shared and green sampled per pixel — expand to
-interleaved RGBA8 (alpha `0xff`); both require an even width.
+interleaved RGBA8 (alpha `0xff`); both require an even width. The 16-bit
+plain-integer layouts `R16_UINT` / `R16G16_UINT` / `R16G16B16A16_UINT`
+and their signed siblings `R16_SINT` / `R16G16_SINT` /
+`R16G16B16A16_SINT` — one, two or four tightly-packed little-endian
+16-bit channels per pixel, no normalisation — yield the stored words as
+interleaved `u16` / `i16` via `decode_uint16_surface` /
+`decode_sint16_surface`.
 
 **Block-compressed decode.**
 
@@ -61,9 +67,11 @@ interleaved RGBA8 (alpha `0xff`); both require an even width.
 `encode_dds_volume` round-trips an uncompressed volume.
 
 **Format table.** Every `DXGI_FORMAT` value Microsoft assigns (1..=132)
-is enumerated by name in `DxgiFormat` for lossless round-trip; integer,
-depth/stencil, YUV, and palette formats are recognised but return
-`DdsError::Unsupported` from the layout resolver.
+is enumerated by name in `DxgiFormat` for lossless round-trip; the 16-bit
+integer formats (`R16_UINT/SINT`, `R16G16_UINT/SINT`,
+`R16G16B16A16_UINT/SINT`) are sized and decoded, while the remaining
+integer, depth/stencil, YUV, and palette formats are recognised but
+return `DdsError::Unsupported` from the layout resolver.
 
 ## Robustness
 

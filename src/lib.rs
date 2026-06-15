@@ -135,7 +135,13 @@
 //!   [`decode_r8g8_b8g8_unorm_surface`] /
 //!   [`decode_g8r8_g8b8_unorm_surface`]; they differ only in the byte
 //!   order within each block (`[R, G0, B, G1]` vs `[G0, R, G1, B]`) and
-//!   both require an even width.
+//!   both require an even width. The 16-bit plain-integer layouts
+//!   `R16_UINT` / `R16G16_UINT` / `R16G16B16A16_UINT` (`DXGI_FORMAT`
+//!   values 57 / 36 / 12) and their signed siblings `R16_SINT` /
+//!   `R16G16_SINT` / `R16G16B16A16_SINT` (values 59 / 38 / 14) — one,
+//!   two or four tightly-packed little-endian 16-bit channels per pixel,
+//!   no normalisation — yield the stored words as interleaved `u16` /
+//!   `i16` via [`decode_uint16_surface`] / [`decode_sint16_surface`].
 //! * **`.dds` still-image container demuxer + muxer** (round-3 lift
 //!   over the round-2 extension-only registration). The framework
 //!   `ContainerRegistry` now carries probe + demuxer + muxer entries
@@ -222,7 +228,7 @@ pub use hdr::{
     decode_float_surface, decode_g8r8_g8b8_unorm_surface, decode_r10g10b10a2_uint_surface,
     decode_r10g10b10a2_unorm_surface, decode_r11g11b10_float_surface,
     decode_r8g8_b8g8_unorm_surface, decode_r9g9b9e5_sharedexp_surface, decode_rgba16_snorm_surface,
-    decode_rgba16_unorm_surface,
+    decode_rgba16_unorm_surface, decode_sint16_surface, decode_uint16_surface,
 };
 pub use image::{CubemapFace, DdsImage, DdsPixelFormat, DdsPlane, DdsSurface};
 pub use types::{
