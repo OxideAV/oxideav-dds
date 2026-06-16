@@ -141,7 +141,18 @@
 //!   `R16G16_SINT` / `R16G16B16A16_SINT` (values 59 / 38 / 14) — one,
 //!   two or four tightly-packed little-endian 16-bit channels per pixel,
 //!   no normalisation — yield the stored words as interleaved `u16` /
-//!   `i16` via [`decode_uint16_surface`] / [`decode_sint16_surface`].
+//!   `i16` via [`decode_uint16_surface`] / [`decode_sint16_surface`]. The
+//!   8-bit plain-integer layouts `R8_UINT` / `R8G8_UINT` /
+//!   `R8G8B8A8_UINT` (`DXGI_FORMAT` values 62 / 50 / 30) and their signed
+//!   siblings `R8_SINT` / `R8G8_SINT` / `R8G8B8A8_SINT` (values
+//!   64 / 52 / 32) yield interleaved `u8` / `i8` via
+//!   [`decode_uint8_surface`] / [`decode_sint8_surface`], and the 32-bit
+//!   plain-integer layouts `R32_UINT` / `R32G32_UINT` / `R32G32B32_UINT`
+//!   (96-bit, three-channel) / `R32G32B32A32_UINT` (`DXGI_FORMAT` values
+//!   42 / 17 / 7 / 3) and their `_SINT` siblings (43 / 18 / 8 / 4) yield
+//!   interleaved `u32` / `i32` via [`decode_uint32_surface`] /
+//!   [`decode_sint32_surface`] — again no normalisation, the stored words
+//!   are the values.
 //! * **`.dds` still-image container demuxer + muxer** (round-3 lift
 //!   over the round-2 extension-only registration). The framework
 //!   `ContainerRegistry` now carries probe + demuxer + muxer entries
@@ -228,7 +239,8 @@ pub use hdr::{
     decode_float_surface, decode_g8r8_g8b8_unorm_surface, decode_r10g10b10a2_uint_surface,
     decode_r10g10b10a2_unorm_surface, decode_r11g11b10_float_surface,
     decode_r8g8_b8g8_unorm_surface, decode_r9g9b9e5_sharedexp_surface, decode_rgba16_snorm_surface,
-    decode_rgba16_unorm_surface, decode_sint16_surface, decode_uint16_surface,
+    decode_rgba16_unorm_surface, decode_sint16_surface, decode_sint32_surface,
+    decode_sint8_surface, decode_uint16_surface, decode_uint32_surface, decode_uint8_surface,
 };
 pub use image::{CubemapFace, DdsImage, DdsPixelFormat, DdsPlane, DdsSurface};
 pub use types::{

@@ -243,14 +243,15 @@ fn unsupported_legacy_pixel_format_errors() {
 #[test]
 fn unsupported_dxgi_format_errors() {
     // DX10 cubemap with a DXGI format the resolver intentionally refuses
-    // to lay out (R32G32B32A32_Uint — a 32-bit-per-channel *integer*
-    // format that has no DdsPixelFormat mapping; the floating-point and
-    // 16-bit-per-channel formats are now supported). The parser yields
-    // Unsupported.
+    // to lay out (D32_FLOAT_S8X24_UINT — a depth/stencil format that has
+    // no DdsPixelFormat mapping; the floating-point, 16-bit-per-channel,
+    // and plain 8/16/32-bit integer colour formats are now supported, but
+    // depth/stencil, YUV-planar, and palette layouts remain unsupported).
+    // The parser yields Unsupported.
     let mut bytes = build_dx10_cubemap_bc1(4, 1, 1);
     let dxt10_off = 4 + DDS_HEADER_SIZE;
     bytes[dxt10_off..dxt10_off + 4]
-        .copy_from_slice(&DxgiFormat::R32G32B32A32Uint.to_u32().to_le_bytes());
+        .copy_from_slice(&DxgiFormat::D32FloatS8X24Uint.to_u32().to_le_bytes());
     let err = parse_dds(&bytes).expect_err("unsupported DXGI format must error");
     assert!(format!("{err}").contains("unsupported"));
 }

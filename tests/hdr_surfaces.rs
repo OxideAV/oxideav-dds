@@ -15,7 +15,8 @@ use oxideav_dds::types::{
 use oxideav_dds::{
     decode_float_surface, decode_r10g10b10a2_uint_surface, decode_r10g10b10a2_unorm_surface,
     decode_rgba16_snorm_surface, decode_rgba16_unorm_surface, decode_sint16_surface,
-    decode_uint16_surface, parse_dds, DdsPixelFormat,
+    decode_sint32_surface, decode_sint8_surface, decode_uint16_surface, decode_uint32_surface,
+    decode_uint8_surface, parse_dds, DdsPixelFormat,
 };
 
 const CAPS_TEXTURE: u32 = 0x0000_1000;
@@ -459,6 +460,137 @@ fn r16g16b16a16_uint_surface_sizing_2x2() {
     let dds = build_dx10_dds(12, 2, 2, &px);
     let img = parse_dds(&dds).unwrap();
     assert_eq!(img.surfaces.len(), 1);
+    assert_eq!(img.surfaces[0].plane.data.len(), 32);
+    assert_eq!(img.surfaces[0].plane.stride, 2 * 8);
+}
+
+// --- 8-bit plain-integer layouts (DX10 end-to-end) ----------------------
+
+#[test]
+fn dx10_r8_uint() {
+    // DXGI_FORMAT_R8_UINT = 62, 1 byte/pixel. Three pixels 1, 200, 255.
+    let px = [1u8, 200, 255];
+    let dds = build_dx10_dds(62, 3, 1, &px);
+    let img = parse_dds(&dds).unwrap();
+    assert_eq!(img.pixel_format, DdsPixelFormat::R8Uint);
+    assert!(img.has_dxt10_header);
+    assert_eq!(img.surfaces[0].plane.data.len(), 3);
+    let out =
+        decode_uint8_surface(DdsPixelFormat::R8Uint, 3, 1, &img.surfaces[0].plane.data).unwrap();
+    assert_eq!(out, vec![1, 200, 255]);
+}
+
+#[test]
+fn dx10_r8g8b8a8_uint() {
+    // DXGI_FORMAT_R8G8B8A8_UINT = 30, 4 bytes/pixel. One pixel (1,2,3,4).
+    let px = [1u8, 2, 3, 4];
+    let dds = build_dx10_dds(30, 1, 1, &px);
+    let img = parse_dds(&dds).unwrap();
+    assert_eq!(img.pixel_format, DdsPixelFormat::R8G8B8A8Uint);
+    let out = decode_uint8_surface(
+        DdsPixelFormat::R8G8B8A8Uint,
+        1,
+        1,
+        &img.surfaces[0].plane.data,
+    )
+    .unwrap();
+    assert_eq!(out, vec![1, 2, 3, 4]);
+}
+
+#[test]
+fn dx10_r8g8b8a8_sint() {
+    // DXGI_FORMAT_R8G8B8A8_SINT = 32. One pixel (-2, 2, i8::MIN, i8::MAX).
+    let px = [(-2i8) as u8, 2, (i8::MIN) as u8, (i8::MAX) as u8];
+    let dds = build_dx10_dds(32, 1, 1, &px);
+    let img = parse_dds(&dds).unwrap();
+    assert_eq!(img.pixel_format, DdsPixelFormat::R8G8B8A8Sint);
+    let out = decode_sint8_surface(
+        DdsPixelFormat::R8G8B8A8Sint,
+        1,
+        1,
+        &img.surfaces[0].plane.data,
+    )
+    .unwrap();
+    assert_eq!(out, vec![-2, 2, i8::MIN, i8::MAX]);
+}
+
+#[test]
+fn dx10_r8g8_uint_surface_sizing_2x2() {
+    // 2x2 R8G8_UINT (value 50) = 4 pixels × 2 bytes = 8 bytes.
+    let px = vec![0u8; 8];
+    let dds = build_dx10_dds(50, 2, 2, &px);
+    let img = parse_dds(&dds).unwrap();
+    assert_eq!(img.pixel_format, DdsPixelFormat::R8G8Uint);
+    assert_eq!(img.surfaces[0].plane.data.len(), 8);
+    assert_eq!(img.surfaces[0].plane.stride, 2 * 2);
+}
+
+// --- 32-bit plain-integer layouts (DX10 end-to-end) ---------------------
+
+#[test]
+fn dx10_r32_uint() {
+    // DXGI_FORMAT_R32_UINT = 42, 4 bytes/pixel. Two pixels.
+    let mut px = Vec::new();
+    for v in [0x0102_0304u32, 0xffff_fffe] {
+        px.extend_from_slice(&v.to_le_bytes());
+    }
+    let dds = build_dx10_dds(42, 2, 1, &px);
+    let img = parse_dds(&dds).unwrap();
+    assert_eq!(img.pixel_format, DdsPixelFormat::R32Uint);
+    let out =
+        decode_uint32_surface(DdsPixelFormat::R32Uint, 2, 1, &img.surfaces[0].plane.data).unwrap();
+    assert_eq!(out, vec![0x0102_0304, 0xffff_fffe]);
+}
+
+#[test]
+fn dx10_r32g32b32_uint() {
+    // DXGI_FORMAT_R32G32B32_UINT = 7, 12 bytes/pixel (96-bit). One pixel.
+    let mut px = Vec::new();
+    for v in [10u32, 20, 30] {
+        px.extend_from_slice(&v.to_le_bytes());
+    }
+    let dds = build_dx10_dds(7, 1, 1, &px);
+    let img = parse_dds(&dds).unwrap();
+    assert_eq!(img.pixel_format, DdsPixelFormat::R32G32B32Uint);
+    assert_eq!(img.surfaces[0].plane.data.len(), 12);
+    let out = decode_uint32_surface(
+        DdsPixelFormat::R32G32B32Uint,
+        1,
+        1,
+        &img.surfaces[0].plane.data,
+    )
+    .unwrap();
+    assert_eq!(out, vec![10, 20, 30]);
+}
+
+#[test]
+fn dx10_r32g32b32a32_sint() {
+    // DXGI_FORMAT_R32G32B32A32_SINT = 4, 16 bytes/pixel. One pixel.
+    let mut px = Vec::new();
+    for v in [-2i32, 2, i32::MIN, i32::MAX] {
+        px.extend_from_slice(&v.to_le_bytes());
+    }
+    let dds = build_dx10_dds(4, 1, 1, &px);
+    let img = parse_dds(&dds).unwrap();
+    assert_eq!(img.pixel_format, DdsPixelFormat::R32G32B32A32Sint);
+    assert_eq!(img.surfaces[0].plane.data.len(), 16);
+    let out = decode_sint32_surface(
+        DdsPixelFormat::R32G32B32A32Sint,
+        1,
+        1,
+        &img.surfaces[0].plane.data,
+    )
+    .unwrap();
+    assert_eq!(out, vec![-2, 2, i32::MIN, i32::MAX]);
+}
+
+#[test]
+fn dx10_r32g32_uint_surface_sizing_2x2() {
+    // 2x2 R32G32_UINT (value 17) = 4 pixels × 8 bytes = 32 bytes.
+    let px = vec![0u8; 32];
+    let dds = build_dx10_dds(17, 2, 2, &px);
+    let img = parse_dds(&dds).unwrap();
+    assert_eq!(img.pixel_format, DdsPixelFormat::R32G32Uint);
     assert_eq!(img.surfaces[0].plane.data.len(), 32);
     assert_eq!(img.surfaces[0].plane.stride, 2 * 8);
 }

@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **8-bit and 32-bit plain-integer surface decoders (round 326).** New
+  `decode_uint8_surface` / `decode_sint8_surface` decode the
+  tightly-packed 8-bit integer layouts `R8_UINT` / `R8G8_UINT` /
+  `R8G8B8A8_UINT` (`DXGI_FORMAT` values 62 / 50 / 30) and their signed
+  siblings `R8_SINT` / `R8G8_SINT` / `R8G8B8A8_SINT` (values 64 / 52 / 32)
+  into flat interleaved `Vec<u8>` / `Vec<i8>`; new `decode_uint32_surface`
+  / `decode_sint32_surface` decode the 32-bit integer layouts `R32_UINT`
+  / `R32G32_UINT` / `R32G32B32_UINT` / `R32G32B32A32_UINT` (`DXGI_FORMAT`
+  values 42 / 17 / 7 / 3) and their `_SINT` siblings (43 / 18 / 8 / 4)
+  into flat interleaved `Vec<u32>` / `Vec<i32>`. All channels are
+  little-endian in the named order, returned verbatim with no `[0, 1]` /
+  `[-1, 1]` normalisation. Fourteen new `DdsPixelFormat` variants carry
+  the formats (sized 1 / 2 / 4 / 8 / 12 / 16 bytes per pixel, including
+  the 96-bit three-channel `R32G32B32` family) and `parse_dds` resolves
+  them from the `DDS_HEADER_DXT10` `dxgi_format`. The
+  `unsupported_dxgi_format_errors` robustness test now points at the
+  depth/stencil `D32_FLOAT_S8X24_UINT` layout (still unsupported by
+  design) in place of the now-supported `R32G32B32A32_UINT`.
+
 - **16-bit plain-integer surface decoders (round 319).** New
   `decode_uint16_surface` / `decode_sint16_surface` decode the
   tightly-packed 16-bit integer layouts `R16_UINT` / `R16G16_UINT` /

@@ -170,6 +170,70 @@ pub enum DdsPixelFormat {
     /// 64 bpp, on-disk `[R, G, B, A]` × `i16` signed-integer
     /// (DXGI `R16G16B16A16_SINT`, value 14).
     R16G16B16A16Sint,
+
+    // --- 8-bit-per-channel integer uncompressed layouts -----------------
+    //
+    // Plain tightly-packed `u8` / `i8` samples, one, two or four 8-bit
+    // channels per pixel, in the named channel order with the first-named
+    // component at the lowest memory address. As with the 16-bit and
+    // 32-bit integer families there is no `[0, 1]` / `[-1, 1]`
+    // normalisation: the stored bytes ARE the decoded values. UINT decodes
+    // to `u8`, SINT to `i8` via [`crate::decode_uint8_surface`] /
+    // [`crate::decode_sint8_surface`].
+    /// 8 bpp, on-disk `[R]` × `u8` unsigned-integer
+    /// (DXGI `R8_UINT`, value 62).
+    R8Uint,
+    /// 8 bpp, on-disk `[R]` × `i8` signed-integer
+    /// (DXGI `R8_SINT`, value 64).
+    R8Sint,
+    /// 16 bpp, on-disk `[R, G]` × `u8` unsigned-integer
+    /// (DXGI `R8G8_UINT`, value 50).
+    R8G8Uint,
+    /// 16 bpp, on-disk `[R, G]` × `i8` signed-integer
+    /// (DXGI `R8G8_SINT`, value 52).
+    R8G8Sint,
+    /// 32 bpp, on-disk `[R, G, B, A]` × `u8` unsigned-integer
+    /// (DXGI `R8G8B8A8_UINT`, value 30).
+    R8G8B8A8Uint,
+    /// 32 bpp, on-disk `[R, G, B, A]` × `i8` signed-integer
+    /// (DXGI `R8G8B8A8_SINT`, value 32).
+    R8G8B8A8Sint,
+
+    // --- 32-bit-per-channel integer uncompressed layouts ----------------
+    //
+    // Plain tightly-packed little-endian `u32` / `i32` samples, one, two,
+    // three or four 32-bit channels per pixel, in the named channel order
+    // with the first-named component at the lowest memory address. No
+    // normalisation (the `_UINT` / `_SINT` families are plain integers):
+    // the stored words ARE the decoded values. UINT decodes to `u32`, SINT
+    // to `i32` via [`crate::decode_uint32_surface`] /
+    // [`crate::decode_sint32_surface`]. The three-channel `R32G32B32`
+    // layouts have no 8-bit or 16-bit analogue (DXGI carries a 96-bit
+    // three-component family only at 32-bit channel width).
+    /// 32 bpp, on-disk `[R]` × `u32` unsigned-integer
+    /// (DXGI `R32_UINT`, value 42).
+    R32Uint,
+    /// 32 bpp, on-disk `[R]` × `i32` signed-integer
+    /// (DXGI `R32_SINT`, value 43).
+    R32Sint,
+    /// 64 bpp, on-disk `[R, G]` × `u32` unsigned-integer
+    /// (DXGI `R32G32_UINT`, value 17).
+    R32G32Uint,
+    /// 64 bpp, on-disk `[R, G]` × `i32` signed-integer
+    /// (DXGI `R32G32_SINT`, value 18).
+    R32G32Sint,
+    /// 96 bpp, on-disk `[R, G, B]` × `u32` unsigned-integer
+    /// (DXGI `R32G32B32_UINT`, value 7).
+    R32G32B32Uint,
+    /// 96 bpp, on-disk `[R, G, B]` × `i32` signed-integer
+    /// (DXGI `R32G32B32_SINT`, value 8).
+    R32G32B32Sint,
+    /// 128 bpp, on-disk `[R, G, B, A]` × `u32` unsigned-integer
+    /// (DXGI `R32G32B32A32_UINT`, value 3).
+    R32G32B32A32Uint,
+    /// 128 bpp, on-disk `[R, G, B, A]` × `i32` signed-integer
+    /// (DXGI `R32G32B32A32_SINT`, value 4).
+    R32G32B32A32Sint,
 }
 
 impl DdsPixelFormat {
@@ -182,24 +246,31 @@ impl DdsPixelFormat {
             Self::A8R8G8B8 | Self::X8R8G8B8 | Self::A8B8G8R8 => 32,
             Self::R8G8B8 => 24,
             Self::R5G6B5 | Self::A1R5G5B5 | Self::A4R4G4B4 | Self::A8L8 => 16,
-            Self::L8 | Self::A8 => 8,
+            Self::L8 | Self::A8 | Self::R8Uint | Self::R8Sint => 8,
             // Sub-sampled packed RGB: 32 bits per pixel PAIR = 16 bpp
             // amortised over the two pixels each block encodes.
             Self::R8G8B8G8Unorm | Self::G8R8G8B8Unorm => 16,
-            Self::R16Float | Self::R16Uint | Self::R16Sint => 16,
+            Self::R16Float | Self::R16Uint | Self::R16Sint | Self::R8G8Uint | Self::R8G8Sint => 16,
             Self::R16G16Float
             | Self::R32Float
             | Self::R10G10B10A2Unorm
             | Self::R10G10B10A2Uint
             | Self::R16G16Uint
-            | Self::R16G16Sint => 32,
+            | Self::R16G16Sint
+            | Self::R8G8B8A8Uint
+            | Self::R8G8B8A8Sint
+            | Self::R32Uint
+            | Self::R32Sint => 32,
             Self::R16G16B16A16Unorm
             | Self::R16G16B16A16Snorm
             | Self::R16G16B16A16Float
             | Self::R16G16B16A16Uint
             | Self::R16G16B16A16Sint
-            | Self::R32G32Float => 64,
-            Self::R32G32B32A32Float => 128,
+            | Self::R32G32Float
+            | Self::R32G32Uint
+            | Self::R32G32Sint => 64,
+            Self::R32G32B32Uint | Self::R32G32B32Sint => 96,
+            Self::R32G32B32A32Float | Self::R32G32B32A32Uint | Self::R32G32B32A32Sint => 128,
             Self::Bc1 | Self::Bc4Unorm | Self::Bc4Snorm => 4,
             Self::Bc2
             | Self::Bc3
@@ -219,25 +290,32 @@ impl DdsPixelFormat {
             Self::A8R8G8B8 | Self::X8R8G8B8 | Self::A8B8G8R8 => 4,
             Self::R8G8B8 => 3,
             Self::R5G6B5 | Self::A1R5G5B5 | Self::A4R4G4B4 | Self::A8L8 => 2,
-            Self::L8 | Self::A8 => 1,
+            Self::L8 | Self::A8 | Self::R8Uint | Self::R8Sint => 1,
             // Sub-sampled packed RGB stores 4 bytes per 2-pixel block,
             // i.e. 2 bytes per pixel — exact only for an even width,
             // which the layout requires anyway.
             Self::R8G8B8G8Unorm | Self::G8R8G8B8Unorm => 2,
-            Self::R16Float | Self::R16Uint | Self::R16Sint => 2,
+            Self::R16Float | Self::R16Uint | Self::R16Sint | Self::R8G8Uint | Self::R8G8Sint => 2,
             Self::R16G16Float
             | Self::R32Float
             | Self::R10G10B10A2Unorm
             | Self::R10G10B10A2Uint
             | Self::R16G16Uint
-            | Self::R16G16Sint => 4,
+            | Self::R16G16Sint
+            | Self::R8G8B8A8Uint
+            | Self::R8G8B8A8Sint
+            | Self::R32Uint
+            | Self::R32Sint => 4,
             Self::R16G16B16A16Unorm
             | Self::R16G16B16A16Snorm
             | Self::R16G16B16A16Float
             | Self::R16G16B16A16Uint
             | Self::R16G16B16A16Sint
-            | Self::R32G32Float => 8,
-            Self::R32G32B32A32Float => 16,
+            | Self::R32G32Float
+            | Self::R32G32Uint
+            | Self::R32G32Sint => 8,
+            Self::R32G32B32Uint | Self::R32G32B32Sint => 12,
+            Self::R32G32B32A32Float | Self::R32G32B32A32Uint | Self::R32G32B32A32Sint => 16,
             _ => return None,
         })
     }
@@ -306,6 +384,20 @@ impl DdsPixelFormat {
             Self::R16G16Sint => "R16G16_SINT",
             Self::R16G16B16A16Uint => "R16G16B16A16_UINT",
             Self::R16G16B16A16Sint => "R16G16B16A16_SINT",
+            Self::R8Uint => "R8_UINT",
+            Self::R8Sint => "R8_SINT",
+            Self::R8G8Uint => "R8G8_UINT",
+            Self::R8G8Sint => "R8G8_SINT",
+            Self::R8G8B8A8Uint => "R8G8B8A8_UINT",
+            Self::R8G8B8A8Sint => "R8G8B8A8_SINT",
+            Self::R32Uint => "R32_UINT",
+            Self::R32Sint => "R32_SINT",
+            Self::R32G32Uint => "R32G32_UINT",
+            Self::R32G32Sint => "R32G32_SINT",
+            Self::R32G32B32Uint => "R32G32B32_UINT",
+            Self::R32G32B32Sint => "R32G32B32_SINT",
+            Self::R32G32B32A32Uint => "R32G32B32A32_UINT",
+            Self::R32G32B32A32Sint => "R32G32B32A32_SINT",
         }
     }
 

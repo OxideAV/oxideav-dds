@@ -330,7 +330,28 @@ fn pixel_format_from_dxgi(d: DxgiFormat) -> Option<DdsPixelFormat> {
         DxgiFormat::R16G16Sint => DdsPixelFormat::R16G16Sint,
         DxgiFormat::R16G16B16A16Uint => DdsPixelFormat::R16G16B16A16Uint,
         DxgiFormat::R16G16B16A16Sint => DdsPixelFormat::R16G16B16A16Sint,
-        // Everything else (other integer, depth/stencil, YUV
+        // 8-bit-per-channel plain-integer layouts (DX10-only). Tightly
+        // packed `u8` / `i8` samples, named channel order, no
+        // normalisation: UINT → u8, SINT → i8.
+        DxgiFormat::R8Uint => DdsPixelFormat::R8Uint,
+        DxgiFormat::R8Sint => DdsPixelFormat::R8Sint,
+        DxgiFormat::R8G8Uint => DdsPixelFormat::R8G8Uint,
+        DxgiFormat::R8G8Sint => DdsPixelFormat::R8G8Sint,
+        DxgiFormat::R8G8B8A8Uint => DdsPixelFormat::R8G8B8A8Uint,
+        DxgiFormat::R8G8B8A8Sint => DdsPixelFormat::R8G8B8A8Sint,
+        // 32-bit-per-channel plain-integer layouts (DX10-only). Tightly
+        // packed little-endian `u32` / `i32` samples, named channel order,
+        // no normalisation: UINT → u32, SINT → i32. The three-channel
+        // `R32G32B32` family is 96-bit (12 bytes per pixel).
+        DxgiFormat::R32Uint => DdsPixelFormat::R32Uint,
+        DxgiFormat::R32Sint => DdsPixelFormat::R32Sint,
+        DxgiFormat::R32G32Uint => DdsPixelFormat::R32G32Uint,
+        DxgiFormat::R32G32Sint => DdsPixelFormat::R32G32Sint,
+        DxgiFormat::R32G32B32Uint => DdsPixelFormat::R32G32B32Uint,
+        DxgiFormat::R32G32B32Sint => DdsPixelFormat::R32G32B32Sint,
+        DxgiFormat::R32G32B32A32Uint => DdsPixelFormat::R32G32B32A32Uint,
+        DxgiFormat::R32G32B32A32Sint => DdsPixelFormat::R32G32B32A32Sint,
+        // Everything else (32-bit float-typeless, depth/stencil, YUV
         // planar, palette-8) has no [`DdsPixelFormat`] mapping yet.
         _ => return None,
     })
