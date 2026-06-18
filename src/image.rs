@@ -36,21 +36,42 @@ pub enum DdsPixelFormat {
     /// 32 bpp, on-disk `[R, G, B, A]` per pixel
     /// (DXGI `R8G8B8A8_UNORM`).
     A8B8G8R8,
+    /// 32 bpp, on-disk `[R, G, B, X]` per pixel — alpha byte unused
+    /// (`D3DFMT_X8B8G8R8`). The RGB sibling of [`Self::A8B8G8R8`]: red at
+    /// the lowest address (mask `0x000000ff`), no alpha channel.
+    X8B8G8R8,
     /// 16 bpp, packed `RRRRR GGGGGG BBBBB` little-endian
     /// (`D3DFMT_R5G6B5` / DXGI `B5G6R5_UNORM`).
     R5G6B5,
     /// 16 bpp, packed `A RRRRR GGGGG BBBBB` little-endian
     /// (`D3DFMT_A1R5G5B5` / DXGI `B5G5R5A1_UNORM`).
     A1R5G5B5,
+    /// 16 bpp, packed `X RRRRR GGGGG BBBBB` little-endian — top bit unused
+    /// (`D3DFMT_X1R5G5B5`). The RGB sibling of [`Self::A1R5G5B5`]: same
+    /// 5:5:5 colour masks (R `0x7c00`, G `0x03e0`, B `0x001f`), no alpha.
+    X1R5G5B5,
     /// 16 bpp, packed `AAAA RRRR GGGG BBBB` little-endian
     /// (`D3DFMT_A4R4G4B4` / DXGI `B4G4R4A4_UNORM`).
     A4R4G4B4,
+    /// 16 bpp, packed `XXXX RRRR GGGG BBBB` little-endian — top nibble
+    /// unused (`D3DFMT_X4R4G4B4`). The RGB sibling of [`Self::A4R4G4B4`]:
+    /// same 4:4:4 colour masks (R `0x0f00`, G `0x00f0`, B `0x000f`), no
+    /// alpha.
+    X4R4G4B4,
     /// 24 bpp, on-disk `[B, G, R]` per pixel
     /// (`D3DFMT_R8G8B8`).
     R8G8B8,
     /// 16 bpp, on-disk `[L, A]` per pixel
     /// (`D3DFMT_A8L8`).
     A8L8,
+    /// 16 bpp single-channel luminance, one little-endian `u16` per pixel
+    /// (`D3DFMT_L16`). Luminance mask `0xffff`, no alpha; the 16-bit
+    /// sibling of [`Self::L8`].
+    L16,
+    /// 8 bpp packed 4:4 luminance + alpha, one byte per pixel
+    /// (`D3DFMT_A4L4`). Luminance in the low nibble (mask `0x0f`), alpha
+    /// in the high nibble (mask `0xf0`).
+    A4L4,
     /// 8 bpp single-channel luminance (`D3DFMT_L8` / DXGI `R8_UNORM`).
     L8,
     /// 8 bpp single-channel alpha (`D3DFMT_A8`).
@@ -243,10 +264,16 @@ impl DdsPixelFormat {
     /// figure in the public DDS programming guide.
     pub fn bits_per_pixel(self) -> u32 {
         match self {
-            Self::A8R8G8B8 | Self::X8R8G8B8 | Self::A8B8G8R8 => 32,
+            Self::A8R8G8B8 | Self::X8R8G8B8 | Self::A8B8G8R8 | Self::X8B8G8R8 => 32,
             Self::R8G8B8 => 24,
-            Self::R5G6B5 | Self::A1R5G5B5 | Self::A4R4G4B4 | Self::A8L8 => 16,
-            Self::L8 | Self::A8 | Self::R8Uint | Self::R8Sint => 8,
+            Self::R5G6B5
+            | Self::A1R5G5B5
+            | Self::X1R5G5B5
+            | Self::A4R4G4B4
+            | Self::X4R4G4B4
+            | Self::A8L8
+            | Self::L16 => 16,
+            Self::L8 | Self::A8 | Self::A4L4 | Self::R8Uint | Self::R8Sint => 8,
             // Sub-sampled packed RGB: 32 bits per pixel PAIR = 16 bpp
             // amortised over the two pixels each block encodes.
             Self::R8G8B8G8Unorm | Self::G8R8G8B8Unorm => 16,
@@ -287,10 +314,16 @@ impl DdsPixelFormat {
     /// block-compressed formats — use [`Self::block_bytes`] instead.
     pub fn bytes_per_pixel(self) -> Option<u32> {
         Some(match self {
-            Self::A8R8G8B8 | Self::X8R8G8B8 | Self::A8B8G8R8 => 4,
+            Self::A8R8G8B8 | Self::X8R8G8B8 | Self::A8B8G8R8 | Self::X8B8G8R8 => 4,
             Self::R8G8B8 => 3,
-            Self::R5G6B5 | Self::A1R5G5B5 | Self::A4R4G4B4 | Self::A8L8 => 2,
-            Self::L8 | Self::A8 | Self::R8Uint | Self::R8Sint => 1,
+            Self::R5G6B5
+            | Self::A1R5G5B5
+            | Self::X1R5G5B5
+            | Self::A4R4G4B4
+            | Self::X4R4G4B4
+            | Self::A8L8
+            | Self::L16 => 2,
+            Self::L8 | Self::A8 | Self::A4L4 | Self::R8Uint | Self::R8Sint => 1,
             // Sub-sampled packed RGB stores 4 bytes per 2-pixel block,
             // i.e. 2 bytes per pixel — exact only for an even width,
             // which the layout requires anyway.
@@ -348,11 +381,16 @@ impl DdsPixelFormat {
             Self::A8R8G8B8 => "A8R8G8B8",
             Self::X8R8G8B8 => "X8R8G8B8",
             Self::A8B8G8R8 => "A8B8G8R8",
+            Self::X8B8G8R8 => "X8B8G8R8",
             Self::R5G6B5 => "R5G6B5",
             Self::A1R5G5B5 => "A1R5G5B5",
+            Self::X1R5G5B5 => "X1R5G5B5",
             Self::A4R4G4B4 => "A4R4G4B4",
+            Self::X4R4G4B4 => "X4R4G4B4",
             Self::R8G8B8 => "R8G8B8",
             Self::A8L8 => "A8L8",
+            Self::L16 => "L16",
+            Self::A4L4 => "A4L4",
             Self::L8 => "L8",
             Self::A8 => "A8",
             Self::Bc1 => "BC1",

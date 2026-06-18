@@ -157,6 +157,36 @@ fn roundtrip_a8() {
 }
 
 #[test]
+fn roundtrip_x8b8g8r8() {
+    // RGB sibling of A8B8G8R8 (no alpha); R at the lowest byte.
+    roundtrip_format(DdsPixelFormat::X8B8G8R8, 5, 7);
+}
+
+#[test]
+fn roundtrip_x1r5g5b5() {
+    // RGB sibling of A1R5G5B5 (top bit unused).
+    roundtrip_format(DdsPixelFormat::X1R5G5B5, 6, 4);
+}
+
+#[test]
+fn roundtrip_x4r4g4b4() {
+    // RGB sibling of A4R4G4B4 (top nibble unused).
+    roundtrip_format(DdsPixelFormat::X4R4G4B4, 6, 4);
+}
+
+#[test]
+fn roundtrip_l16() {
+    // 16-bit single-channel luminance (D3DFMT_L16).
+    roundtrip_format(DdsPixelFormat::L16, 8, 4);
+}
+
+#[test]
+fn roundtrip_a4l4() {
+    // Packed 4:4 luminance + alpha in one byte (D3DFMT_A4L4).
+    roundtrip_format(DdsPixelFormat::A4L4, 8, 4);
+}
+
+#[test]
 fn roundtrip_one_pixel() {
     // Smallest legal surface — width = height = 1.
     roundtrip_format(DdsPixelFormat::A8R8G8B8, 1, 1);

@@ -204,6 +204,13 @@ fn pixel_format_from_legacy(p: &DdsPixelFormatHeader) -> Option<DdsPixelFormat> 
         {
             return Some(DdsPixelFormat::X8R8G8B8);
         }
+        // X8B8G8R8: same RGBA byte order as A8B8G8R8 but no alpha
+        // (R=000000ff, G=0000ff00, B=00ff0000). Microsoft's "Common DDS
+        // File Resource Formats" table (DDS_RGB, 32 bpp).
+        if p.r_bit_mask == 0x0000_00ff && p.g_bit_mask == 0x0000_ff00 && p.b_bit_mask == 0x00ff_0000
+        {
+            return Some(DdsPixelFormat::X8B8G8R8);
+        }
     }
     if rgb && p.rgb_bit_count == 24 {
         // R8G8B8 (BGR on disk): R=ff0000, G=00ff00, B=0000ff.
@@ -230,6 +237,16 @@ fn pixel_format_from_legacy(p: &DdsPixelFormatHeader) -> Option<DdsPixelFormat> 
         {
             return Some(DdsPixelFormat::A1R5G5B5);
         }
+        // X1R5G5B5: same 5:5:5 colour masks as A1R5G5B5 but no alpha
+        // (R=7c00, G=03e0, B=001f). Microsoft's "Common DDS File Resource
+        // Formats" table (DDS_RGB, 16 bpp).
+        if !alpha_pixels
+            && p.r_bit_mask == 0x7c00
+            && p.g_bit_mask == 0x03e0
+            && p.b_bit_mask == 0x001f
+        {
+            return Some(DdsPixelFormat::X1R5G5B5);
+        }
         // A4R4G4B4: A=f000, R=0f00, G=00f0, B=000f.
         if alpha_pixels
             && p.r_bit_mask == 0x0f00
@@ -239,15 +256,37 @@ fn pixel_format_from_legacy(p: &DdsPixelFormatHeader) -> Option<DdsPixelFormat> 
         {
             return Some(DdsPixelFormat::A4R4G4B4);
         }
+        // X4R4G4B4: same 4:4:4 colour masks as A4R4G4B4 but no alpha
+        // (R=0f00, G=00f0, B=000f). Microsoft's "Common DDS File Resource
+        // Formats" table (DDS_RGB, 16 bpp).
+        if !alpha_pixels
+            && p.r_bit_mask == 0x0f00
+            && p.g_bit_mask == 0x00f0
+            && p.b_bit_mask == 0x000f
+        {
+            return Some(DdsPixelFormat::X4R4G4B4);
+        }
     }
 
     if luminance {
         if p.rgb_bit_count == 8 && p.r_bit_mask == 0x00ff && !alpha_pixels {
             return Some(DdsPixelFormat::L8);
         }
+        // L16: single 16-bit luminance channel (R=ffff, no alpha).
+        // Microsoft's "Common DDS File Resource Formats" table
+        // (DDS_LUMINANCE, 16 bpp).
+        if p.rgb_bit_count == 16 && !alpha_pixels && p.r_bit_mask == 0xffff {
+            return Some(DdsPixelFormat::L16);
+        }
         if p.rgb_bit_count == 16 && alpha_pixels && p.r_bit_mask == 0x00ff && p.a_bit_mask == 0xff00
         {
             return Some(DdsPixelFormat::A8L8);
+        }
+        // A4L4: packed 4:4 luminance + alpha in a single byte (L=0f,
+        // A=f0). Microsoft's "Common DDS File Resource Formats" table
+        // (DDS_LUMINANCE, 8 bpp).
+        if p.rgb_bit_count == 8 && alpha_pixels && p.r_bit_mask == 0x0f && p.a_bit_mask == 0xf0 {
+            return Some(DdsPixelFormat::A4L4);
         }
     }
     if alpha_only && p.rgb_bit_count == 8 && p.a_bit_mask == 0x00ff {

@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Legacy `DDS_PIXELFORMAT` mask layouts X8B8G8R8 / X1R5G5B5 / X4R4G4B4
+  / L16 / A4L4 (round 331).** Five more uncompressed layouts from
+  Microsoft's "Common DDS File Resource Formats" table are now resolved
+  by `parse_dds` and written by `encode_dds_uncompressed`: `X8B8G8R8`
+  (32 bpp, R `0x000000ff` / G `0x0000ff00` / B `0x00ff0000`, no alpha —
+  the RGB sibling of `A8B8G8R8`), `X1R5G5B5` (16 bpp, R `0x7c00` /
+  G `0x03e0` / B `0x001f`, top bit unused — the RGB sibling of
+  `A1R5G5B5`), `X4R4G4B4` (16 bpp, R `0x0f00` / G `0x00f0` / B `0x000f`,
+  top nibble unused — the RGB sibling of `A4R4G4B4`), `L16` (16 bpp
+  single-channel luminance, mask `0xffff`), and `A4L4` (8 bpp packed
+  4:4 luminance + alpha, L `0x0f` / A `0xf0`). Each is a pass-through
+  container layout (raw bytes preserved verbatim in the plane); five new
+  `DdsPixelFormat` variants carry them with their bits-per-pixel /
+  bytes-per-pixel / name entries, and five new self-roundtrip tests
+  (`roundtrip_x8b8g8r8` / `_x1r5g5b5` / `_x4r4g4b4` / `_l16` / `_a4l4`)
+  assert encode → parse byte-exactness.
+
 - **8-bit and 32-bit plain-integer surface decoders (round 326).** New
   `decode_uint8_surface` / `decode_sint8_surface` decode the
   tightly-packed 8-bit integer layouts `R8_UINT` / `R8G8_UINT` /

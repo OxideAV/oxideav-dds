@@ -19,8 +19,10 @@ installed via `register_containers`, so CLI tools can open / write `.dds`
 files without touching the codec API directly.
 
 **Uncompressed surfaces.** Bit-exact round-trip of the common layouts —
-A8R8G8B8, X8R8G8B8, A8B8G8R8, R5G6B5, A1R5G5B5, A4R4G4B4, R8G8B8, A8L8,
-L8, A8. High-bit-depth and floating-point layouts (16-bit-per-channel
+A8R8G8B8, X8R8G8B8, A8B8G8R8, X8B8G8R8, R5G6B5, A1R5G5B5, X1R5G5B5,
+A4R4G4B4, X4R4G4B4, R8G8B8, A8L8, L16, A4L4, L8, A8 — every legacy
+`DDS_PIXELFORMAT` mask layout Microsoft tabulates in the "Common DDS
+File Resource Formats" table. High-bit-depth and floating-point layouts (16-bit-per-channel
 UNORM / SNORM, half-float and `f32` variants) are recognised, sized, and
 exposed via `decode_float_surface` / `decode_rgba16_unorm_surface` /
 `decode_rgba16_snorm_surface`. Packed HDR layouts decode to interleaved
