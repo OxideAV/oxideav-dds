@@ -47,7 +47,15 @@ to interleaved `u8` / `i8` via `decode_uint8_surface` /
 `R32G32_UINT` / `R32G32B32_UINT` (96-bit, three-channel) /
 `R32G32B32A32_UINT` and their `_SINT` siblings decode to interleaved
 `u32` / `i32` via `decode_uint32_surface` / `decode_sint32_surface` —
-again no normalisation, the stored words are the values.
+again no normalisation, the stored words are the values. The
+normalised single- / dual-channel layouts `R8_UNORM` / `R16_UNORM` /
+`R16G16_UNORM` and the signed `R8_SNORM` / `R8G8_SNORM` /
+`R8G8B8A8_SNORM` / `R16_SNORM` / `R16G16_SNORM` — the integer ranges a
+shader reads as floats — expand to interleaved `f32` via
+`decode_unorm_surface` (`[0, 1]`, divide by `2^bits − 1`) /
+`decode_snorm_surface` (`[-1, 1]`, divide by `2^(bits−1) − 1` with the
+documented min / second-min clamp to `-1.0`). `R8G8_SNORM` /
+`R16G16_SNORM` are the classic tangent-space normal-map encodings.
 
 **Block-compressed decode.**
 

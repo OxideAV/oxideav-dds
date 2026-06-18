@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Normalised single- / dual-channel 8-bit and 16-bit surface decoders
+  (round 336).** New `decode_unorm_surface` / `decode_snorm_surface`
+  decode the DX10-header normalised layouts that the legacy verbatim
+  integer decoders did not cover, expanding each stored integer to an
+  interleaved `f32`. UNORM (`R8_UNORM` value 61, `R16_UNORM` value 56,
+  `R16G16_UNORM` value 35) maps `[0, MAX]` onto `[0, 1]` by dividing by
+  `2^bits − 1`; SNORM (`R8_SNORM` value 63, `R8G8_SNORM` value 51,
+  `R8G8B8A8_SNORM` value 31, `R16_SNORM` value 58, `R16G16_SNORM` value
+  37) maps the two's-complement range onto `[-1, 1]` by dividing by
+  `2^(bits−1) − 1`, clamped so both the minimum and second-minimum
+  encodings give exactly `-1.0` (the DXGI signed-normalised rule). The
+  two-channel `R8G8_SNORM` / `R16G16_SNORM` layouts are the classic
+  tangent-space normal-map encodings; `R16_UNORM` is a common
+  single-channel height map. Eight new `DdsPixelFormat` variants carry
+  the formats (sized 1 / 2 / 4 bytes per pixel) and `parse_dds` resolves
+  them from the `DDS_HEADER_DXT10` `dxgi_format` (`R8_UNORM` keeps its
+  byte-identical `L8` container mapping, and `decode_unorm_surface`
+  accepts `L8` too). Thirteen new end-to-end tests assert the resolved
+  pixel format, surface sizing, and decoded `f32` values including the
+  SNORM clamp endpoints.
+
 - **Legacy `DDS_PIXELFORMAT` mask layouts X8B8G8R8 / X1R5G5B5 / X4R4G4B4
   / L16 / A4L4 (round 331).** Five more uncompressed layouts from
   Microsoft's "Common DDS File Resource Formats" table are now resolved

@@ -15,8 +15,8 @@ use oxideav_dds::types::{
 use oxideav_dds::{
     decode_float_surface, decode_r10g10b10a2_uint_surface, decode_r10g10b10a2_unorm_surface,
     decode_rgba16_snorm_surface, decode_rgba16_unorm_surface, decode_sint16_surface,
-    decode_sint32_surface, decode_sint8_surface, decode_uint16_surface, decode_uint32_surface,
-    decode_uint8_surface, parse_dds, DdsPixelFormat,
+    decode_sint32_surface, decode_sint8_surface, decode_snorm_surface, decode_uint16_surface,
+    decode_uint32_surface, decode_uint8_surface, decode_unorm_surface, parse_dds, DdsPixelFormat,
 };
 
 const CAPS_TEXTURE: u32 = 0x0000_1000;
@@ -593,4 +593,191 @@ fn dx10_r32g32_uint_surface_sizing_2x2() {
     assert_eq!(img.pixel_format, DdsPixelFormat::R32G32Uint);
     assert_eq!(img.surfaces[0].plane.data.len(), 32);
     assert_eq!(img.surfaces[0].plane.stride, 2 * 8);
+}
+
+// --- Normalised single- / dual-channel 8-bit and 16-bit layouts ---------
+//
+// `_UNORM` maps the unsigned integer range onto `[0, 1]` (divide by
+// `2^bits - 1`); `_SNORM` maps the two's-complement range onto `[-1, 1]`
+// (divide by `2^(bits-1) - 1`, clamped so both the minimum and
+// second-minimum encodings give exactly `-1.0`). Decode to `f32`.
+
+const EPS: f32 = 1e-6;
+
+#[test]
+fn dx10_r8_snorm_endpoints() {
+    // DXGI_FORMAT_R8_SNORM = 63. Five samples covering the documented
+    // SNORM edge cases: i8::MIN and i8::MIN+1 both clamp to -1.0,
+    // i8::MAX -> +1.0, 0 -> 0.0, 64 -> 64/127.
+    let px = [
+        (i8::MIN) as u8,
+        (i8::MIN + 1) as u8,
+        0u8,
+        (i8::MAX) as u8,
+        64u8,
+    ];
+    let dds = build_dx10_dds(63, 5, 1, &px);
+    let img = parse_dds(&dds).unwrap();
+    assert_eq!(img.pixel_format, DdsPixelFormat::R8Snorm);
+    assert!(img.has_dxt10_header);
+    let out =
+        decode_snorm_surface(DdsPixelFormat::R8Snorm, 5, 1, &img.surfaces[0].plane.data).unwrap();
+    let want = [-1.0f32, -1.0, 0.0, 1.0, 64.0 / 127.0];
+    assert_eq!(out.len(), 5);
+    for (g, w) in out.iter().zip(want.iter()) {
+        assert!((g - w).abs() < EPS, "got {g}, want {w}");
+    }
+}
+
+#[test]
+fn dx10_r8g8_snorm_normal_map() {
+    // DXGI_FORMAT_R8G8_SNORM = 51, the classic tangent-space normal-map
+    // layout. One pixel: R = +1.0 (127), G = -1.0 (-128).
+    let px = [127u8, (i8::MIN) as u8];
+    let dds = build_dx10_dds(51, 1, 1, &px);
+    let img = parse_dds(&dds).unwrap();
+    assert_eq!(img.pixel_format, DdsPixelFormat::R8G8Snorm);
+    let out =
+        decode_snorm_surface(DdsPixelFormat::R8G8Snorm, 1, 1, &img.surfaces[0].plane.data).unwrap();
+    assert_eq!(out.len(), 2);
+    assert!((out[0] - 1.0).abs() < EPS);
+    assert!((out[1] - -1.0).abs() < EPS);
+}
+
+#[test]
+fn dx10_r8g8b8a8_snorm() {
+    // DXGI_FORMAT_R8G8B8A8_SNORM = 31. One pixel (127, -128, 0, 64).
+    let px = [127u8, (i8::MIN) as u8, 0u8, 64u8];
+    let dds = build_dx10_dds(31, 1, 1, &px);
+    let img = parse_dds(&dds).unwrap();
+    assert_eq!(img.pixel_format, DdsPixelFormat::R8G8B8A8Snorm);
+    let out = decode_snorm_surface(
+        DdsPixelFormat::R8G8B8A8Snorm,
+        1,
+        1,
+        &img.surfaces[0].plane.data,
+    )
+    .unwrap();
+    let want = [1.0f32, -1.0, 0.0, 64.0 / 127.0];
+    for (g, w) in out.iter().zip(want.iter()) {
+        assert!((g - w).abs() < EPS, "got {g}, want {w}");
+    }
+}
+
+#[test]
+fn dx10_r16_unorm_endpoints() {
+    // DXGI_FORMAT_R16_UNORM = 56. 0 -> 0.0, 65535 -> 1.0, 32768 -> ~0.5.
+    let mut px = Vec::new();
+    for v in [0u16, 65535, 32768] {
+        px.extend_from_slice(&v.to_le_bytes());
+    }
+    let dds = build_dx10_dds(56, 3, 1, &px);
+    let img = parse_dds(&dds).unwrap();
+    assert_eq!(img.pixel_format, DdsPixelFormat::R16Unorm);
+    assert_eq!(img.surfaces[0].plane.data.len(), 6);
+    let out =
+        decode_unorm_surface(DdsPixelFormat::R16Unorm, 3, 1, &img.surfaces[0].plane.data).unwrap();
+    let want = [0.0f32, 1.0, 32768.0 / 65535.0];
+    for (g, w) in out.iter().zip(want.iter()) {
+        assert!((g - w).abs() < EPS, "got {g}, want {w}");
+    }
+}
+
+#[test]
+fn dx10_r16_snorm_endpoints() {
+    // DXGI_FORMAT_R16_SNORM = 58. i16::MIN and i16::MIN+1 both -> -1.0,
+    // i16::MAX -> +1.0, 0 -> 0.0.
+    let mut px = Vec::new();
+    for v in [i16::MIN, i16::MIN + 1, 0, i16::MAX] {
+        px.extend_from_slice(&v.to_le_bytes());
+    }
+    let dds = build_dx10_dds(58, 4, 1, &px);
+    let img = parse_dds(&dds).unwrap();
+    assert_eq!(img.pixel_format, DdsPixelFormat::R16Snorm);
+    let out =
+        decode_snorm_surface(DdsPixelFormat::R16Snorm, 4, 1, &img.surfaces[0].plane.data).unwrap();
+    let want = [-1.0f32, -1.0, 0.0, 1.0];
+    for (g, w) in out.iter().zip(want.iter()) {
+        assert!((g - w).abs() < EPS, "got {g}, want {w}");
+    }
+}
+
+#[test]
+fn dx10_r16g16_unorm_two_channel() {
+    // DXGI_FORMAT_R16G16_UNORM = 35. One pixel (R=65535, G=0).
+    let mut px = Vec::new();
+    px.extend_from_slice(&65535u16.to_le_bytes());
+    px.extend_from_slice(&0u16.to_le_bytes());
+    let dds = build_dx10_dds(35, 1, 1, &px);
+    let img = parse_dds(&dds).unwrap();
+    assert_eq!(img.pixel_format, DdsPixelFormat::R16G16Unorm);
+    let out = decode_unorm_surface(
+        DdsPixelFormat::R16G16Unorm,
+        1,
+        1,
+        &img.surfaces[0].plane.data,
+    )
+    .unwrap();
+    assert_eq!(out.len(), 2);
+    assert!((out[0] - 1.0).abs() < EPS);
+    assert!((out[1] - 0.0).abs() < EPS);
+}
+
+#[test]
+fn dx10_r16g16_snorm_high_precision_normal() {
+    // DXGI_FORMAT_R16G16_SNORM = 37. One pixel (R=+1.0, G=-1.0).
+    let mut px = Vec::new();
+    px.extend_from_slice(&i16::MAX.to_le_bytes());
+    px.extend_from_slice(&i16::MIN.to_le_bytes());
+    let dds = build_dx10_dds(37, 1, 1, &px);
+    let img = parse_dds(&dds).unwrap();
+    assert_eq!(img.pixel_format, DdsPixelFormat::R16G16Snorm);
+    let out = decode_snorm_surface(
+        DdsPixelFormat::R16G16Snorm,
+        1,
+        1,
+        &img.surfaces[0].plane.data,
+    )
+    .unwrap();
+    assert!((out[0] - 1.0).abs() < EPS);
+    assert!((out[1] - -1.0).abs() < EPS);
+}
+
+#[test]
+fn r8_unorm_via_l8_decodes_to_normalised() {
+    // DXGI_FORMAT_R8_UNORM (61) shares L8's byte layout; decode_unorm_surface
+    // accepts both. Three samples 0 / 128 / 255.
+    let px = [0u8, 128, 255];
+    let out = decode_unorm_surface(DdsPixelFormat::L8, 3, 1, &px).unwrap();
+    let want = [0.0f32, 128.0 / 255.0, 1.0];
+    for (g, w) in out.iter().zip(want.iter()) {
+        assert!((g - w).abs() < EPS, "got {g}, want {w}");
+    }
+    // And the R8Unorm variant directly.
+    let out2 = decode_unorm_surface(DdsPixelFormat::R8Unorm, 3, 1, &px).unwrap();
+    assert_eq!(out, out2);
+}
+
+#[test]
+fn r16g16_snorm_surface_sizing_2x2() {
+    // 2x2 R16G16_SNORM (value 37) = 4 pixels × 4 bytes = 16 bytes.
+    let px = vec![0u8; 16];
+    let dds = build_dx10_dds(37, 2, 2, &px);
+    let img = parse_dds(&dds).unwrap();
+    assert_eq!(img.pixel_format, DdsPixelFormat::R16G16Snorm);
+    assert_eq!(img.surfaces[0].plane.data.len(), 16);
+    assert_eq!(img.surfaces[0].plane.stride, 2 * 4);
+}
+
+#[test]
+fn unorm_surface_rejects_non_unorm_format() {
+    let err = decode_unorm_surface(DdsPixelFormat::R16Snorm, 1, 1, &[0u8; 2]).unwrap_err();
+    assert!(matches!(err, oxideav_dds::DdsError::Unsupported(_)));
+}
+
+#[test]
+fn snorm_surface_rejects_short_data() {
+    // R16G16_SNORM needs 4 bytes for one pixel; give it 3.
+    let err = decode_snorm_surface(DdsPixelFormat::R16G16Snorm, 1, 1, &[0u8; 3]).unwrap_err();
+    assert!(matches!(err, oxideav_dds::DdsError::InvalidData(_)));
 }

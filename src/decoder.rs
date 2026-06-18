@@ -390,6 +390,18 @@ fn pixel_format_from_dxgi(d: DxgiFormat) -> Option<DdsPixelFormat> {
         DxgiFormat::R32G32B32Sint => DdsPixelFormat::R32G32B32Sint,
         DxgiFormat::R32G32B32A32Uint => DdsPixelFormat::R32G32B32A32Uint,
         DxgiFormat::R32G32B32A32Sint => DdsPixelFormat::R32G32B32A32Sint,
+        // Normalised single- / dual-channel 8-bit and 16-bit layouts.
+        // Tightly-packed little-endian integers the shader reads as
+        // normalised floats: UNORM → [0, 1], SNORM → [-1, 1]. Decode with
+        // `decode_unorm_surface` / `decode_snorm_surface`. (`R8_UNORM`
+        // keeps its byte-identical `L8` container mapping above.)
+        DxgiFormat::R8Snorm => DdsPixelFormat::R8Snorm,
+        DxgiFormat::R8G8Snorm => DdsPixelFormat::R8G8Snorm,
+        DxgiFormat::R8G8B8A8Snorm => DdsPixelFormat::R8G8B8A8Snorm,
+        DxgiFormat::R16Unorm => DdsPixelFormat::R16Unorm,
+        DxgiFormat::R16Snorm => DdsPixelFormat::R16Snorm,
+        DxgiFormat::R16G16Unorm => DdsPixelFormat::R16G16Unorm,
+        DxgiFormat::R16G16Snorm => DdsPixelFormat::R16G16Snorm,
         // Everything else (32-bit float-typeless, depth/stencil, YUV
         // planar, palette-8) has no [`DdsPixelFormat`] mapping yet.
         _ => return None,

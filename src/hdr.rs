@@ -594,6 +594,152 @@ pub fn decode_sint32_surface(
     }
 }
 
+/// Channels and per-channel bit width for a normalised single- / dual-
+/// channel layout. `None` for any other format.
+fn norm_layout(pix: DdsPixelFormat) -> Option<(usize, u32)> {
+    Some(match pix {
+        // (channels, bits-per-channel)
+        DdsPixelFormat::R8Unorm | DdsPixelFormat::L8 | DdsPixelFormat::R8Snorm => (1, 8),
+        DdsPixelFormat::R8G8Snorm => (2, 8),
+        DdsPixelFormat::R8G8B8A8Snorm => (4, 8),
+        DdsPixelFormat::R16Unorm | DdsPixelFormat::R16Snorm => (1, 16),
+        DdsPixelFormat::R16G16Unorm | DdsPixelFormat::R16G16Snorm => (2, 16),
+        _ => return None,
+    })
+}
+
+/// Read one little-endian unsigned channel sample of `bits` width (8 or
+/// 16) from `data` at byte offset `off`.
+fn read_norm_sample(data: &[u8], off: usize, bits: u32) -> u32 {
+    if bits == 8 {
+        data[off] as u32
+    } else {
+        read_u16_le(data, off) as u32
+    }
+}
+
+/// Read every tightly-packed normalised sample of a 1/2/4-channel 8- or
+/// 16-bit surface and convert each to `f32`. `signed == false` applies the
+/// UNORM rule (`v / (2^bits − 1)`, range `[0, 1]`); `signed == true`
+/// applies the SNORM rule (two's-complement, `v / (2^(bits−1) − 1)`,
+/// clamped so both the minimum and second-minimum encodings map to
+/// `-1.0`, range `[-1, 1]`).
+fn decode_norm_raw(
+    pix: DdsPixelFormat,
+    width: u32,
+    height: u32,
+    data: &[u8],
+    signed: bool,
+    what: &str,
+) -> Result<Vec<f32>> {
+    let (channels, bits) = norm_layout(pix).ok_or_else(|| {
+        DdsError::unsupported(format!(
+            "{what}: {} is not a normalised 8/16-bit format",
+            pix.name()
+        ))
+    })?;
+    let bytes_per_sample = (bits / 8) as usize;
+    let px = (width as usize)
+        .checked_mul(height as usize)
+        .ok_or_else(|| DdsError::invalid(format!("{what}: dimension overflow")))?;
+    let total_samples = px
+        .checked_mul(channels)
+        .ok_or_else(|| DdsError::invalid(format!("{what}: sample-count overflow")))?;
+    let need = total_samples
+        .checked_mul(bytes_per_sample)
+        .ok_or_else(|| DdsError::invalid(format!("{what}: byte-count overflow")))?;
+    if data.len() < need {
+        return Err(DdsError::invalid(format!(
+            "{what}: {} needs {need} bytes for {width}x{height}, have {}",
+            pix.name(),
+            data.len()
+        )));
+    }
+    // UNORM divisor 2^bits − 1; SNORM divisor 2^(bits−1) − 1.
+    let unorm_div = ((1u64 << bits) - 1) as f32;
+    let snorm_div = ((1u64 << (bits - 1)) - 1) as f32;
+    let mut out = Vec::with_capacity(total_samples);
+    let mut off = 0usize;
+    for _ in 0..total_samples {
+        let raw = read_norm_sample(data, off, bits);
+        off += bytes_per_sample;
+        let v = if signed {
+            // Sign-extend the `bits`-wide two's-complement value to i32.
+            let shift = 32 - bits;
+            let signed_val = ((raw << shift) as i32) >> shift;
+            (signed_val as f32 / snorm_div).max(-1.0)
+        } else {
+            raw as f32 / unorm_div
+        };
+        out.push(v);
+    }
+    Ok(out)
+}
+
+/// Decode a normalised **unsigned** single- / dual-channel surface
+/// (`R8_UNORM`, `R16_UNORM`, or `R16G16_UNORM`) into a flat, interleaved
+/// `Vec<f32>` of `width × height × channels` samples, row-major, channels
+/// in the named order.
+///
+/// Each stored unsigned integer is mapped onto `[0, 1]` by dividing by
+/// `2^bits − 1` (all-zero → `0.0`, all-one → `1.0`), the DXGI UNORM rule.
+/// `R8_UNORM` shares its byte layout with the legacy `L8` luminance
+/// format, so [`DdsPixelFormat::L8`] is accepted here too. Returns
+/// [`DdsError::Unsupported`] for a non-UNORM format and
+/// [`DdsError::InvalidData`] when `data` is shorter than the surface needs.
+pub fn decode_unorm_surface(
+    pix: DdsPixelFormat,
+    width: u32,
+    height: u32,
+    data: &[u8],
+) -> Result<Vec<f32>> {
+    match pix {
+        DdsPixelFormat::R8Unorm
+        | DdsPixelFormat::L8
+        | DdsPixelFormat::R16Unorm
+        | DdsPixelFormat::R16G16Unorm => {
+            decode_norm_raw(pix, width, height, data, false, "decode_unorm_surface")
+        }
+        _ => Err(DdsError::unsupported(format!(
+            "decode_unorm_surface: {} is not a normalised unsigned 8/16-bit format",
+            pix.name()
+        ))),
+    }
+}
+
+/// Decode a normalised **signed** single- / dual- / four-channel surface
+/// (`R8_SNORM`, `R8G8_SNORM`, `R8G8B8A8_SNORM`, `R16_SNORM`, or
+/// `R16G16_SNORM`) into a flat, interleaved `Vec<f32>` of
+/// `width × height × channels` samples, row-major, channels in the named
+/// order.
+///
+/// Each stored two's-complement integer is mapped onto `[-1, 1]` by
+/// dividing by `2^(bits−1) − 1`, with the result clamped at `-1.0` so that
+/// both the minimum (`-2^(bits−1)`) and second-minimum (`-2^(bits−1) + 1`)
+/// encodings map to `-1.0` — the DXGI SNORM rule. Returns
+/// [`DdsError::Unsupported`] for a non-SNORM format and
+/// [`DdsError::InvalidData`] when `data` is shorter than the surface needs.
+pub fn decode_snorm_surface(
+    pix: DdsPixelFormat,
+    width: u32,
+    height: u32,
+    data: &[u8],
+) -> Result<Vec<f32>> {
+    match pix {
+        DdsPixelFormat::R8Snorm
+        | DdsPixelFormat::R8G8Snorm
+        | DdsPixelFormat::R8G8B8A8Snorm
+        | DdsPixelFormat::R16Snorm
+        | DdsPixelFormat::R16G16Snorm => {
+            decode_norm_raw(pix, width, height, data, true, "decode_snorm_surface")
+        }
+        _ => Err(DdsError::unsupported(format!(
+            "decode_snorm_surface: {} is not a normalised signed 8/16-bit format",
+            pix.name()
+        ))),
+    }
+}
+
 /// Decode a tightly-packed `R11G11B10_FLOAT` surface into a flat,
 /// interleaved `Vec<f32>` of `width × height × 3` samples (R, G, B per
 /// pixel, row-major).
