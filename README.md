@@ -67,6 +67,17 @@ documented min / second-min clamp to `-1.0`). `R8G8_SNORM` /
   `DdsImage::surfaces[i].plane.data` for callers that want to keep the
   texture compressed.
 
+**ASTC LDR decode.** `decode_astc_ldr` / `decode_astc_ldr_block` /
+`decode_astc_ldr_surface` decode the `DXGI_FORMAT_ASTC_*` surfaces
+(codes 133..=187) to RGBA8. The LDR-Profile decoder covers all 14 2D
+block footprints (4×4 … 12×12), BISE trit/quint/bit integer-sequence
+unpacking, the LDR colour endpoint modes (0/1/4/5/6/8/9/10/12/13),
+weight unquantization + bilinear infill, multi-partition pattern
+generation, dual-plane mode, and void-extent constant-colour blocks.
+HDR endpoints and illegal blocks decode to the spec error colour
+(opaque magenta). Sourced from the Khronos Data Format Specification
+1.4 chapter 23. ASTC is decode-only (no encoder).
+
 **Block-compressed encode.**
 
 - `encode_bc1`..`encode_bc5` emit valid block-compressed surfaces from
@@ -84,7 +95,8 @@ documented min / second-min clamp to `-1.0`). `R8G8_SNORM` /
 `encode_dds_volume` round-trips an uncompressed volume.
 
 **Format table.** Every `DXGI_FORMAT` value Microsoft assigns (1..=132)
-is enumerated by name in `DxgiFormat` for lossless round-trip; the plain
+plus the Windows 8.1-era ASTC range (133..=187) is enumerated by name in
+`DxgiFormat` for lossless round-trip; the plain
 8/16/32-bit integer colour formats (`R8`/`R8G8`/`R8G8B8A8`,
 `R16`/`R16G16`/`R16G16B16A16`, `R32`/`R32G32`/`R32G32B32`/`R32G32B32A32`,
 each in `_UINT` and `_SINT`) are sized and decoded, while the remaining
@@ -97,9 +109,12 @@ depth/stencil, YUV, and palette formats are recognised but return
   mutates one header field at a time and asserts `parse_dds` returns
   `Err` rather than panicking. Surface-size and block-grid arithmetic
   uses `checked_` / `saturating_` multiplication throughout.
-- Five `cargo-fuzz` panic-free targets under `fuzz/` (`parse_dds`,
-  `decode_bcn`, `decode_bc6h`, `decode_bc7`, `roundtrip`), driven daily
-  by `.github/workflows/fuzz.yml`.
+- Six `cargo-fuzz` panic-free targets under `fuzz/` (`parse_dds`,
+  `decode_bcn`, `decode_bc6h`, `decode_bc7`, `decode_astc`,
+  `roundtrip`), driven daily by `.github/workflows/fuzz.yml`. The ASTC
+  block + surface decoders are additionally exercised by
+  `tests/astc_robustness.rs` (a 70k random-block sweep over every
+  footprint plus an exhaustive 2^11 block-mode-field sweep).
 - Criterion benchmarks under `benches/` (`decode`, `encode`,
   `roundtrip`); run with
   `cargo bench -p oxideav-dds --bench {decode,encode,roundtrip}`.

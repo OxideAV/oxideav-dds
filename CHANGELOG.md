@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **ASTC LDR block decode (round 341).** A from-scratch ASTC LDR-Profile
+  decoder (`src/astc.rs`) sourced from the Khronos Data Format
+  Specification 1.4 chapter 23. `decode_astc_ldr_block` decodes one
+  128-bit block; `decode_astc_ldr` / `decode_astc_ldr_surface` tile the
+  blocks across a surface. Covers all 14 LDR 2D block footprints
+  (4×4 … 12×12), BISE trit/quint/bit integer-sequence unpacking, the LDR
+  colour endpoint modes (0/1/4/5/6/8/9/10/12/13), endpoint + weight
+  unquantization, bilinear weight infill, multi-partition pattern
+  generation (`hash52`), dual-plane mode, and void-extent constant-colour
+  blocks; HDR endpoints and illegal blocks emit the spec error colour
+  (opaque magenta). `DxgiFormat` gains the Windows 8.1-era ASTC codes
+  (133..=187) as named per-footprint TYPELESS/UNORM/UNORM_SRGB variants
+  with an `astc_footprint()` accessor; `DdsPixelFormat` gains a
+  footprint-carrying `Astc` variant. The container parser sizes ASTC
+  surfaces as `ceil(w/bw) × ceil(h/bh) × 16`-byte blocks across the
+  mip / array / cubemap walk. A `decode_astc` cargo-fuzz target plus
+  `tests/astc_robustness.rs` (70k random-block sweep + exhaustive 2^11
+  block-mode-field sweep) confirm the decoders are panic-free and
+  bounds-safe on arbitrary input. ASTC is decode-only this round.
+
 - **Normalised single- / dual-channel 8-bit and 16-bit surface decoders
   (round 336).** New `decode_unorm_surface` / `decode_snorm_surface`
   decode the DX10-header normalised layouts that the legacy verbatim
