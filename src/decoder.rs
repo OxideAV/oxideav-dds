@@ -402,6 +402,34 @@ fn pixel_format_from_dxgi(d: DxgiFormat) -> Option<DdsPixelFormat> {
         DxgiFormat::R16Snorm => DdsPixelFormat::R16Snorm,
         DxgiFormat::R16G16Unorm => DdsPixelFormat::R16G16Unorm,
         DxgiFormat::R16G16Snorm => DdsPixelFormat::R16G16Snorm,
+        // ASTC LDR block-compressed surfaces (DXGI 133..=187). The
+        // footprint is carried on the variant so the non-4×4 block
+        // geometry sizes correctly; `_UNORM_SRGB` sets the `srgb` flag.
+        astc if astc.astc_footprint().is_some() => {
+            let (block_w, block_h) = astc.astc_footprint().expect("checked by guard");
+            let srgb = matches!(
+                astc,
+                DxgiFormat::Astc4x4UnormSrgb
+                    | DxgiFormat::Astc5x4UnormSrgb
+                    | DxgiFormat::Astc5x5UnormSrgb
+                    | DxgiFormat::Astc6x5UnormSrgb
+                    | DxgiFormat::Astc6x6UnormSrgb
+                    | DxgiFormat::Astc8x5UnormSrgb
+                    | DxgiFormat::Astc8x6UnormSrgb
+                    | DxgiFormat::Astc8x8UnormSrgb
+                    | DxgiFormat::Astc10x5UnormSrgb
+                    | DxgiFormat::Astc10x6UnormSrgb
+                    | DxgiFormat::Astc10x8UnormSrgb
+                    | DxgiFormat::Astc10x10UnormSrgb
+                    | DxgiFormat::Astc12x10UnormSrgb
+                    | DxgiFormat::Astc12x12UnormSrgb
+            );
+            DdsPixelFormat::Astc {
+                block_w,
+                block_h,
+                srgb,
+            }
+        }
         // Everything else (32-bit float-typeless, depth/stencil, YUV
         // planar, palette-8) has no [`DdsPixelFormat`] mapping yet.
         _ => return None,
@@ -413,6 +441,19 @@ fn pixel_format_from_dxgi(d: DxgiFormat) -> Option<DdsPixelFormat> {
 /// would overflow `u64`, so adversarial header values cannot panic this
 /// path in a debug build.
 fn surface_size_bytes(pix: DdsPixelFormat, width: u32, height: u32) -> Result<u64> {
+    if let Some((bw, bh)) = pix.astc_footprint() {
+        // ASTC: ceil(w/bw) × ceil(h/bh) blocks of a fixed 16 bytes.
+        let bx = (width.max(1).div_ceil(bw)) as u64;
+        let by = (height.max(1).div_ceil(bh)) as u64;
+        return bx
+            .checked_mul(by)
+            .and_then(|n| n.checked_mul(16))
+            .ok_or_else(|| {
+                DdsError::invalid(format!(
+                    "ASTC surface size overflow for {width}x{height} × {bw}x{bh} blocks"
+                ))
+            });
+    }
     if let Some(bb) = pix.block_bytes() {
         let bw = (width.max(1).div_ceil(4)) as u64;
         let bh = (height.max(1).div_ceil(4)) as u64;
@@ -439,6 +480,10 @@ fn surface_size_bytes(pix: DdsPixelFormat, width: u32, height: u32) -> Result<u6
 /// Per-row stride for `pix` at the given width. For block-compressed
 /// formats this is `ceil(width/4) × block_bytes`.
 fn surface_stride_bytes(pix: DdsPixelFormat, width: u32) -> usize {
+    if let Some((bw, _bh)) = pix.astc_footprint() {
+        // One row of ASTC blocks = ceil(width/block_w) × 16 bytes.
+        return (width.max(1).div_ceil(bw) * 16) as usize;
+    }
     if let Some(bb) = pix.block_bytes() {
         return (width.max(1).div_ceil(4) * bb) as usize;
     }

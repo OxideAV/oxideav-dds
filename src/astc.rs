@@ -1460,6 +1460,20 @@ pub fn decode_astc_ldr(
     out
 }
 
+/// Decode an ASTC surface described by a [`crate::DdsPixelFormat::Astc`]
+/// format into RGBA8. Returns `None` if `pix` is not an ASTC format.
+/// Thin wrapper over [`decode_astc_ldr`] that pulls the block footprint
+/// from the pixel format.
+pub fn decode_astc_ldr_surface(
+    pix: crate::DdsPixelFormat,
+    data: &[u8],
+    width: u32,
+    height: u32,
+) -> Option<Vec<u8>> {
+    let (bw, bh) = pix.astc_footprint()?;
+    Some(decode_astc_ldr(data, width, height, bw, bh))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

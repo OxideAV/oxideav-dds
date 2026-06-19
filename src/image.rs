@@ -297,6 +297,22 @@ pub enum DdsPixelFormat {
     /// (DXGI `R16G16_SNORM`, value 37) — high-precision two-channel
     /// tangent-space normal map.
     R16G16Snorm,
+
+    /// ASTC LDR block-compressed surface. Every ASTC block is a fixed
+    /// 128 bits (16 bytes) and covers a `block_w × block_h` texel
+    /// footprint (one of the 14 LDR 2D footprints, 4×4 … 12×12). The
+    /// `srgb` flag mirrors the `_UNORM` vs `_UNORM_SRGB` DXGI variant
+    /// (round-trip metadata only; the LDR block decoder produces the
+    /// stored unorm bytes either way). Decode with
+    /// [`crate::decode_astc_ldr`].
+    Astc {
+        /// Block footprint width (4, 5, 6, 8, 10, or 12).
+        block_w: u32,
+        /// Block footprint height (4, 5, 6, 8, or 10/12).
+        block_h: u32,
+        /// True for the `_UNORM_SRGB` DXGI variants.
+        srgb: bool,
+    },
 }
 
 impl DdsPixelFormat {
@@ -352,6 +368,10 @@ impl DdsPixelFormat {
             | Self::Bc6hSf16
             | Self::Bc7Unorm
             | Self::Bc7UnormSrgb => 8,
+            // ASTC: amortised bits/pixel = 128 / (block_w*block_h).
+            Self::Astc {
+                block_w, block_h, ..
+            } => 128 / (block_w * block_h).max(1),
         }
     }
 
@@ -419,8 +439,22 @@ impl DdsPixelFormat {
     }
 
     /// True for the BC1..BC7 family (legacy DXT* aliases included).
+    /// ASTC is reported separately by [`Self::astc_footprint`] because
+    /// its blocks are not the 4×4 footprint the BC* sizing assumes.
     pub fn is_block_compressed(self) -> bool {
         self.block_bytes().is_some()
+    }
+
+    /// For an ASTC format, the `(block_w, block_h)` texel footprint;
+    /// `None` for every other format. Each ASTC block is a fixed 16
+    /// bytes regardless of footprint.
+    pub fn astc_footprint(self) -> Option<(u32, u32)> {
+        match self {
+            Self::Astc {
+                block_w, block_h, ..
+            } => Some((block_w, block_h)),
+            _ => None,
+        }
     }
 
     /// Short human-readable name (used in error messages).
@@ -492,6 +526,13 @@ impl DdsPixelFormat {
             Self::R16Snorm => "R16_SNORM",
             Self::R16G16Unorm => "R16G16_UNORM",
             Self::R16G16Snorm => "R16G16_SNORM",
+            Self::Astc { srgb, .. } => {
+                if srgb {
+                    "ASTC_LDR_SRGB"
+                } else {
+                    "ASTC_LDR"
+                }
+            }
         }
     }
 

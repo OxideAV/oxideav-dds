@@ -274,6 +274,12 @@ fn mip_dimensions(width: u32, height: u32, mip_count: u32) -> Vec<(u32, u32)> {
 /// copied verbatim; otherwise the encoder fabricates every level
 /// beyond mip 0 by a box-filter downsample of the previous level.
 pub fn encode_dds_uncompressed(image: &DdsImage) -> Result<Vec<u8>> {
+    if image.pixel_format.astc_footprint().is_some() {
+        return Err(DdsError::unsupported(format!(
+            "encode_dds_uncompressed cannot serialise ASTC {} — ASTC is decode-only",
+            image.pixel_format.name()
+        )));
+    }
     if image.pixel_format.is_block_compressed() {
         return Err(DdsError::unsupported(format!(
             "encode_dds_uncompressed cannot serialise block-compressed {} — round 1 is pass-through only",
@@ -456,6 +462,12 @@ fn volume_mip_depths(base_depth: u32, mip_count: u32) -> Vec<u32> {
 /// count, and `DDSCAPS2_VOLUME` set in `caps2` (plus
 /// `DDSCAPS_COMPLEX` so DirectX recognises the child surfaces).
 pub fn encode_dds_volume(image: &DdsImage) -> Result<Vec<u8>> {
+    if image.pixel_format.astc_footprint().is_some() {
+        return Err(DdsError::unsupported(format!(
+            "encode_dds_volume cannot serialise ASTC {} — ASTC is decode-only",
+            image.pixel_format.name()
+        )));
+    }
     if image.pixel_format.is_block_compressed() {
         return Err(DdsError::unsupported(format!(
             "encode_dds_volume cannot serialise block-compressed {} (uncompressed volume only)",
