@@ -194,6 +194,7 @@
 //! (`magick`, `texconv`) are used only as black-box validators when
 //! generating test fixtures, not as a source of constants or layout.
 
+pub mod astc;
 pub mod bc6h;
 pub mod bc6h_enc;
 pub mod bc7;
@@ -215,6 +216,10 @@ pub mod registry;
 /// Codec id for DDS image frames.
 pub const CODEC_ID_STR: &str = "dds";
 
+pub use astc::{
+    decode_astc_ldr, decode_astc_ldr_block, is_valid_footprint, ERROR_COLOR as ASTC_ERROR_COLOR,
+    LDR_BLOCK_FOOTPRINTS,
+};
 pub use bc6h::decode_bc6h;
 pub use bc6h_enc::{
     encode_bc6h, encode_bc6h_from_f32, encode_bc6h_sf16, encode_bc6h_sf16_from_f32,
