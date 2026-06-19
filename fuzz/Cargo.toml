@@ -76,6 +76,12 @@ test = false
 doc = false
 
 [[bin]]
+name = "decode_astc"
+path = "fuzz_targets/decode_astc.rs"
+test = false
+doc = false
+
+[[bin]]
 name = "roundtrip"
 path = "fuzz_targets/roundtrip.rs"
 test = false
