@@ -86,3 +86,9 @@ name = "roundtrip"
 path = "fuzz_targets/roundtrip.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "decode_yuv"
+path = "fuzz_targets/decode_yuv.rs"
+test = false
+doc = false

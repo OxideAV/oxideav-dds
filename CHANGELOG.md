@@ -33,6 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now sizes and carries these surfaces' raw bytes instead of rejecting
   the file.
 
+- **`decode_yuv` fuzz target (round 354).** A seventh `cargo-fuzz`
+  panic-free target (`fuzz/fuzz_targets/decode_yuv.rs`) drives arbitrary
+  bytes through every YUV surface decoder across all eleven formats and
+  both the natural and a zero-padded payload, asserting the success path
+  returns exactly `width × height × 4` samples and the short path returns
+  `Err` without panicking.
+
 - **ASTC LDR multi-partition + dual-plane decode tests (round 348).**
   Two hand-built block tests now exercise the harder decode paths
   end-to-end against spec-constructed inputs: `two_partition_routes_texels_by_pattern`

@@ -67,6 +67,25 @@ documented min / second-min clamp to `-1.0`). `R8G8_SNORM` /
   `DdsImage::surfaces[i].plane.data` for callers that want to keep the
   texture compressed.
 
+**YUV (video) decode.** The eleven luma/chroma `DXGI_FORMAT` values
+Microsoft fully specifies in the DXGI enumeration page — the 4:4:4
+packed `AYUV` / `Y410` / `Y416`, the 4:2:2 packed `YUY2` / `Y210` /
+`Y216`, the 4:2:0 planar `NV12` / `P010` / `P016` / `420_OPAQUE`, and
+the 4:1:1 planar `NV11` — are parsed (sized + carried verbatim) and
+decoded to interleaved full-resolution `[Y, U, V, A]` samples via
+`decode_ayuv_surface` / `decode_y410_surface` / `decode_y416_surface` /
+`decode_yuy2_surface` / `decode_y210_surface` / `decode_y216_surface` /
+`decode_nv12_surface` / `decode_p010_surface` / `decode_p016_surface` /
+`decode_420_opaque_surface` / `decode_nv11_surface` (`u8` for the 8-bit
+formats, `u16` for the 10/16-bit ones). Chroma is replicated across the
+subsampled neighbourhood; opaque formats decode alpha to the channel
+maximum. A `YuvFormat` descriptor exposes per-format `sampling`,
+`stored_bits`, `has_alpha`, exact `surface_size_bytes`, and the
+documented width/height divisibility constraints (enforced at parse
+time). Decode is matrix-agnostic — no YUV→RGB conversion, since the
+colour matrix is not part of the DDS container spec — mirroring how the
+HDR formats decode to stored channel values. YUV is decode-only.
+
 **ASTC LDR decode.** `decode_astc_ldr` / `decode_astc_ldr_block` /
 `decode_astc_ldr_surface` decode the `DXGI_FORMAT_ASTC_*` surfaces
 (codes 133..=187) to RGBA8. The LDR-Profile decoder covers all 14 2D
@@ -99,9 +118,13 @@ plus the Windows 8.1-era ASTC range (133..=187) is enumerated by name in
 `DxgiFormat` for lossless round-trip; the plain
 8/16/32-bit integer colour formats (`R8`/`R8G8`/`R8G8B8A8`,
 `R16`/`R16G16`/`R16G16B16A16`, `R32`/`R32G32`/`R32G32B32`/`R32G32B32A32`,
-each in `_UINT` and `_SINT`) are sized and decoded, while the remaining
-depth/stencil, YUV, and palette formats are recognised but return
-`DdsError::Unsupported` from the layout resolver.
+each in `_UINT` and `_SINT`) are sized and decoded, the eleven
+documented YUV (video) formats (`AYUV` / `Y410` / `Y416` / `YUY2` /
+`Y210` / `Y216` / `NV12` / `P010` / `P016` / `420_OPAQUE` / `NV11`) are
+sized and decoded to interleaved `[Y, U, V, A]` samples, while the
+remaining depth/stencil, the three under-documented video formats
+(`P208` / `V208` / `V408`), and palette formats are recognised but
+return `DdsError::Unsupported` from the layout resolver.
 
 ## Robustness
 
@@ -109,9 +132,10 @@ depth/stencil, YUV, and palette formats are recognised but return
   mutates one header field at a time and asserts `parse_dds` returns
   `Err` rather than panicking. Surface-size and block-grid arithmetic
   uses `checked_` / `saturating_` multiplication throughout.
-- Six `cargo-fuzz` panic-free targets under `fuzz/` (`parse_dds`,
+- Seven `cargo-fuzz` panic-free targets under `fuzz/` (`parse_dds`,
   `decode_bcn`, `decode_bc6h`, `decode_bc7`, `decode_astc`,
-  `roundtrip`), driven daily by `.github/workflows/fuzz.yml`. The ASTC
+  `decode_yuv`, `roundtrip`), driven daily by
+  `.github/workflows/fuzz.yml`. The ASTC
   block + surface decoders are additionally exercised by
   `tests/astc_robustness.rs` (a 70k random-block sweep over every
   footprint plus an exhaustive 2^11 block-mode-field sweep).
