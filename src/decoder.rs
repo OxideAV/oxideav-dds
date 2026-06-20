@@ -430,8 +430,24 @@ fn pixel_format_from_dxgi(d: DxgiFormat) -> Option<DdsPixelFormat> {
                 srgb,
             }
         }
-        // Everything else (32-bit float-typeless, depth/stencil, YUV
-        // planar, palette-8) has no [`DdsPixelFormat`] mapping yet.
+        // YUV (video) DXGI formats — packed and planar luma/chroma
+        // surfaces. The bytes are carried verbatim; the matching
+        // `crate::yuv::decode_*_surface` helper expands them.
+        DxgiFormat::Ayuv => DdsPixelFormat::Yuv(crate::yuv::YuvFormat::Ayuv),
+        DxgiFormat::Y410 => DdsPixelFormat::Yuv(crate::yuv::YuvFormat::Y410),
+        DxgiFormat::Y416 => DdsPixelFormat::Yuv(crate::yuv::YuvFormat::Y416),
+        DxgiFormat::Nv12 => DdsPixelFormat::Yuv(crate::yuv::YuvFormat::Nv12),
+        DxgiFormat::P010 => DdsPixelFormat::Yuv(crate::yuv::YuvFormat::P010),
+        DxgiFormat::P016 => DdsPixelFormat::Yuv(crate::yuv::YuvFormat::P016),
+        DxgiFormat::Opaque420 => DdsPixelFormat::Yuv(crate::yuv::YuvFormat::Opaque420),
+        DxgiFormat::Yuy2 => DdsPixelFormat::Yuv(crate::yuv::YuvFormat::Yuy2),
+        DxgiFormat::Y210 => DdsPixelFormat::Yuv(crate::yuv::YuvFormat::Y210),
+        DxgiFormat::Y216 => DdsPixelFormat::Yuv(crate::yuv::YuvFormat::Y216),
+        DxgiFormat::Nv11 => DdsPixelFormat::Yuv(crate::yuv::YuvFormat::Nv11),
+        // Everything else (32-bit float-typeless, depth/stencil, the
+        // packed/planar P208/V208/V408 video formats whose byte layout
+        // Microsoft does not document, palette-8) has no
+        // [`DdsPixelFormat`] mapping yet.
         _ => return None,
     })
 }
@@ -441,6 +457,16 @@ fn pixel_format_from_dxgi(d: DxgiFormat) -> Option<DdsPixelFormat> {
 /// would overflow `u64`, so adversarial header values cannot panic this
 /// path in a debug build.
 fn surface_size_bytes(pix: DdsPixelFormat, width: u32, height: u32) -> Result<u64> {
+    if let DdsPixelFormat::Yuv(f) = pix {
+        // YUV surfaces are planar / packed / subsampled; the exact
+        // on-disk byte count is computed per-format (Microsoft's
+        // staging-resource sizing rules), not via the bpp model. The
+        // documented width/height divisibility constraints are enforced
+        // here so a malformed (odd-dimension) YUV surface is rejected at
+        // parse time rather than only when the decoder is later called.
+        f.check_dims(width, height)?;
+        return f.surface_size_bytes(width, height);
+    }
     if let Some((bw, bh)) = pix.astc_footprint() {
         // ASTC: ceil(w/bw) × ceil(h/bh) blocks of a fixed 16 bytes.
         let bx = (width.max(1).div_ceil(bw)) as u64;
@@ -480,6 +506,24 @@ fn surface_size_bytes(pix: DdsPixelFormat, width: u32, height: u32) -> Result<u6
 /// Per-row stride for `pix` at the given width. For block-compressed
 /// formats this is `ceil(width/4) × block_bytes`.
 fn surface_stride_bytes(pix: DdsPixelFormat, width: u32) -> usize {
+    if let DdsPixelFormat::Yuv(f) = pix {
+        // Report the first (luma / packed) plane's row pitch. For the
+        // planar 4:2:0 / 4:1:1 formats this is the Y-plane row; for the
+        // packed formats it is one row of the packed groups. The exact
+        // per-plane geometry is reconstructed by the matching
+        // `crate::yuv::decode_*_surface` helper from the full payload.
+        use crate::yuv::YuvFormat::*;
+        let w = width as usize;
+        return match f {
+            Ayuv | Y410 => w * 4,
+            Y416 => w * 8,
+            Yuy2 => w * 2,
+            Y210 | Y216 => w * 4,
+            // Planar luma row pitch: 1 byte/sample (8-bit) or 2 (16-bit).
+            Nv12 | Opaque420 | Nv11 => w,
+            P010 | P016 => w * 2,
+        };
+    }
     if let Some((bw, _bh)) = pix.astc_footprint() {
         // One row of ASTC blocks = ceil(width/block_w) × 16 bytes.
         return (width.max(1).div_ceil(bw) * 16) as usize;

@@ -313,6 +313,15 @@ pub enum DdsPixelFormat {
         /// True for the `_UNORM_SRGB` DXGI variants.
         srgb: bool,
     },
+
+    /// A YUV (video) DXGI surface — one of the eleven luma/chroma
+    /// `DXGI_FORMAT` layouts Microsoft fully specifies (AYUV, Y410,
+    /// Y416, NV12, P010, P016, 420_OPAQUE, YUY2, Y210, Y216, NV11).
+    /// The on-disk bytes are carried verbatim (planar or packed,
+    /// per-format); call the matching `crate::yuv::decode_*_surface`
+    /// helper to expand the surface to interleaved `[Y, U, V, A]`
+    /// samples. Surface sizing follows [`crate::yuv::YuvFormat::surface_size_bytes`].
+    Yuv(crate::yuv::YuvFormat),
 }
 
 impl DdsPixelFormat {
@@ -372,6 +381,22 @@ impl DdsPixelFormat {
             Self::Astc {
                 block_w, block_h, ..
             } => 128 / (block_w * block_h).max(1),
+            // YUV: amortised bits/pixel from the per-format surface size.
+            // 4:4:4 8-bit = 32, 10/16-bit 4:4:4 = 32/64; 4:2:2 = 16/32;
+            // 4:2:0 = 12/24; 4:1:1 (padded) = 16.
+            Self::Yuv(f) => {
+                use crate::yuv::YuvFormat::*;
+                match f {
+                    Ayuv => 32,
+                    Y410 => 32,
+                    Y416 => 64,
+                    Yuy2 => 16,
+                    Y210 | Y216 => 32,
+                    Nv12 | Opaque420 => 12,
+                    P010 | P016 => 24,
+                    Nv11 => 16,
+                }
+            }
         }
     }
 
@@ -533,6 +558,19 @@ impl DdsPixelFormat {
                     "ASTC_LDR"
                 }
             }
+            Self::Yuv(f) => match f {
+                crate::yuv::YuvFormat::Ayuv => "AYUV",
+                crate::yuv::YuvFormat::Y410 => "Y410",
+                crate::yuv::YuvFormat::Y416 => "Y416",
+                crate::yuv::YuvFormat::Nv12 => "NV12",
+                crate::yuv::YuvFormat::P010 => "P010",
+                crate::yuv::YuvFormat::P016 => "P016",
+                crate::yuv::YuvFormat::Opaque420 => "420_OPAQUE",
+                crate::yuv::YuvFormat::Yuy2 => "YUY2",
+                crate::yuv::YuvFormat::Y210 => "Y210",
+                crate::yuv::YuvFormat::Y216 => "Y216",
+                crate::yuv::YuvFormat::Nv11 => "NV11",
+            },
         }
     }
 

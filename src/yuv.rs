@@ -213,7 +213,7 @@ impl YuvFormat {
 
     /// Validate the width/height divisibility constraints documented for
     /// this format and return `Err(DdsError::InvalidData)` if violated.
-    fn check_dims(self, width: u32, height: u32) -> Result<()> {
+    pub fn check_dims(self, width: u32, height: u32) -> Result<()> {
         if width == 0 || height == 0 {
             return Err(DdsError::invalid("YUV surface has a zero dimension"));
         }
