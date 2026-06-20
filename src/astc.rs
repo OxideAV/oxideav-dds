@@ -1730,6 +1730,273 @@ mod tests {
     }
 
     #[test]
+    fn two_partition_routes_texels_by_pattern() {
+        // A 4×4, two-partition, single-plane block with a 4×4 weight grid
+        // at range 0..3 (2 bits/weight → 32 weight bits ≥ 24). All weights
+        // are 0, so each texel reproduces its partition's endpoint 0. Both
+        // partitions share CEM 8 (LDR RGB direct) via the selector==00
+        // "single CEM" path (block bits [28..25]).
+        //
+        // Block mode (same DP/P/grid layout as the single-partition test,
+        // 4×4 grid) but with the weight range set to 0..3 = (P=0, ρ=100):
+        //   ρ2=1, ρ1=0, ρ0=0. The row is "DP P W W H H ρ0 0 0 ρ2 ρ1":
+        //   bit1=ρ2=1, bit0=ρ1=0, bit4=ρ0=0, W=0, H=2.
+        let mut bb = BlockBuilder::new();
+        bb.set(0, 1, 0); // ρ1 = 0
+        bb.set(1, 1, 1); // ρ2 = 1
+        bb.set(2, 2, 0); // bits[3:2] = 00
+        bb.set(4, 1, 0); // ρ0 = 0
+        bb.set(5, 2, 0b10); // H = 2
+        bb.set(7, 2, 0b00); // W = 0
+        bb.set(9, 1, 0); // P = 0
+        bb.set(10, 1, 0); // DP = 0
+
+        // Two partitions: bits [12:11] = 01.
+        bb.set(11, 2, 1);
+        // Partition seed: bits [22:13] = 1 (matches the precomputed map).
+        bb.set(13, 10, 1);
+        // CEM selector bits [24:23] = 00 (single CEM for all partitions).
+        bb.set(23, 2, 0);
+        // 4-bit CEM in bits [28:25] = 8 (LDR RGB direct).
+        bb.set(25, 4, 8);
+
+        // Colour stream starts at bit 29. CEM 8 = 6 integers/partition ×
+        // 2 partitions = 12 integers. Partition 0's endpoint 0 is encoded
+        // by (v0,v2,v4) and partition 1's by the next group. Make the two
+        // partitions clearly distinct: low values vs high values, and keep
+        // s1 >= s0 so the direct (non-blue-contract) branch is taken.
+        // The picker chooses the colour ISE range from the bit budget; we
+        // only assert the partition *routing*, not exact bytes, so any
+        // monotone value choice works. Use ascending values.
+        // Determine the range the decoder will use so we can pack values.
+        let weight_bits = 32u32;
+        let config_bits = 29u32;
+        let budget = 128 - config_bits - weight_bits;
+        let range = pick_color_range(12, budget).expect("colour range");
+        // Pack 12 values: partition 0 = small, partition 1 = large.
+        // Mode-8 group i is (r0,r1,g0,g1,b0,b1). Endpoint0 = (r0,g0,b0) =
+        // values at indices 0,2,4 within each 6-tuple.
+        let p0 = [2u32, 5, 2, 5, 2, 5]; // endpoint0 ~ (2,2,2)
+        let p1 = [
+            range.max - 1,
+            range.max,
+            range.max - 1,
+            range.max,
+            range.max - 1,
+            range.max,
+        ];
+        let mut seq: Vec<u32> = Vec::new();
+        seq.extend_from_slice(&p0);
+        seq.extend_from_slice(&p1);
+        // Encode the integer sequence into the block at bit 29.
+        encode_ise_into(&mut bb, 29, &seq, range);
+
+        // All weights zero (already zero in a fresh builder).
+        let block = bb.bytes();
+        let texels = decode_astc_ldr_block(&block, 4, 4);
+        assert_eq!(texels.len(), 16);
+
+        // Precomputed partition map for seed=1, 4×4 small block, 2 parts.
+        let map = [0u8, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 0, 1, 1, 0, 0];
+        // Each partition must decode to a single constant colour (weights
+        // are 0 everywhere), and the two partition colours must differ.
+        let mut c0 = None;
+        let mut c1 = None;
+        for (i, t) in texels.iter().enumerate() {
+            match map[i] {
+                0 => {
+                    let v = *c0.get_or_insert(*t);
+                    assert_eq!(*t, v, "partition 0 texel {i} not constant");
+                }
+                _ => {
+                    let v = *c1.get_or_insert(*t);
+                    assert_eq!(*t, v, "partition 1 texel {i} not constant");
+                }
+            }
+        }
+        let c0 = c0.unwrap();
+        let c1 = c1.unwrap();
+        assert_ne!(c0, c1, "the two partitions must decode to distinct colours");
+        // Partition 0 is the darker endpoint, partition 1 the brighter one.
+        assert!(c1[0] > c0[0] && c1[1] > c0[1] && c1[2] > c0[2]);
+    }
+
+    #[test]
+    fn dual_plane_alpha_uses_second_plane() {
+        // A 4×4 dual-plane single-partition block: CEM 12 (LDR RGBA
+        // direct), CCS = 3 (alpha uses weight plane 1). Plane 0 weights are
+        // all 0 (→ endpoint0 for RGB), plane 1 weights are all max (→
+        // endpoint1 for alpha). Verify RGB follows e0 while A follows e1,
+        // proving the two planes are sampled independently.
+        //
+        // Use weight range 0..3 (P=0, ρ=100) so 16 grid points × 2 planes
+        // × 2 bits = 64 weight bits. Block mode row "DP P W W H H ρ0 0 0
+        // ρ2 ρ1" with DP=1, W=0, H=2.
+        let mut bb = BlockBuilder::new();
+        bb.set(0, 1, 0); // ρ1 = 0
+        bb.set(1, 1, 1); // ρ2 = 1
+        bb.set(2, 2, 0); // bits[3:2] = 00
+        bb.set(4, 1, 0); // ρ0 = 0
+        bb.set(5, 2, 0b10); // H = 2
+        bb.set(7, 2, 0b00); // W = 0
+        bb.set(9, 1, 0); // P = 0
+        bb.set(10, 1, 1); // DP = 1 (dual plane)
+
+        // Single partition.
+        bb.set(11, 2, 0);
+        // CEM bits [16:13] = 12 (LDR RGBA direct).
+        bb.set(13, 4, 12);
+
+        // CEM 12 = 8 colour integers. Colour stream starts at bit 17.
+        // Mode 12 ordering is (r0,r1,g0,g1,b0,b1,a0,a1) with an s0/s1
+        // branch; pick s1 >= s0 for the direct branch. Endpoint0 RGB is
+        // dark, endpoint1 RGB bright; alpha e0=0x10, e1=0xF0.
+        let weight_bits = 64u32;
+        let config_bits = 17u32 + 2; // single partition + dual-plane CCS
+        let budget = 128 - config_bits - weight_bits;
+        let range = pick_color_range(8, budget).expect("colour range");
+        // Choose values so s1 = r1+g1+b1 >= s0 = r0+g0+b0 (direct branch).
+        let lo = 2u32.min(range.max);
+        let hi = range.max;
+        // (r0,r1,g0,g1,b0,b1,a0,a1)
+        let seq = [lo, hi, lo, hi, lo, hi, lo, hi];
+        encode_ise_into(&mut bb, 17, &seq, range);
+
+        // CCS = 3 (alpha → plane 1). CCS sits just below the weight data
+        // (no additional CEM bits for a single partition).
+        let ccs_pos = (128 - weight_bits) - 2;
+        bb.set(ccs_pos, 2, 3);
+
+        // Weights: 16 grid points, 2 planes interleaved (plane0 then
+        // plane1 per point), 2 bits each. plane0 = 0 (→ e0), plane1 = 3
+        // (max → e1). Stream index for point i: 2*(i*2)+ for plane0,
+        // plane1 follows. Value v occupies stream bits [2*v_index .. +1].
+        for i in 0..16u32 {
+            let idx0 = (i * 2) * 2; // plane 0 value index *2 bits
+            let idx1 = (i * 2 + 1) * 2; // plane 1
+                                        // plane0 weight = 0 (bits already 0)
+            let _ = idx0;
+            // plane1 weight = 3
+            for k in 0..2 {
+                bb.set_weight_bit(idx1 + k, (3 >> k) & 1);
+            }
+        }
+
+        let block = bb.bytes();
+        let texels = decode_astc_ldr_block(&block, 4, 4);
+        assert_eq!(texels.len(), 16);
+        // RGB should track endpoint0 (the dark values) since plane-0
+        // weights are 0; alpha should track endpoint1 (bright) since it
+        // is driven by plane 1 at max weight. The exact unquantized bytes
+        // depend on the chosen range, but the relationship R,G,B < A must
+        // hold for every texel.
+        for t in &texels {
+            assert!(
+                (t[3] as u32) > (t[0] as u32),
+                "alpha {} should exceed R {} (plane-1 vs plane-0)",
+                t[3],
+                t[0]
+            );
+        }
+        // And RGB must be constant across the block (plane-0 weights are
+        // uniformly 0).
+        let first = texels[0];
+        for t in &texels {
+            assert_eq!(t[0..3], first[0..3], "RGB must be constant");
+        }
+    }
+
+    /// Pack an integer sequence `seq` (each value in `range`) into the
+    /// block at absolute bit `start`, mirroring the BISE layout the
+    /// decoder reads with [`decode_ise_sequence`]. Used by the
+    /// multi-partition / dual-plane construction tests.
+    fn encode_ise_into(bb: &mut BlockBuilder, start: u32, seq: &[u32], range: IseRange) {
+        let n = range.bits as u32;
+        let mut pos = start;
+        if range.trits {
+            for chunk in seq.chunks(5) {
+                let mut trits = [0u32; 5];
+                let mut m = [0u32; 5];
+                for (i, &v) in chunk.iter().enumerate() {
+                    trits[i] = v >> n;
+                    m[i] = v & ((1 << n) - 1);
+                }
+                let packed = pack_trits(trits);
+                bb.set(pos, n, m[0]);
+                pos += n;
+                bb.set(pos, 2, packed & 0b11);
+                pos += 2;
+                bb.set(pos, n, m[1]);
+                pos += n;
+                bb.set(pos, 2, (packed >> 2) & 0b11);
+                pos += 2;
+                bb.set(pos, n, m[2]);
+                pos += n;
+                bb.set(pos, 1, (packed >> 4) & 1);
+                pos += 1;
+                bb.set(pos, n, m[3]);
+                pos += n;
+                bb.set(pos, 2, (packed >> 5) & 0b11);
+                pos += 2;
+                bb.set(pos, n, m[4]);
+                pos += n;
+                bb.set(pos, 1, (packed >> 7) & 1);
+                pos += 1;
+            }
+        } else if range.quints {
+            for chunk in seq.chunks(3) {
+                let mut quints = [0u32; 3];
+                let mut m = [0u32; 3];
+                for (i, &v) in chunk.iter().enumerate() {
+                    quints[i] = v >> n;
+                    m[i] = v & ((1 << n) - 1);
+                }
+                let packed = pack_quints(quints);
+                bb.set(pos, n, m[0]);
+                pos += n;
+                bb.set(pos, 3, packed & 0b111);
+                pos += 3;
+                bb.set(pos, n, m[1]);
+                pos += n;
+                bb.set(pos, 2, (packed >> 3) & 0b11);
+                pos += 2;
+                bb.set(pos, n, m[2]);
+                pos += n;
+                bb.set(pos, 2, (packed >> 5) & 0b11);
+                pos += 2;
+            }
+        } else {
+            for &v in seq {
+                bb.set(pos, n, v);
+                pos += n;
+            }
+        }
+    }
+
+    /// Inverse of [`unpack_trits`]: encode five trits (each 0..2) into the
+    /// 8-bit packed form. Built by exhaustive search over the 256 packed
+    /// values so it agrees with the decoder for every input.
+    fn pack_trits(t: [u32; 5]) -> u32 {
+        for p in 0u32..256 {
+            if unpack_trits(p) == t {
+                return p;
+            }
+        }
+        unreachable!("every trit tuple has a packing")
+    }
+
+    /// Inverse of [`unpack_quints`]: encode three quints (each 0..4) into
+    /// the 7-bit packed form via exhaustive search.
+    fn pack_quints(q: [u32; 3]) -> u32 {
+        for p in 0u32..128 {
+            if unpack_quints(p) == q {
+                return p;
+            }
+        }
+        unreachable!("every quint tuple has a packing")
+    }
+
+    #[test]
     fn surface_decode_sizes_output() {
         let data = vec![0u8; 16 * 4]; // 2x2 blocks of 4x4 -> 8x8 surface
         let out = decode_astc_ldr(&data, 8, 8, 4, 4);

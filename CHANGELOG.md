@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **ASTC LDR multi-partition + dual-plane decode tests (round 348).**
+  Two hand-built block tests now exercise the harder decode paths
+  end-to-end against spec-constructed inputs: `two_partition_routes_texels_by_pattern`
+  builds a two-partition block (selector-00 single-CEM path, `hash52`
+  partition pattern) and confirms every texel decodes to its partition's
+  colour with the two partitions distinct; `dual_plane_alpha_uses_second_plane`
+  builds a dual-plane CEM-12 block with CCS = 3 and confirms RGB tracks
+  weight plane 0 while alpha tracks plane 1 independently. Both drive the
+  quint/3-bit colour ISE range via a new in-test BISE encoder
+  (`encode_ise_into` + exhaustive-search `pack_trits`/`pack_quints`
+  inverses of the decoder's unpackers).
+
 ### Fixed
 
 - **ASTC LDR high-precision weight ranges + dual-plane colour budget
