@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **ASTC LDR high-precision weight ranges + dual-plane colour budget
+  (round 348).** Three `P = 1` rows of the ASTC weight-range table
+  (Khronos DFS 1.4 Table 23.9, §23.10) decoded with the wrong number of
+  trailing bits: ρ = 011 (0..11) used 1 bit instead of 2, ρ = 101
+  (0..19) used a 1-bit quint instead of 2-bit, and ρ = 110 (0..23) used
+  2 bits instead of 3 — so every high-precision weight grid produced
+  wrong weights and mis-sized the weight ISE. The colour-endpoint ISE
+  budget for single-partition **dual-plane** blocks also failed to
+  reserve the two colour-component-selector (CCS) bits per §23.21 (Data
+  Size Determination), letting `pick_color_range` overshoot by two bits.
+  Both are now spec-exact, covered by a new `weight_range_table_matches_spec`
+  unit test.
+
 ### Added
 
 - **ASTC LDR block decode (round 341).** A from-scratch ASTC LDR-Profile

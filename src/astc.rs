@@ -408,12 +408,12 @@ fn weight_range(r: u32, p: u32) -> Option<WeightRange> {
         (0b101, 0) => make(false, true, 0),  // 0..4
         (0b110, 0) => make(true, false, 1),  // 0..5
         (0b111, 0) => make(false, false, 3), // 0..7
-        (0b010, 1) => make(false, true, 1),  // 0..9
-        (0b011, 1) => make(true, false, 1),  // 0..11
-        (0b100, 1) => make(false, false, 4), // 0..15
-        (0b101, 1) => make(false, true, 1),  // 0..19 (quint,2bits)
-        (0b110, 1) => make(true, false, 2),  // 0..23
-        (0b111, 1) => make(false, false, 5), // 0..31
+        (0b010, 1) => make(false, true, 1),  // 0..9  (quint, 1 bit)
+        (0b011, 1) => make(true, false, 2),  // 0..11 (trit, 2 bits)
+        (0b100, 1) => make(false, false, 4), // 0..15 (4 bits)
+        (0b101, 1) => make(false, true, 2),  // 0..19 (quint, 2 bits)
+        (0b110, 1) => make(true, false, 3),  // 0..23 (trit, 3 bits)
+        (0b111, 1) => make(false, false, 5), // 0..31 (5 bits)
         _ => None,
     }
 }
@@ -1170,10 +1170,18 @@ pub fn decode_astc_ldr_block(data: &[u8; 16], block_w: u32, block_h: u32) -> Vec
     }
 
     // Colour ISE range: pick the largest range that fits the colour
-    // integers in the available bit budget. The available budget is
-    // from `color_stream_start` up to the bottom of the
-    // weight+low-CEM region.
-    let color_region_top = config_below - color_class_extra_bits;
+    // integers in the available bit budget. Per §23.21 (Data Size
+    // Determination), the budget for the colour-endpoint ISE is
+    //   remaining_bits = 128 − config_bits − weight_bits
+    // where `config_bits` accounts for the block-mode + partition +
+    // per-partition CEM fields and, when dual-plane is active, the two
+    // colour-component-selector (CCS) bits. The colour data occupies the
+    // bits from `color_stream_start` up to the bottom of the weight /
+    // additional-CEM / CCS region; `color_region_top` marks that bottom
+    // (it excludes the per-partition low-CEM `M` bits and the CCS bits,
+    // all of which sit just below the weight data).
+    let ccs_bits = if mode.dual_plane { 2 } else { 0 };
+    let color_region_top = config_below - color_class_extra_bits - ccs_bits;
     if color_region_top <= color_stream_start {
         return err;
     }
@@ -1216,10 +1224,11 @@ pub fn decode_astc_ldr_block(data: &[u8; 16], block_w: u32, block_h: u32) -> Vec
         .map(|&w| unquant_weight(w, mode.range))
         .collect();
 
-    // Colour component selector for dual-plane mode (2 bits just below
-    // the colour-class low bits / above weights). §23.19.
+    // Colour component selector for dual-plane mode: the 2 CCS bits sit
+    // directly below the weight data and the per-partition additional
+    // (`M`) CEM bits, i.e. at the top of the CCS region (§23.9 / §23.19).
     let ccs = if mode.dual_plane {
-        let p = color_region_top - 2;
+        let p = config_below - color_class_extra_bits - 2;
         block.bits(p, 2)
     } else {
         0
@@ -1491,6 +1500,34 @@ mod tests {
     fn trit_unpack_zero() {
         // All zero packed bits -> all zero trits.
         assert_eq!(unpack_trits(0), [0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn weight_range_table_matches_spec() {
+        // Every (ρ, P) entry of Table 23.9 maps to the documented
+        // 0..=max weight range; the two ρ codes 000/001 are invalid.
+        // P = 0 (low precision):
+        assert_eq!(weight_range(0b000, 0), None);
+        assert_eq!(weight_range(0b001, 0), None);
+        assert_eq!(weight_range(0b010, 0).unwrap().max, 1); // 0..1
+        assert_eq!(weight_range(0b011, 0).unwrap().max, 2); // 0..2
+        assert_eq!(weight_range(0b100, 0).unwrap().max, 3); // 0..3
+        assert_eq!(weight_range(0b101, 0).unwrap().max, 4); // 0..4
+        assert_eq!(weight_range(0b110, 0).unwrap().max, 5); // 0..5
+        assert_eq!(weight_range(0b111, 0).unwrap().max, 7); // 0..7
+                                                            // P = 1 (high precision):
+        assert_eq!(weight_range(0b000, 1), None);
+        assert_eq!(weight_range(0b001, 1), None);
+        assert_eq!(weight_range(0b010, 1).unwrap().max, 9); // 0..9
+        assert_eq!(weight_range(0b011, 1).unwrap().max, 11); // 0..11
+        assert_eq!(weight_range(0b100, 1).unwrap().max, 15); // 0..15
+                                                             // The 0..19 quint/2-bit entry (the one previously mis-coded as
+                                                             // 0..9 quint/1-bit).
+        let r = weight_range(0b101, 1).unwrap();
+        assert_eq!(r.max, 19);
+        assert!(r.quints && !r.trits && r.bits == 2);
+        assert_eq!(weight_range(0b110, 1).unwrap().max, 23); // 0..23
+        assert_eq!(weight_range(0b111, 1).unwrap().max, 31); // 0..31
     }
 
     #[test]
