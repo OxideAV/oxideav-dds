@@ -209,6 +209,7 @@ pub mod error;
 pub mod hdr;
 pub mod image;
 pub mod types;
+pub mod yuv;
 
 #[cfg(feature = "registry")]
 pub mod registry;
@@ -252,6 +253,11 @@ pub use image::{CubemapFace, DdsImage, DdsPixelFormat, DdsPlane, DdsSurface};
 pub use types::{
     DdsHeader, DdsHeaderDxt10, DdsPixelFormatHeader, DxgiFormat, DDS_HEADER_DXT10_SIZE,
     DDS_HEADER_SIZE, DDS_MAGIC, DDS_PIXELFORMAT_SIZE,
+};
+pub use yuv::{
+    decode_420_opaque_surface, decode_ayuv_surface, decode_nv11_surface, decode_nv12_surface,
+    decode_p010_surface, decode_p016_surface, decode_y210_surface, decode_y216_surface,
+    decode_y410_surface, decode_y416_surface, decode_yuy2_surface, YuvFormat, YuvSampling,
 };
 
 #[cfg(feature = "registry")]

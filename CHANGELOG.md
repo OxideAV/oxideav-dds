@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **YUV (video) DXGI surface decode — `src/yuv.rs` (round 354).** New
+  `yuv` module decoding the eleven well-documented YUV `DXGI_FORMAT`
+  values that previously resolved to `DdsError::Unsupported`: the 4:4:4
+  packed `AYUV` / `Y410` / `Y416`, the 4:2:2 packed `YUY2` / `Y210` /
+  `Y216`, the 4:2:0 planar `NV12` / `P010` / `P016` / `420_OPAQUE`, and
+  the 4:1:1 planar `NV11`. Each surface decoder (`decode_ayuv_surface`,
+  `decode_yuy2_surface`, `decode_nv12_surface`, `decode_nv11_surface`,
+  `decode_y410_surface`, `decode_y416_surface`, `decode_y210_surface`,
+  `decode_y216_surface`, `decode_p010_surface`, `decode_p016_surface`,
+  `decode_420_opaque_surface`) expands its packed or planar layout to
+  interleaved full-resolution `[Y, U, V, A]` samples (`u8` for the 8-bit
+  formats, `u16` for the 10/16-bit formats), replicating chroma across
+  the subsampled neighbourhood and forcing opaque alpha where the format
+  carries none. A `YuvFormat` descriptor exposes per-format `sampling`,
+  `stored_bits`, `has_alpha`, exact `surface_size_bytes`, and the
+  width/height divisibility constraints; the channel mappings, plane
+  structure, subsampling, byte sizing and dimension rules all come from
+  Microsoft's public `DXGI_FORMAT` enumeration page. Decode is
+  matrix-agnostic (no YUV→RGB conversion — the colour matrix is not part
+  of the DDS container spec), mirroring how `hdr` returns stored channel
+  values. The decoders are recognised end-to-end by `parse_dds`, which
+  now sizes and carries these surfaces' raw bytes instead of rejecting
+  the file.
+
 - **ASTC LDR multi-partition + dual-plane decode tests (round 348).**
   Two hand-built block tests now exercise the harder decode paths
   end-to-end against spec-constructed inputs: `two_partition_routes_texels_by_pattern`
