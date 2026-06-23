@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Depth / depth-stencil surface decode — `src/depth.rs` (round 363).**
+  New `depth` module decoding the four depth `DXGI_FORMAT` values whose
+  byte packing Microsoft fully specifies and that previously had no
+  `DdsPixelFormat` mapping: `D16_UNORM` (value 55), `D32_FLOAT` (40),
+  `D24_UNORM_S8_UINT` (45) and `D32_FLOAT_S8X24_UINT` (20). `parse_dds`
+  now recognises them from the DX10 `dxgi_format` (the typeless views
+  `R24G8_TYPELESS` / `R32G8X24_TYPELESS` over the same memory route to
+  the typed depth-stencil variant), sizes the surfaces, and carries the
+  bytes verbatim. `decode_depth_d16_surface` / `decode_depth_d32_surface`
+  expand the single-component depths to a flat `Vec<f32>` (the UNORM
+  depth normalised `÷ (2^16 − 1)` onto `[0, 1]`, the float depth
+  verbatim); `decode_depth_d24s8_surface` / `decode_depth_d32s8_surface`
+  expand the combined depth+stencil layouts to `Vec<DepthStencil>`
+  (24-bit depth `÷ (2^24 − 1)` + 8-bit stencil for D24S8; verbatim `f32`
+  depth + 8-bit stencil for D32S8, the upper 24 bits of the second word
+  ignored). The bit fields and packing all come from Microsoft's public
+  `DXGI_FORMAT` enumeration page. Depth surfaces are decode-only (no
+  encoder). All four decoders use `checked_` arithmetic and return
+  `DdsError::InvalidData` rather than panicking on a short buffer.
+
 - **YUV (video) DXGI surface decode — `src/yuv.rs` (round 354).** New
   `yuv` module decoding the eleven well-documented YUV `DXGI_FORMAT`
   values that previously resolved to `DdsError::Unsupported`: the 4:4:4

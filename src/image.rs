@@ -298,6 +298,31 @@ pub enum DdsPixelFormat {
     /// tangent-space normal map.
     R16G16Snorm,
 
+    /// 16 bpp depth surface — one `u16` per texel holding a
+    /// single-component unsigned-normalised depth value onto `[0, 1]`
+    /// (DXGI `D16_UNORM`, value 55). Same on-disk packing as `R16_UNORM`;
+    /// decode with [`crate::decode_depth_d16_surface`].
+    D16Unorm,
+    /// 32 bpp depth surface — one little-endian `f32` per texel holding a
+    /// single-component floating-point depth value (DXGI `D32_FLOAT`,
+    /// value 40). Same on-disk packing as `R32_FLOAT`; decode with
+    /// [`crate::decode_depth_d32_surface`].
+    D32Float,
+    /// 32 bpp packed depth+stencil surface — one little-endian `u32` per
+    /// texel, the low 24 bits an unsigned-normalised depth onto `[0, 1]`
+    /// (÷ `2^24 − 1`) and the high 8 bits a `u8` stencil index (DXGI
+    /// `D24_UNORM_S8_UINT`, value 45; the typeless view `R24G8_TYPELESS`
+    /// shares the packing). Decode with
+    /// [`crate::decode_depth_d24s8_surface`].
+    D24UnormS8Uint,
+    /// 64 bpp packed depth+stencil surface — two little-endian `u32`
+    /// words per texel: the first an `f32` floating-point depth, the
+    /// second a `u8` stencil index in its low 8 bits with the upper 24
+    /// bits unused (DXGI `D32_FLOAT_S8X24_UINT`, value 20; the typeless
+    /// view `R32G8X24_TYPELESS` shares the packing). Decode with
+    /// [`crate::decode_depth_d32s8_surface`].
+    D32FloatS8X24Uint,
+
     /// ASTC LDR block-compressed surface. Every ASTC block is a fixed
     /// 128 bits (16 bytes) and covers a `block_w × block_h` texel
     /// footprint (one of the 14 LDR 2D footprints, 4×4 … 12×12). The
@@ -358,6 +383,10 @@ impl DdsPixelFormat {
             | Self::R32Uint
             | Self::R32Sint => 32,
             Self::R8G8B8A8Snorm | Self::R16G16Unorm | Self::R16G16Snorm => 32,
+            // Depth / depth-stencil surfaces.
+            Self::D16Unorm => 16,
+            Self::D32Float | Self::D24UnormS8Uint => 32,
+            Self::D32FloatS8X24Uint => 64,
             Self::R16G16B16A16Unorm
             | Self::R16G16B16A16Snorm
             | Self::R16G16B16A16Float
@@ -432,6 +461,10 @@ impl DdsPixelFormat {
             | Self::R32Uint
             | Self::R32Sint => 4,
             Self::R8G8B8A8Snorm | Self::R16G16Unorm | Self::R16G16Snorm => 4,
+            // Depth / depth-stencil surfaces.
+            Self::D16Unorm => 2,
+            Self::D32Float | Self::D24UnormS8Uint => 4,
+            Self::D32FloatS8X24Uint => 8,
             Self::R16G16B16A16Unorm
             | Self::R16G16B16A16Snorm
             | Self::R16G16B16A16Float
@@ -551,6 +584,10 @@ impl DdsPixelFormat {
             Self::R16Snorm => "R16_SNORM",
             Self::R16G16Unorm => "R16G16_UNORM",
             Self::R16G16Snorm => "R16G16_SNORM",
+            Self::D16Unorm => "D16_UNORM",
+            Self::D32Float => "D32_FLOAT",
+            Self::D24UnormS8Uint => "D24_UNORM_S8_UINT",
+            Self::D32FloatS8X24Uint => "D32_FLOAT_S8X24_UINT",
             Self::Astc { srgb, .. } => {
                 if srgb {
                     "ASTC_LDR_SRGB"

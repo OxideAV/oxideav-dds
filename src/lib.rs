@@ -204,6 +204,7 @@ pub mod bcn_enc;
 #[cfg(feature = "registry")]
 pub mod container;
 pub mod decoder;
+pub mod depth;
 pub mod encoder;
 pub mod error;
 pub mod hdr;
@@ -236,6 +237,10 @@ pub use bcn_enc::{
     encode_bc5_unorm,
 };
 pub use decoder::parse_dds;
+pub use depth::{
+    decode_depth_d16_surface, decode_depth_d24s8_surface, decode_depth_d32_surface,
+    decode_depth_d32s8_surface, DepthStencil,
+};
 pub use encoder::{
     encode_dds_block_compressed, encode_dds_block_compressed_from_rgba8, encode_dds_uncompressed,
     encode_dds_volume,

@@ -402,6 +402,16 @@ fn pixel_format_from_dxgi(d: DxgiFormat) -> Option<DdsPixelFormat> {
         DxgiFormat::R16Snorm => DdsPixelFormat::R16Snorm,
         DxgiFormat::R16G16Unorm => DdsPixelFormat::R16G16Unorm,
         DxgiFormat::R16G16Snorm => DdsPixelFormat::R16G16Snorm,
+        // Depth / depth-stencil surfaces. The byte packing is fully
+        // documented in the DXGI format enumeration; the typeless "view"
+        // formats over the same memory (R32G8X24 / R24G8) share the
+        // packing and route to the typed depth-stencil variant.
+        DxgiFormat::D16Unorm => DdsPixelFormat::D16Unorm,
+        DxgiFormat::D32Float => DdsPixelFormat::D32Float,
+        DxgiFormat::D24UnormS8Uint | DxgiFormat::R24G8Typeless => DdsPixelFormat::D24UnormS8Uint,
+        DxgiFormat::D32FloatS8X24Uint | DxgiFormat::R32G8X24Typeless => {
+            DdsPixelFormat::D32FloatS8X24Uint
+        }
         // ASTC LDR block-compressed surfaces (DXGI 133..=187). The
         // footprint is carried on the variant so the non-4×4 block
         // geometry sizes correctly; `_UNORM_SRGB` sets the `srgb` flag.
@@ -444,10 +454,10 @@ fn pixel_format_from_dxgi(d: DxgiFormat) -> Option<DdsPixelFormat> {
         DxgiFormat::Y210 => DdsPixelFormat::Yuv(crate::yuv::YuvFormat::Y210),
         DxgiFormat::Y216 => DdsPixelFormat::Yuv(crate::yuv::YuvFormat::Y216),
         DxgiFormat::Nv11 => DdsPixelFormat::Yuv(crate::yuv::YuvFormat::Nv11),
-        // Everything else (32-bit float-typeless, depth/stencil, the
-        // packed/planar P208/V208/V408 video formats whose byte layout
-        // Microsoft does not document, palette-8) has no
-        // [`DdsPixelFormat`] mapping yet.
+        // Everything else (the colour `_TYPELESS` views whose runtime
+        // interpretation is genuinely ambiguous, the packed/planar
+        // P208/V208/V408 video formats whose byte layout Microsoft does
+        // not document, palette-8) has no [`DdsPixelFormat`] mapping yet.
         _ => return None,
     })
 }
