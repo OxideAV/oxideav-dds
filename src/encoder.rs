@@ -300,10 +300,20 @@ pub fn encode_dds_uncompressed(image: &DdsImage) -> Result<Vec<u8>> {
             "zero-sized surface: {width}x{height}"
         )));
     }
-    let bpp = image
-        .pixel_format
-        .bytes_per_pixel()
-        .expect("checked uncompressed above");
+    let bpp = match image.pixel_format.bytes_per_pixel() {
+        Some(bpp) => bpp,
+        // YUV (planar / packed / sub-sampled) and depth-stencil surfaces
+        // report no flat bytes-per-pixel; the ASTC + block-compressed
+        // guards above already returned, so reaching here means a format
+        // this uncompressed emitter cannot serialise. Fail gracefully
+        // rather than panicking on the `None`.
+        None => {
+            return Err(DdsError::unsupported(format!(
+                "{} has no flat bytes-per-pixel layout and cannot be serialised by this uncompressed emitter",
+                image.pixel_format.name()
+            )));
+        }
+    };
     let pitch = width as u64 * bpp as u64;
     let need = pitch * height as u64;
     if (plane.data.len() as u64) < need {
@@ -492,10 +502,20 @@ pub fn encode_dds_volume(image: &DdsImage) -> Result<Vec<u8>> {
             "a volume texture cannot also be a cubemap or texture array".to_string(),
         ));
     }
-    let bpp = image
-        .pixel_format
-        .bytes_per_pixel()
-        .expect("checked uncompressed above");
+    let bpp = match image.pixel_format.bytes_per_pixel() {
+        Some(bpp) => bpp,
+        // YUV (planar / packed / sub-sampled) and depth-stencil surfaces
+        // report no flat bytes-per-pixel; the ASTC + block-compressed
+        // guards above already returned, so reaching here means a format
+        // this uncompressed emitter cannot serialise. Fail gracefully
+        // rather than panicking on the `None`.
+        None => {
+            return Err(DdsError::unsupported(format!(
+                "{} has no flat bytes-per-pixel layout and cannot be serialised by this uncompressed emitter",
+                image.pixel_format.name()
+            )));
+        }
+    };
 
     let mip = image.mip_map_count.max(1);
     let with_mips = mip > 1;

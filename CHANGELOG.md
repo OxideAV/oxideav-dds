@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`encode_dds_uncompressed` / `encode_dds_volume` no longer panic on a
+  format with no flat bytes-per-pixel.** Both emitters guarded against
+  ASTC and block-compressed inputs but then `expect`-ed
+  `DdsPixelFormat::bytes_per_pixel()` to be `Some`, which panicked for
+  YUV (planar / packed / sub-sampled) surfaces that report `None`. They
+  now return `DdsError::Unsupported` instead. Caught by the `roundtrip`
+  cargo-fuzz target.
+
 ### Added
 
 - **Depth / depth-stencil surface decode — `src/depth.rs` (round 363).**

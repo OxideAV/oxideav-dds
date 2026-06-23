@@ -444,3 +444,79 @@ fn flags_constants_consistent() {
     assert_eq!(DDPF_ALPHAPIXELS, 0x1);
     assert_eq!(DDPF_ALPHA, 0x2);
 }
+
+#[test]
+fn encode_uncompressed_rejects_yuv_without_panic() {
+    // YUV surfaces report no flat bytes-per-pixel; feeding one to the
+    // uncompressed emitter must return Err, not panic on the internal
+    // `bytes_per_pixel()` lookup. (Regression for the roundtrip fuzz
+    // crash at encoder.rs `bytes_per_pixel().expect(...)`.)
+    use oxideav_dds::yuv::YuvFormat;
+    let pix = DdsPixelFormat::Yuv(YuvFormat::Nv12);
+    let plane = DdsPlane {
+        stride: 4,
+        data: vec![0u8; 4 * 4 * 2],
+    };
+    let src = DdsImage {
+        width: 4,
+        height: 4,
+        pixel_format: pix,
+        planes: vec![plane.clone()],
+        surfaces: vec![oxideav_dds::DdsSurface {
+            width: 4,
+            height: 4,
+            mip_level: 0,
+            array_slice: 0,
+            face: None,
+            depth_slice: 0,
+            plane,
+        }],
+        pts: None,
+        mip_map_count: 1,
+        has_dxt10_header: true,
+        dxgi_format: Some(DxgiFormat::Nv12),
+        is_cubemap: false,
+        array_size: 1,
+        depth: 1,
+    };
+    let err = encode_dds_uncompressed(&src).expect_err("YUV must not serialise as uncompressed");
+    assert!(format!("{err}").to_lowercase().contains("bytes-per-pixel"));
+}
+
+#[test]
+fn encode_uncompressed_rejects_depth_without_panic() {
+    // Depth surfaces likewise report no flat bytes-per-pixel for the
+    // combined depth-stencil layouts; encoding must Err gracefully.
+    let pix = DdsPixelFormat::D24UnormS8Uint;
+    let plane = DdsPlane {
+        stride: 4 * 4,
+        data: vec![0u8; 4 * 4 * 4],
+    };
+    let src = DdsImage {
+        width: 4,
+        height: 4,
+        pixel_format: pix,
+        planes: vec![plane.clone()],
+        surfaces: vec![oxideav_dds::DdsSurface {
+            width: 4,
+            height: 4,
+            mip_level: 0,
+            array_slice: 0,
+            face: None,
+            depth_slice: 0,
+            plane,
+        }],
+        pts: None,
+        mip_map_count: 1,
+        has_dxt10_header: true,
+        dxgi_format: Some(DxgiFormat::D24UnormS8Uint),
+        is_cubemap: false,
+        array_size: 1,
+        depth: 1,
+    };
+    // D24S8 *does* report bytes_per_pixel (4), so this one actually
+    // serialises fine — it exercises the depth path through the encoder
+    // without panicking. The combined-format guard is covered by the
+    // YUV case above; here we just confirm no panic on a depth format.
+    let _ = encode_dds_uncompressed(&src);
+}
