@@ -57,6 +57,21 @@ shader reads as floats — expand to interleaved `f32` via
 documented min / second-min clamp to `-1.0`). `R8G8_SNORM` /
 `R16G16_SNORM` are the classic tangent-space normal-map encodings.
 
+**Depth / depth-stencil decode.** The four depth `DXGI_FORMAT` layouts
+whose bit packing Microsoft fully documents decode to depth (and where
+present stencil) values: `D16_UNORM` (`decode_depth_d16_surface` → `f32`
+depth, `÷ (2^16 − 1)` onto `[0, 1]`), `D32_FLOAT`
+(`decode_depth_d32_surface` → `f32` depth, verbatim),
+`D24_UNORM_S8_UINT` (`decode_depth_d24s8_surface` → `DepthStencil`:
+24-bit depth `÷ (2^24 − 1)` plus a `u8` stencil index) and
+`D32_FLOAT_S8X24_UINT` (`decode_depth_d32s8_surface` → `DepthStencil`:
+verbatim `f32` depth plus a `u8` stencil, the upper 24 bits of the
+second 32-bit word ignored). The typeless views over the same memory
+(`R24G8_TYPELESS`, `R32G8X24_TYPELESS`) are recognised at parse time and
+route to the corresponding depth-stencil variant. No depth-range
+remapping is applied — that is a viewport transform, not part of the
+surface encoding. Depth surfaces are decode-only.
+
 **Block-compressed decode.**
 
 - `decode_bc1`..`decode_bc5` + `decode_bc7` expand to RGBA8 / R8 / RG8.
@@ -121,10 +136,14 @@ plus the Windows 8.1-era ASTC range (133..=187) is enumerated by name in
 each in `_UINT` and `_SINT`) are sized and decoded, the eleven
 documented YUV (video) formats (`AYUV` / `Y410` / `Y416` / `YUY2` /
 `Y210` / `Y216` / `NV12` / `P010` / `P016` / `420_OPAQUE` / `NV11`) are
-sized and decoded to interleaved `[Y, U, V, A]` samples, while the
-remaining depth/stencil, the three under-documented video formats
-(`P208` / `V208` / `V408`), and palette formats are recognised but
-return `DdsError::Unsupported` from the layout resolver.
+sized and decoded to interleaved `[Y, U, V, A]` samples, the four
+documented depth / depth-stencil formats (`D16_UNORM` / `D32_FLOAT` /
+`D24_UNORM_S8_UINT` / `D32_FLOAT_S8X24_UINT`, plus the `R24G8` /
+`R32G8X24` typeless views) are sized and decoded to depth (and stencil)
+values, while the colour `_TYPELESS` views whose runtime interpretation
+is ambiguous, the three under-documented video formats (`P208` /
+`V208` / `V408`), and palette formats are recognised but return
+`DdsError::Unsupported` from the layout resolver.
 
 ## Robustness
 
@@ -132,9 +151,9 @@ return `DdsError::Unsupported` from the layout resolver.
   mutates one header field at a time and asserts `parse_dds` returns
   `Err` rather than panicking. Surface-size and block-grid arithmetic
   uses `checked_` / `saturating_` multiplication throughout.
-- Seven `cargo-fuzz` panic-free targets under `fuzz/` (`parse_dds`,
+- Eight `cargo-fuzz` panic-free targets under `fuzz/` (`parse_dds`,
   `decode_bcn`, `decode_bc6h`, `decode_bc7`, `decode_astc`,
-  `decode_yuv`, `roundtrip`), driven daily by
+  `decode_yuv`, `decode_depth`, `roundtrip`), driven daily by
   `.github/workflows/fuzz.yml`. The ASTC
   block + surface decoders are additionally exercised by
   `tests/astc_robustness.rs` (a 70k random-block sweep over every
