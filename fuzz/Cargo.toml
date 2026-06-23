@@ -92,3 +92,9 @@ name = "decode_yuv"
 path = "fuzz_targets/decode_yuv.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "decode_depth"
+path = "fuzz_targets/decode_depth.rs"
+test = false
+doc = false
