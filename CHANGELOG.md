@@ -19,6 +19,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Single-aspect depth/stencil view-format decode — `src/depth.rs`
+  (round 367).** Four more `DXGI_FORMAT` values that previously resolved
+  to `DdsError::Unsupported` now decode: the depth-only / stencil-only
+  "view" formats over the same memory the combined depth-stencil
+  surfaces occupy. `R24_UNORM_X8_TYPELESS` (value 46) and
+  `X24_TYPELESS_G8_UINT` (value 47) are the depth and stencil aspects of
+  `D24_UNORM_S8_UINT` memory (one 32-bit word per texel); `R32_FLOAT_X8X24_TYPELESS`
+  (value 21) and `X32_TYPELESS_G8X24_UINT` (value 22) are the depth and
+  stencil aspects of `D32_FLOAT_S8X24_UINT` memory (two 32-bit words per
+  texel). New `decode_depth_r24_unorm_x8_surface` / `decode_depth_r32_float_x8x24_surface`
+  expand the depth aspect to a flat `Vec<f32>` (the D24 view normalises
+  `÷ (2^24 − 1)` onto `[0, 1]`, the D32 view returns the verbatim `f32`),
+  ignoring the typeless other-aspect bits per Microsoft's documented "N
+  bits unused" wording; `decode_depth_x24_g8_uint_surface` /
+  `decode_depth_x32_g8x24_uint_surface` expand the stencil aspect to a
+  flat `Vec<u8>`, masking off the typeless padding. `parse_dds` resolves
+  all four from the `DDS_HEADER_DXT10` `dxgi_format`, sizing them at the
+  same 4 / 8 bytes per texel as the combined surfaces they view. Four new
+  `DdsPixelFormat` variants carry them with their bits-/bytes-per-pixel
+  and name entries. The bit fields and aspect semantics come from
+  Microsoft's public `DXGI_FORMAT` enumeration page. These views are
+  decode-only (no encoder). Twelve new tests: eight `depth`-module unit
+  tests (each view extracting its aspect while ignoring the other,
+  combined-vs-view agreement for both pairs, short-buffer rejection) plus
+  four `tests/depth_surfaces.rs` end-to-end DX10-parse tests and one
+  64-bit-view sizing test. The `decode_depth` cargo-fuzz target now
+  drives all eight depth decoders (its format selector widened from 4 to
+  8) so the new views are exercised panic-free on arbitrary input.
+
 - **Depth / depth-stencil surface decode — `src/depth.rs` (round 363).**
   New `depth` module decoding the four depth `DXGI_FORMAT` values whose
   byte packing Microsoft fully specifies and that previously had no

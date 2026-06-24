@@ -239,7 +239,9 @@ pub use bcn_enc::{
 pub use decoder::parse_dds;
 pub use depth::{
     decode_depth_d16_surface, decode_depth_d24s8_surface, decode_depth_d32_surface,
-    decode_depth_d32s8_surface, DepthStencil,
+    decode_depth_d32s8_surface, decode_depth_r24_unorm_x8_surface,
+    decode_depth_r32_float_x8x24_surface, decode_depth_x24_g8_uint_surface,
+    decode_depth_x32_g8x24_uint_surface, DepthStencil,
 };
 pub use encoder::{
     encode_dds_block_compressed, encode_dds_block_compressed_from_rgba8, encode_dds_uncompressed,

@@ -323,6 +323,38 @@ pub enum DdsPixelFormat {
     /// [`crate::decode_depth_d32s8_surface`].
     D32FloatS8X24Uint,
 
+    /// 32 bpp depth-only **view** over `D24_UNORM_S8_UINT` memory — one
+    /// little-endian `u32` per texel whose low 24 bits are the
+    /// unsigned-normalised depth onto `[0, 1]` (÷ `2^24 − 1`) and whose
+    /// high 8 bits are typeless padding that this view ignores (DXGI
+    /// `R24_UNORM_X8_TYPELESS`, value 46 — "24 bits red channel and 8
+    /// bits unused"). Decode with
+    /// [`crate::decode_depth_r24_unorm_x8_surface`].
+    R24UnormX8Typeless,
+    /// 32 bpp stencil-only **view** over `D24_UNORM_S8_UINT` memory — one
+    /// little-endian `u32` per texel whose low 24 bits are typeless
+    /// padding this view ignores and whose high 8 bits are the `u8`
+    /// stencil index (DXGI `X24_TYPELESS_G8_UINT`, value 47 — "24 bits
+    /// unused and 8 bits green channel"). Decode with
+    /// [`crate::decode_depth_x24_g8_uint_surface`].
+    X24TypelessG8Uint,
+    /// 64 bpp depth-only **view** over `D32_FLOAT_S8X24_UINT` memory —
+    /// two little-endian `u32` words per texel: the first is the
+    /// floating-point depth (returned verbatim as `f32`), the second is
+    /// 8 bits stencil + 24 bits padding that this view ignores entirely
+    /// (DXGI `R32_FLOAT_X8X24_TYPELESS`, value 21 — "32-bit red channel,
+    /// 8 bits are unused, and 24 bits are unused"). Decode with
+    /// [`crate::decode_depth_r32_float_x8x24_surface`].
+    R32FloatX8X24Typeless,
+    /// 64 bpp stencil-only **view** over `D32_FLOAT_S8X24_UINT` memory —
+    /// two little-endian `u32` words per texel: the first (32-bit depth)
+    /// is typeless padding this view ignores, the second holds the `u8`
+    /// stencil index in its low 8 bits with the upper 24 bits unused
+    /// (DXGI `X32_TYPELESS_G8X24_UINT`, value 22 — "32 bits unused, 8
+    /// bits for green channel, and 24 bits are unused"). Decode with
+    /// [`crate::decode_depth_x32_g8x24_uint_surface`].
+    X32TypelessG8X24Uint,
+
     /// ASTC LDR block-compressed surface. Every ASTC block is a fixed
     /// 128 bits (16 bytes) and covers a `block_w × block_h` texel
     /// footprint (one of the 14 LDR 2D footprints, 4×4 … 12×12). The
@@ -387,6 +419,12 @@ impl DdsPixelFormat {
             Self::D16Unorm => 16,
             Self::D32Float | Self::D24UnormS8Uint => 32,
             Self::D32FloatS8X24Uint => 64,
+            // Single-aspect depth/stencil views share the combined
+            // surface's footprint: the D24S8 views are 32-bit, the
+            // D32S8X24 views are 64-bit (one stored stencil byte + 24
+            // unused bits per the documented padding).
+            Self::R24UnormX8Typeless | Self::X24TypelessG8Uint => 32,
+            Self::R32FloatX8X24Typeless | Self::X32TypelessG8X24Uint => 64,
             Self::R16G16B16A16Unorm
             | Self::R16G16B16A16Snorm
             | Self::R16G16B16A16Float
@@ -465,6 +503,9 @@ impl DdsPixelFormat {
             Self::D16Unorm => 2,
             Self::D32Float | Self::D24UnormS8Uint => 4,
             Self::D32FloatS8X24Uint => 8,
+            // Single-aspect depth/stencil views over the same memory.
+            Self::R24UnormX8Typeless | Self::X24TypelessG8Uint => 4,
+            Self::R32FloatX8X24Typeless | Self::X32TypelessG8X24Uint => 8,
             Self::R16G16B16A16Unorm
             | Self::R16G16B16A16Snorm
             | Self::R16G16B16A16Float
@@ -588,6 +629,10 @@ impl DdsPixelFormat {
             Self::D32Float => "D32_FLOAT",
             Self::D24UnormS8Uint => "D24_UNORM_S8_UINT",
             Self::D32FloatS8X24Uint => "D32_FLOAT_S8X24_UINT",
+            Self::R24UnormX8Typeless => "R24_UNORM_X8_TYPELESS",
+            Self::X24TypelessG8Uint => "X24_TYPELESS_G8_UINT",
+            Self::R32FloatX8X24Typeless => "R32_FLOAT_X8X24_TYPELESS",
+            Self::X32TypelessG8X24Uint => "X32_TYPELESS_G8X24_UINT",
             Self::Astc { srgb, .. } => {
                 if srgb {
                     "ASTC_LDR_SRGB"

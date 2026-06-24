@@ -412,6 +412,15 @@ fn pixel_format_from_dxgi(d: DxgiFormat) -> Option<DdsPixelFormat> {
         DxgiFormat::D32FloatS8X24Uint | DxgiFormat::R32G8X24Typeless => {
             DdsPixelFormat::D32FloatS8X24Uint
         }
+        // Single-aspect depth/stencil "view" formats over the same
+        // depth-stencil memory: the documented bit packing exposes only
+        // the depth (R…) or only the stencil (X…G8…) component, leaving
+        // the other aspect as typeless padding. Same byte footprint as
+        // the combined D24S8 / D32S8X24 surfaces above.
+        DxgiFormat::R24UnormX8Typeless => DdsPixelFormat::R24UnormX8Typeless,
+        DxgiFormat::X24TypelessG8Uint => DdsPixelFormat::X24TypelessG8Uint,
+        DxgiFormat::R32FloatX8X24Typeless => DdsPixelFormat::R32FloatX8X24Typeless,
+        DxgiFormat::X32TypelessG8X24Uint => DdsPixelFormat::X32TypelessG8X24Uint,
         // ASTC LDR block-compressed surfaces (DXGI 133..=187). The
         // footprint is carried on the variant so the non-4×4 block
         // geometry sizes correctly; `_UNORM_SRGB` sets the `srgb` flag.
