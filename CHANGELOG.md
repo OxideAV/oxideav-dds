@@ -19,6 +19,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Plain colour `_TYPELESS` DXGI formats now sized + carried verbatim
+  (round 367).** Eight `_TYPELESS` colour formats that previously
+  resolved to `DdsError::Unsupported` are now resolved by `parse_dds`:
+  `R16_TYPELESS` (53), `R16G16_TYPELESS` (33), `R16G16B16A16_TYPELESS`
+  (9), `R32_TYPELESS` (39), `R32G32_TYPELESS` (15), `R32G32B32_TYPELESS`
+  (5), `R32G32B32A32_TYPELESS` (1) and `R10G10B10A2_TYPELESS` (23). A
+  typeless surface stores the exact same per-channel bytes as its typed
+  siblings but assigns no runtime interpretation, so each routes to its
+  byte-identical `_UINT` variant — whose decoder returns the stored words
+  uninterpreted, exactly matching the "uninterpreted bytes" semantics of
+  a typeless surface (the same byte-pass-through convention the already-
+  routed `R8_TYPELESS` → L8, `R8G8_TYPELESS` → A8L8, `R8G8B8A8_TYPELESS`
+  and `B8G8R8A8/X8_TYPELESS` views follow). `parse_dds` sizes them at the
+  documented 2 / 4 / 8 / 12 / 16 bytes per pixel and carries the bytes
+  verbatim instead of rejecting the file; the caller expands them with
+  the matching `decode_uint16_surface` / `decode_uint32_surface` /
+  `decode_r10g10b10a2_uint_surface` helper. The per-channel bit counts
+  come from Microsoft's public `DXGI_FORMAT` enumeration page. Nine new
+  end-to-end `tests/hdr_surfaces.rs` tests (one per format plus a 2×2
+  sizing check) confirm the resolved variant, the surface byte size, and
+  byte-exact decode.
+
 - **Single-aspect depth/stencil view-format decode — `src/depth.rs`
   (round 367).** Four more `DXGI_FORMAT` values that previously resolved
   to `DdsError::Unsupported` now decode: the depth-only / stencil-only

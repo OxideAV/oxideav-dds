@@ -463,10 +463,32 @@ fn pixel_format_from_dxgi(d: DxgiFormat) -> Option<DdsPixelFormat> {
         DxgiFormat::Y210 => DdsPixelFormat::Yuv(crate::yuv::YuvFormat::Y210),
         DxgiFormat::Y216 => DdsPixelFormat::Yuv(crate::yuv::YuvFormat::Y216),
         DxgiFormat::Nv11 => DdsPixelFormat::Yuv(crate::yuv::YuvFormat::Nv11),
-        // Everything else (the colour `_TYPELESS` views whose runtime
-        // interpretation is genuinely ambiguous, the packed/planar
-        // P208/V208/V408 video formats whose byte layout Microsoft does
-        // not document, palette-8) has no [`DdsPixelFormat`] mapping yet.
+        // Plain colour `_TYPELESS` formats. A typeless surface stores the
+        // exact same per-channel bytes as its typed siblings but assigns
+        // no interpretation — the runtime view (UINT / SINT / UNORM /
+        // FLOAT) is chosen later. We size and carry the bytes verbatim by
+        // routing each to its byte-identical `_UINT` variant, whose
+        // decoder returns the stored words uninterpreted — exactly the
+        // "uninterpreted bytes" semantics of a typeless surface. (The
+        // already-routed `R8_TYPELESS` → L8, `R8G8_TYPELESS` → A8L8,
+        // `R8G8B8A8_TYPELESS` → A8B8G8R8 and the `B8G8R8*` views above
+        // follow the same byte-pass-through convention.) The per-channel
+        // bit counts are from Microsoft's `DXGI_FORMAT` enumeration.
+        DxgiFormat::R16Typeless => DdsPixelFormat::R16Uint,
+        DxgiFormat::R16G16Typeless => DdsPixelFormat::R16G16Uint,
+        DxgiFormat::R16G16B16A16Typeless => DdsPixelFormat::R16G16B16A16Uint,
+        DxgiFormat::R32Typeless => DdsPixelFormat::R32Uint,
+        DxgiFormat::R32G32Typeless => DdsPixelFormat::R32G32Uint,
+        DxgiFormat::R32G32B32Typeless => DdsPixelFormat::R32G32B32Uint,
+        DxgiFormat::R32G32B32A32Typeless => DdsPixelFormat::R32G32B32A32Uint,
+        // R10G10B10A2_TYPELESS shares the 32-bit packed word of its
+        // UINT/UNORM siblings; route to the UINT decoder (stored integers,
+        // no normalisation).
+        DxgiFormat::R10G10B10A2Typeless => DdsPixelFormat::R10G10B10A2Uint,
+        // Everything else (the depth/colour-ambiguous views without a
+        // byte-identical typed sibling, the packed/planar P208/V208/V408
+        // video formats whose byte layout Microsoft does not document,
+        // palette-8) has no [`DdsPixelFormat`] mapping yet.
         _ => return None,
     })
 }

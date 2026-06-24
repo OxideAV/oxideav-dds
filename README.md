@@ -153,10 +153,14 @@ documented depth / depth-stencil formats (`D16_UNORM` / `D32_FLOAT` /
 depth-only / stencil-only views `R24_UNORM_X8_TYPELESS` /
 `X24_TYPELESS_G8_UINT` / `R32_FLOAT_X8X24_TYPELESS` /
 `X32_TYPELESS_G8X24_UINT`) are sized and decoded to depth (and stencil)
-values, while the colour `_TYPELESS` views whose runtime interpretation
-is ambiguous, the three under-documented video formats (`P208` /
-`V208` / `V408`), and palette formats are recognised but return
-`DdsError::Unsupported` from the layout resolver.
+values, and the plain colour `_TYPELESS` formats (`R16` / `R16G16` /
+`R16G16B16A16` / `R32` / `R32G32` / `R32G32B32` / `R32G32B32A32` /
+`R10G10B10A2`, joining the already-routed `R8` / `R8G8` / `R8G8B8A8` /
+`B8G8R8A8` / `B8G8R8X8` views) are sized and carried verbatim by routing
+to their byte-identical `_UINT` sibling, since a typeless surface stores
+the same bytes with no fixed interpretation. The three under-documented
+video formats (`P208` / `V208` / `V408`) and palette formats are
+recognised but return `DdsError::Unsupported` from the layout resolver.
 
 ## Robustness
 

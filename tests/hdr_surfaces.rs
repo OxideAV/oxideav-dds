@@ -781,3 +781,160 @@ fn snorm_surface_rejects_short_data() {
     let err = decode_snorm_surface(DdsPixelFormat::R16G16Snorm, 1, 1, &[0u8; 3]).unwrap_err();
     assert!(matches!(err, oxideav_dds::DdsError::InvalidData(_)));
 }
+
+// --- plain colour `_TYPELESS` formats route to byte-identical UINT -------
+//
+// A typeless surface stores the same per-channel bytes as its typed
+// siblings with no fixed interpretation; the crate carries the bytes
+// verbatim by routing each to its byte-identical `_UINT` variant. Each
+// test confirms the resolved variant, the correct surface byte size, and
+// (where a UINT decoder applies) that the stored words come back
+// uninterpreted.
+
+#[test]
+fn dx10_r16_typeless_routes_to_r16_uint() {
+    // DXGI_FORMAT_R16_TYPELESS = 53, 2 bytes/pixel.
+    let px = [0x02u8, 0x01, 0xfe, 0xff];
+    let dds = build_dx10_dds(53, 2, 1, &px);
+    let img = parse_dds(&dds).unwrap();
+    assert_eq!(img.pixel_format, DdsPixelFormat::R16Uint);
+    assert_eq!(img.surfaces[0].plane.data.len(), 4);
+    let out =
+        decode_uint16_surface(DdsPixelFormat::R16Uint, 2, 1, &img.surfaces[0].plane.data).unwrap();
+    assert_eq!(out, vec![0x0102, 0xfffe]);
+}
+
+#[test]
+fn dx10_r16g16_typeless_routes_to_r16g16_uint() {
+    // DXGI_FORMAT_R16G16_TYPELESS = 33, 4 bytes/pixel.
+    let px = [0x34u8, 0x12, 0x78, 0x56];
+    let dds = build_dx10_dds(33, 1, 1, &px);
+    let img = parse_dds(&dds).unwrap();
+    assert_eq!(img.pixel_format, DdsPixelFormat::R16G16Uint);
+    let out = decode_uint16_surface(
+        DdsPixelFormat::R16G16Uint,
+        1,
+        1,
+        &img.surfaces[0].plane.data,
+    )
+    .unwrap();
+    assert_eq!(out, vec![0x1234, 0x5678]);
+}
+
+#[test]
+fn dx10_r16g16b16a16_typeless_routes_to_uint() {
+    // DXGI_FORMAT_R16G16B16A16_TYPELESS = 9, 8 bytes/pixel.
+    let mut px = Vec::new();
+    for v in [1u16, 2, 3, 4] {
+        px.extend_from_slice(&v.to_le_bytes());
+    }
+    let dds = build_dx10_dds(9, 1, 1, &px);
+    let img = parse_dds(&dds).unwrap();
+    assert_eq!(img.pixel_format, DdsPixelFormat::R16G16B16A16Uint);
+    assert_eq!(img.surfaces[0].plane.data.len(), 8);
+    let out = decode_uint16_surface(
+        DdsPixelFormat::R16G16B16A16Uint,
+        1,
+        1,
+        &img.surfaces[0].plane.data,
+    )
+    .unwrap();
+    assert_eq!(out, vec![1, 2, 3, 4]);
+}
+
+#[test]
+fn dx10_r32_typeless_routes_to_r32_uint() {
+    // DXGI_FORMAT_R32_TYPELESS = 39, 4 bytes/pixel.
+    let px = 0x1234_5678u32.to_le_bytes();
+    let dds = build_dx10_dds(39, 1, 1, &px);
+    let img = parse_dds(&dds).unwrap();
+    assert_eq!(img.pixel_format, DdsPixelFormat::R32Uint);
+    let out =
+        decode_uint32_surface(DdsPixelFormat::R32Uint, 1, 1, &img.surfaces[0].plane.data).unwrap();
+    assert_eq!(out, vec![0x1234_5678]);
+}
+
+#[test]
+fn dx10_r32g32_typeless_routes_to_uint() {
+    // DXGI_FORMAT_R32G32_TYPELESS = 15, 8 bytes/pixel.
+    let mut px = Vec::new();
+    px.extend_from_slice(&7u32.to_le_bytes());
+    px.extend_from_slice(&9u32.to_le_bytes());
+    let dds = build_dx10_dds(15, 1, 1, &px);
+    let img = parse_dds(&dds).unwrap();
+    assert_eq!(img.pixel_format, DdsPixelFormat::R32G32Uint);
+    assert_eq!(img.surfaces[0].plane.data.len(), 8);
+    let out = decode_uint32_surface(
+        DdsPixelFormat::R32G32Uint,
+        1,
+        1,
+        &img.surfaces[0].plane.data,
+    )
+    .unwrap();
+    assert_eq!(out, vec![7, 9]);
+}
+
+#[test]
+fn dx10_r32g32b32_typeless_routes_to_uint_96bit() {
+    // DXGI_FORMAT_R32G32B32_TYPELESS = 5, 12 bytes/pixel.
+    let mut px = Vec::new();
+    for v in [11u32, 22, 33] {
+        px.extend_from_slice(&v.to_le_bytes());
+    }
+    let dds = build_dx10_dds(5, 1, 1, &px);
+    let img = parse_dds(&dds).unwrap();
+    assert_eq!(img.pixel_format, DdsPixelFormat::R32G32B32Uint);
+    assert_eq!(img.surfaces[0].plane.data.len(), 12);
+    let out = decode_uint32_surface(
+        DdsPixelFormat::R32G32B32Uint,
+        1,
+        1,
+        &img.surfaces[0].plane.data,
+    )
+    .unwrap();
+    assert_eq!(out, vec![11, 22, 33]);
+}
+
+#[test]
+fn dx10_r32g32b32a32_typeless_routes_to_uint_128bit() {
+    // DXGI_FORMAT_R32G32B32A32_TYPELESS = 1, 16 bytes/pixel.
+    let mut px = Vec::new();
+    for v in [100u32, 200, 300, 400] {
+        px.extend_from_slice(&v.to_le_bytes());
+    }
+    let dds = build_dx10_dds(1, 1, 1, &px);
+    let img = parse_dds(&dds).unwrap();
+    assert_eq!(img.pixel_format, DdsPixelFormat::R32G32B32A32Uint);
+    assert_eq!(img.surfaces[0].plane.data.len(), 16);
+    let out = decode_uint32_surface(
+        DdsPixelFormat::R32G32B32A32Uint,
+        1,
+        1,
+        &img.surfaces[0].plane.data,
+    )
+    .unwrap();
+    assert_eq!(out, vec![100, 200, 300, 400]);
+}
+
+#[test]
+fn dx10_r10g10b10a2_typeless_routes_to_uint() {
+    // DXGI_FORMAT_R10G10B10A2_TYPELESS = 23, 4 bytes/pixel, packed word.
+    // R=1, G=2, B=3, A=1 packed little-endian.
+    let word: u32 = 1 | (2 << 10) | (3 << 20) | (1 << 30);
+    let dds = build_dx10_dds(23, 1, 1, &word.to_le_bytes());
+    let img = parse_dds(&dds).unwrap();
+    assert_eq!(img.pixel_format, DdsPixelFormat::R10G10B10A2Uint);
+    assert_eq!(img.surfaces[0].plane.data.len(), 4);
+    let out = decode_r10g10b10a2_uint_surface(1, 1, &img.surfaces[0].plane.data).unwrap();
+    assert_eq!(out, vec![1, 2, 3, 1]);
+}
+
+#[test]
+fn r32g32b32a32_typeless_sizing_2x2() {
+    // 2x2 × 16 bytes = 64 bytes.
+    let px = vec![0u8; 64];
+    let dds = build_dx10_dds(1, 2, 2, &px);
+    let img = parse_dds(&dds).unwrap();
+    assert_eq!(img.surfaces[0].plane.data.len(), 64);
+    assert_eq!(img.surfaces[0].plane.stride, 2 * 16);
+}
