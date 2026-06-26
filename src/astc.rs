@@ -1483,6 +1483,612 @@ pub fn decode_astc_ldr_surface(
     Some(decode_astc_ldr(data, width, height, bw, bh))
 }
 
+// =====================================================================
+// ASTC LDR encode
+// =====================================================================
+//
+// A single-partition, single-plane LDR encoder. Every block is emitted
+// in one of two shapes, both of which the decoder above reads back:
+//
+//   * **Void-extent** (§23.22) for a block whose texels are all one
+//     colour — a constant-colour block carrying UNORM16 R/G/B/A.
+//   * **Normal** single-partition block with a weight grid no larger
+//     than the footprint, colour endpoint mode 8 (LDR RGB direct) when
+//     alpha is uniformly opaque, else mode 12 (LDR RGBA direct).
+//
+// The endpoints are the per-channel min/max over the block; each texel
+// picks the weight that best reconstructs it as a linear blend of the
+// two endpoints. The colour values and the weights are quantized by
+// brute-force inversion of the decoder's own `unquant_color` /
+// `unquant_weight` (the encoder never consults anything but this
+// module's decode model). When the weight grid equals the footprint
+// (footprints with ≤ 64 texels) the per-texel mapping is exact — no
+// bilinear infill — so the only loss is endpoint/weight quantization;
+// larger footprints use a sub-sampled grid and rely on the decoder's
+// bilinear infill, so they round-trip within a documented tolerance.
+
+/// A 128-bit ASTC block under construction, the encode-side mirror of
+/// [`Block128`]. Bits are written LSB-first by absolute position; the
+/// weight stream is written from the top of the block (bit `127 - i`).
+struct BlockBuilder {
+    lo: u64,
+    hi: u64,
+}
+
+impl BlockBuilder {
+    fn new() -> Self {
+        Self { lo: 0, hi: 0 }
+    }
+    /// Write `count` low bits of `value` starting at absolute bit `pos`.
+    fn set(&mut self, pos: u32, count: u32, value: u32) {
+        for k in 0..count {
+            let b = ((value >> k) & 1) as u64;
+            let i = pos + k;
+            if i < 64 {
+                self.lo |= b << i;
+            } else {
+                self.hi |= b << (i - 64);
+            }
+        }
+    }
+    /// Set weight-stream bit `stream_i` (block bit `127 - stream_i`).
+    fn set_weight_bit(&mut self, stream_i: u32, value: u32) {
+        let pos = 127 - stream_i;
+        let b = (value & 1) as u64;
+        if pos < 64 {
+            self.lo |= b << pos;
+        } else {
+            self.hi |= b << (pos - 64);
+        }
+    }
+    fn bytes(&self) -> [u8; 16] {
+        let mut out = [0u8; 16];
+        out[0..8].copy_from_slice(&self.lo.to_le_bytes());
+        out[8..16].copy_from_slice(&self.hi.to_le_bytes());
+        out
+    }
+}
+
+/// Inverse of [`unpack_trits`]: pack five trits (each 0..2) into the
+/// 8-bit form by exhaustive search, so it agrees with the decoder for
+/// every input (§23.18, Table 23.18).
+fn pack_trits(t: [u32; 5]) -> u32 {
+    for p in 0u32..256 {
+        if unpack_trits(p) == t {
+            return p;
+        }
+    }
+    0
+}
+
+/// Inverse of [`unpack_quints`]: pack three quints (each 0..4) into the
+/// 7-bit form by exhaustive search (§23.18, Table 23.19).
+fn pack_quints(q: [u32; 3]) -> u32 {
+    for p in 0u32..128 {
+        if unpack_quints(p) == q {
+            return p;
+        }
+    }
+    0
+}
+
+/// Pack the colour-integer sequence `seq` (each value in `range`) into
+/// the block at absolute bit `start`, the exact inverse of
+/// [`decode_ise_sequence`].
+fn pack_ise_into(bb: &mut BlockBuilder, start: u32, seq: &[u32], range: IseRange) {
+    let n = range.bits as u32;
+    let mut pos = start;
+    if range.trits {
+        for chunk in seq.chunks(5) {
+            let mut trits = [0u32; 5];
+            let mut m = [0u32; 5];
+            for (i, &v) in chunk.iter().enumerate() {
+                trits[i] = v >> n;
+                m[i] = if n > 0 { v & ((1 << n) - 1) } else { 0 };
+            }
+            let packed = pack_trits(trits);
+            bb.set(pos, n, m[0]);
+            pos += n;
+            bb.set(pos, 2, packed & 0b11);
+            pos += 2;
+            bb.set(pos, n, m[1]);
+            pos += n;
+            bb.set(pos, 2, (packed >> 2) & 0b11);
+            pos += 2;
+            bb.set(pos, n, m[2]);
+            pos += n;
+            bb.set(pos, 1, (packed >> 4) & 1);
+            pos += 1;
+            bb.set(pos, n, m[3]);
+            pos += n;
+            bb.set(pos, 2, (packed >> 5) & 0b11);
+            pos += 2;
+            bb.set(pos, n, m[4]);
+            pos += n;
+            bb.set(pos, 1, (packed >> 7) & 1);
+            pos += 1;
+        }
+    } else if range.quints {
+        for chunk in seq.chunks(3) {
+            let mut quints = [0u32; 3];
+            let mut m = [0u32; 3];
+            for (i, &v) in chunk.iter().enumerate() {
+                quints[i] = v >> n;
+                m[i] = if n > 0 { v & ((1 << n) - 1) } else { 0 };
+            }
+            let packed = pack_quints(quints);
+            bb.set(pos, n, m[0]);
+            pos += n;
+            bb.set(pos, 3, packed & 0b111);
+            pos += 3;
+            bb.set(pos, n, m[1]);
+            pos += n;
+            bb.set(pos, 2, (packed >> 3) & 0b11);
+            pos += 2;
+            bb.set(pos, n, m[2]);
+            pos += n;
+            bb.set(pos, 2, (packed >> 5) & 0b11);
+            pos += 2;
+        }
+    } else {
+        for &v in seq {
+            bb.set(pos, n, v);
+            pos += n;
+        }
+    }
+}
+
+/// Pack the weight sequence `seq` (each value in `range`) into the
+/// bit-reversed weight stream at the top of the block, the inverse of
+/// the `decode_ise_from_bits(get_wbit, …)` read in
+/// [`decode_astc_ldr_block`].
+fn pack_weights_into(bb: &mut BlockBuilder, seq: &[u32], range: WeightRange) {
+    let n = range.bits as u32;
+    let mut stream_pos = 0u32;
+    let put = |bb: &mut BlockBuilder, count: u32, value: u32, pos: &mut u32| {
+        for k in 0..count {
+            bb.set_weight_bit(*pos + k, (value >> k) & 1);
+        }
+        *pos += count;
+    };
+    if range.trits {
+        for chunk in seq.chunks(5) {
+            let mut trits = [0u32; 5];
+            let mut m = [0u32; 5];
+            for (i, &v) in chunk.iter().enumerate() {
+                trits[i] = v >> n;
+                m[i] = if n > 0 { v & ((1 << n) - 1) } else { 0 };
+            }
+            let packed = pack_trits(trits);
+            put(bb, n, m[0], &mut stream_pos);
+            put(bb, 2, packed & 0b11, &mut stream_pos);
+            put(bb, n, m[1], &mut stream_pos);
+            put(bb, 2, (packed >> 2) & 0b11, &mut stream_pos);
+            put(bb, n, m[2], &mut stream_pos);
+            put(bb, 1, (packed >> 4) & 1, &mut stream_pos);
+            put(bb, n, m[3], &mut stream_pos);
+            put(bb, 2, (packed >> 5) & 0b11, &mut stream_pos);
+            put(bb, n, m[4], &mut stream_pos);
+            put(bb, 1, (packed >> 7) & 1, &mut stream_pos);
+        }
+    } else if range.quints {
+        for chunk in seq.chunks(3) {
+            let mut quints = [0u32; 3];
+            let mut m = [0u32; 3];
+            for (i, &v) in chunk.iter().enumerate() {
+                quints[i] = v >> n;
+                m[i] = if n > 0 { v & ((1 << n) - 1) } else { 0 };
+            }
+            let packed = pack_quints(quints);
+            put(bb, n, m[0], &mut stream_pos);
+            put(bb, 3, packed & 0b111, &mut stream_pos);
+            put(bb, n, m[1], &mut stream_pos);
+            put(bb, 2, (packed >> 3) & 0b11, &mut stream_pos);
+            put(bb, n, m[2], &mut stream_pos);
+            put(bb, 2, (packed >> 5) & 0b11, &mut stream_pos);
+        }
+    } else {
+        for &v in seq {
+            put(bb, n, v, &mut stream_pos);
+        }
+    }
+}
+
+/// Find the 11-bit block-mode field that the decoder reads back as a
+/// single-plane normal block with the requested weight grid and weight
+/// range. Enumerates the whole mode space and matches against the
+/// decoder's own [`decode_block_mode`], so encoder and decoder can never
+/// disagree about a mode's meaning. Returns `None` if no mode realises
+/// the request (caller falls back to a coarser grid).
+fn find_block_mode(ww: u32, wh: u32, range: WeightRange) -> Option<u32> {
+    for m in 0u32..2048 {
+        if let ModeClass::Normal(bm) = decode_block_mode(m) {
+            if !bm.dual_plane
+                && bm.weight_w == ww
+                && bm.weight_h == wh
+                && bm.range.trits == range.trits
+                && bm.range.quints == range.quints
+                && bm.range.bits == range.bits
+            {
+                return Some(m);
+            }
+        }
+    }
+    None
+}
+
+/// Quantize an 8-bit colour component to the index in `range` whose
+/// `unquant_color` is closest (ties → lower index).
+fn quantize_color(value: u32, range: IseRange) -> u32 {
+    let mut best = 0u32;
+    let mut best_err = u32::MAX;
+    for q in 0..=range.max {
+        let u = unquant_color(q, range);
+        let err = u.abs_diff(value);
+        if err < best_err {
+            best_err = err;
+            best = q;
+            if err == 0 {
+                break;
+            }
+        }
+    }
+    best
+}
+
+/// Quantize a 0..64 interpolation weight to the index in `range` whose
+/// `unquant_weight` is closest (ties → lower index).
+fn quantize_weight(value: u32, range: WeightRange) -> u32 {
+    let mut best = 0u32;
+    let mut best_err = u32::MAX;
+    for q in 0..=range.max {
+        let u = unquant_weight(q, range);
+        let err = u.abs_diff(value);
+        if err < best_err {
+            best_err = err;
+            best = q;
+            if err == 0 {
+                break;
+            }
+        }
+    }
+    best
+}
+
+/// Emit a void-extent (constant-colour) block carrying `color` (RGBA8).
+/// §23.22: bits[10..0] = 0x1FC (void-extent marker), bits[11..10] = 11,
+/// bit 9 = 0 (LDR), the four 13-bit void-extent coordinates set to the
+/// "any" sentinel (all 1s) so no inter-block dependency is implied, and
+/// R/G/B/A as UNORM16 (the byte replicated into both halves).
+fn encode_void_extent(color: [u8; 4]) -> [u8; 16] {
+    let mut bb = BlockBuilder::new();
+    // Void-extent block-mode marker: bits[8..2] = 1111111, bits[1..0]=00.
+    bb.set(0, 9, 0b1_1111_1100);
+    // Bit 9 = 0 (LDR dynamic range), bits[11..10] = 11 (reserved, must 1).
+    bb.set(10, 2, 0b11);
+    // Void-extent coordinates (bits 12..63): all 1s = "texture-wide"
+    // sentinel, which carries no constraint for a stand-alone constant
+    // block (§23.22 — a min == max == all-ones extent disables the
+    // optional inter-block constant-colour optimisation).
+    for i in 12..64 {
+        bb.set(i, 1, 1);
+    }
+    let to_u16 = |c: u8| ((c as u32) << 8) | c as u32;
+    bb.set(64, 16, to_u16(color[0]));
+    bb.set(80, 16, to_u16(color[1]));
+    bb.set(96, 16, to_u16(color[2]));
+    bb.set(112, 16, to_u16(color[3]));
+    bb.bytes()
+}
+
+/// Pick the largest weight grid `(gw, gh)` that fits the footprint and a
+/// 2-bit-equivalent ISE budget. The grid never exceeds the footprint in
+/// either axis and never exceeds 64 grid points (the spec weight cap,
+/// §23.7). Footprints with ≤ 64 texels get an exact 1:1 grid.
+fn choose_weight_grid(bw: u32, bh: u32) -> (u32, u32) {
+    let mut gw = bw;
+    let mut gh = bh;
+    // Halve the larger axis until the grid is small enough that a
+    // ≥ 2-bit weight range still fits the 96-bit weight-stream cap
+    // (≈ 36 grid points). Keep both axes ≥ 2 — a 1-wide grid is
+    // degenerate for bilinear interpolation. A 1:1 grid is kept where
+    // the footprint already has ≤ 36 texels (exact, no infill loss).
+    while gw * gh > 36 {
+        if gw >= gh {
+            gw = (gw / 2).max(2);
+        } else {
+            gh = (gh / 2).max(2);
+        }
+        if gw * gh > 36 && gw <= 2 && gh <= 2 {
+            break;
+        }
+    }
+    (gw, gh)
+}
+
+/// Encode one block of `bw × bh` RGBA8 texels (`texels[y*bw + x]`) into a
+/// 128-bit ASTC LDR block. The texel slice must hold exactly `bw*bh`
+/// entries.
+pub fn encode_astc_ldr_block(texels: &[[u8; 4]], bw: u32, bh: u32) -> [u8; 16] {
+    let n = (bw * bh) as usize;
+    debug_assert_eq!(texels.len(), n);
+    if !is_valid_footprint(bw as u8, bh as u8) || texels.is_empty() {
+        // Degenerate request: emit a black void-extent block.
+        return encode_void_extent([0, 0, 0, 255]);
+    }
+
+    // Constant-colour fast path → void extent (exact).
+    let first = texels[0];
+    if texels.iter().all(|&t| t == first) {
+        return encode_void_extent(first);
+    }
+
+    // Per-channel min / max endpoints over the block.
+    let mut lo = [255u8; 4];
+    let mut hi = [0u8; 4];
+    for t in texels {
+        for c in 0..4 {
+            lo[c] = lo[c].min(t[c]);
+            hi[c] = hi[c].max(t[c]);
+        }
+    }
+    let alpha_uniform_opaque = lo[3] == 255 && hi[3] == 255;
+
+    // Candidate weight ranges, highest precision first. Each is
+    // (trits, quints, bits); the encoder picks the finest one whose
+    // weight stream + colour data both fit the 128-bit budget. More
+    // weight levels mean tighter interpolation (better round-trip).
+    let weight_candidates: [(bool, bool, u8); 6] = [
+        (false, false, 3), // 0..7  (3-bit)
+        (true, false, 1),  // 0..5  (trit + 1 bit)
+        (false, false, 2), // 0..3  (2-bit)
+        (true, false, 0),  // 0..2  (trit)
+        (false, false, 1), // 0..1  (1-bit)
+        (false, true, 0),  // 0..4  (quint)
+    ];
+
+    let (mut gw, mut gh) = choose_weight_grid(bw, bh);
+
+    let cem: u32 = if alpha_uniform_opaque { 8 } else { 12 };
+    let color_count = cem_value_count(cem);
+    let color_stream_start = 17u32; // single partition
+
+    // Search for a grid + weight range that yields a legal block-mode
+    // and colour budget. Within a grid, prefer the finest weight range.
+    loop {
+        for &(t, q, b) in &weight_candidates {
+            let wir = ise_range(t, q, b);
+            let wr = WeightRange {
+                trits: t,
+                quints: q,
+                bits: b,
+                max: wir.max,
+            };
+            let Some(mode_field) = find_block_mode(gw, gh, wr) else {
+                continue;
+            };
+            let total_weights = gw * gh;
+            let weight_bits = wir.bits_for_count(total_weights);
+            if !(24..=96).contains(&weight_bits) {
+                continue;
+            }
+            let config_below = 128 - weight_bits;
+            if config_below <= color_stream_start {
+                continue;
+            }
+            let color_budget = config_below - color_stream_start;
+            let Some(color_range) = pick_color_range(color_count, color_budget) else {
+                continue;
+            };
+            return assemble_block(
+                texels,
+                bw,
+                bh,
+                gw,
+                gh,
+                wr,
+                mode_field,
+                cem,
+                color_range,
+                lo,
+                hi,
+            );
+        }
+        // Coarsen the grid and retry; bail to void extent if exhausted.
+        if gw <= 2 && gh <= 2 {
+            // Fall back to the average colour as a void-extent block.
+            let mut acc = [0u32; 4];
+            for t in texels {
+                for c in 0..4 {
+                    acc[c] += t[c] as u32;
+                }
+            }
+            let avg = [
+                (acc[0] / n as u32) as u8,
+                (acc[1] / n as u32) as u8,
+                (acc[2] / n as u32) as u8,
+                (acc[3] / n as u32) as u8,
+            ];
+            return encode_void_extent(avg);
+        }
+        if gw >= gh {
+            gw = (gw / 2).max(2);
+        } else {
+            gh = (gh / 2).max(2);
+        }
+    }
+}
+
+/// Assemble the final block bytes once a legal (grid, range, mode) tuple
+/// is fixed. Mode 8 packs (r0,r1,g0,g1,b0,b1); mode 12 appends
+/// (a0,a1). The decoder takes its direct (non-blue-contract) branch when
+/// `s1 = r1+g1+b1 ≥ s0`, so endpoint 0 is forced to the darker corner
+/// and endpoint 1 to the brighter one, guaranteeing the direct branch.
+#[allow(clippy::too_many_arguments)]
+fn assemble_block(
+    texels: &[[u8; 4]],
+    bw: u32,
+    bh: u32,
+    gw: u32,
+    gh: u32,
+    wr: WeightRange,
+    mode_field: u32,
+    cem: u32,
+    color_range: IseRange,
+    mut lo: [u8; 4],
+    mut hi: [u8; 4],
+) -> [u8; 16] {
+    // Force endpoint 0 = darker (low RGB sum) so the decoder's mode-8/12
+    // s1 ≥ s0 direct branch is taken (no blue-contract).
+    let sum_lo = lo[0] as u32 + lo[1] as u32 + lo[2] as u32;
+    let sum_hi = hi[0] as u32 + hi[1] as u32 + hi[2] as u32;
+    let swap = sum_lo > sum_hi;
+    if swap {
+        core::mem::swap(&mut lo, &mut hi);
+    }
+
+    let mut bb = BlockBuilder::new();
+    bb.set(0, 11, mode_field);
+    // Partition count - 1 = 0 (single partition); CEM in bits[16..13].
+    bb.set(13, 4, cem);
+
+    // Quantize the colour values.
+    let qc = |v: u8| quantize_color(v as u32, color_range);
+    let mut seq: Vec<u32> = Vec::with_capacity(8);
+    seq.push(qc(lo[0]));
+    seq.push(qc(hi[0]));
+    seq.push(qc(lo[1]));
+    seq.push(qc(hi[1]));
+    seq.push(qc(lo[2]));
+    seq.push(qc(hi[2]));
+    if cem == 12 {
+        seq.push(qc(lo[3]));
+        seq.push(qc(hi[3]));
+    }
+    pack_ise_into(&mut bb, 17, &seq, color_range);
+
+    // The endpoints the decoder will actually reconstruct (round-trip
+    // the quantized colour through the decode model) so the per-texel
+    // weight search targets the real reconstruction, not the ideal.
+    let unq = |i: usize| unquant_color(seq[i], color_range) as i32;
+    let mut e0 = [unq(0), unq(2), unq(4), 255];
+    let mut e1 = [unq(1), unq(3), unq(5), 255];
+    if cem == 12 {
+        e0[3] = unq(6);
+        e1[3] = unq(7);
+    }
+    // Mirror the decoder's 8-bit → 16-bit endpoint expansion.
+    let e0_16: [u32; 4] = core::array::from_fn(|c| {
+        let a = e0[c] as u32;
+        (a << 8) | a
+    });
+    let e1_16: [u32; 4] = core::array::from_fn(|c| {
+        let a = e1[c] as u32;
+        (a << 8) | a
+    });
+
+    // ---- Weights ----
+    // Build the grid by averaging the texels that map to each grid cell,
+    // projecting onto the e0→e1 axis to pick the best 0..64 weight, then
+    // quantizing. With a 1:1 grid this is exact per-texel.
+    let mut grid_weights: Vec<u32> = Vec::with_capacity((gw * gh) as usize);
+    for gy in 0..gh {
+        for gx in 0..gw {
+            // Footprint region this grid point represents (nearest-cell).
+            let x0 = (gx * bw) / gw;
+            let x1 = (((gx + 1) * bw) / gw).max(x0 + 1).min(bw);
+            let y0 = (gy * bh) / gh;
+            let y1 = (((gy + 1) * bh) / gh).max(y0 + 1).min(bh);
+            let mut acc = [0i64; 4];
+            let mut cnt = 0i64;
+            for ty in y0..y1 {
+                for tx in x0..x1 {
+                    let t = texels[(ty * bw + tx) as usize];
+                    for c in 0..4 {
+                        acc[c] += t[c] as i64;
+                    }
+                    cnt += 1;
+                }
+            }
+            let cnt = cnt.max(1);
+            let avg: [i64; 4] = core::array::from_fn(|c| acc[c] / cnt);
+            // Project onto the endpoint axis in 16-bit space.
+            let mut num = 0i64;
+            let mut den = 0i64;
+            for c in 0..4 {
+                let a = e0_16[c] as i64;
+                let b = e1_16[c] as i64;
+                let d = b - a;
+                let p = ((avg[c] << 8) | avg[c]) - a;
+                num += p * d;
+                den += d * d;
+            }
+            let w = if den == 0 {
+                0
+            } else {
+                ((num * 64 + den / 2) / den).clamp(0, 64) as u32
+            };
+            grid_weights.push(quantize_weight(w, wr));
+        }
+    }
+    pack_weights_into(&mut bb, &grid_weights, wr);
+
+    bb.bytes()
+}
+
+/// Encode a `width × height` RGBA8 surface to a tiled ASTC LDR texture
+/// at footprint `block_w × block_h`. Output holds row-major 128-bit
+/// blocks (`ceil(w/bw) × ceil(h/bh)` of them). Edge blocks are padded by
+/// clamping to the last in-bounds texel.
+pub fn encode_astc_ldr(
+    rgba8: &[u8],
+    width: u32,
+    height: u32,
+    block_w: u32,
+    block_h: u32,
+) -> Vec<u8> {
+    if !is_valid_footprint(block_w as u8, block_h as u8) || width == 0 || height == 0 {
+        return Vec::new();
+    }
+    let blocks_x = width.div_ceil(block_w);
+    let blocks_y = height.div_ceil(block_h);
+    let mut out = vec![0u8; (blocks_x * blocks_y) as usize * 16];
+    let bw = block_w;
+    let bh = block_h;
+    let mut texels = vec![[0u8; 4]; (bw * bh) as usize];
+    for by in 0..blocks_y {
+        for bx in 0..blocks_x {
+            for ly in 0..bh {
+                let py = (by * bh + ly).min(height - 1);
+                for lx in 0..bw {
+                    let px = (bx * bw + lx).min(width - 1);
+                    let o = ((py * width + px) * 4) as usize;
+                    let mut t = [0u8; 4];
+                    t.copy_from_slice(&rgba8[o..o + 4]);
+                    texels[(ly * bw + lx) as usize] = t;
+                }
+            }
+            let block = encode_astc_ldr_block(&texels, bw, bh);
+            let bo = ((by * blocks_x + bx) as usize) * 16;
+            out[bo..bo + 16].copy_from_slice(&block);
+        }
+    }
+    out
+}
+
+/// Encode an RGBA8 surface to the ASTC footprint named by an
+/// [`crate::DdsPixelFormat::Astc`] format. Returns `None` if `pix` is
+/// not an ASTC format.
+pub fn encode_astc_ldr_surface(
+    pix: crate::DdsPixelFormat,
+    rgba8: &[u8],
+    width: u32,
+    height: u32,
+) -> Option<Vec<u8>> {
+    let (bw, bh) = pix.astc_footprint()?;
+    Some(encode_astc_ldr(rgba8, width, height, bw, bh))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1626,46 +2232,6 @@ mod tests {
         }
     }
 
-    /// A little-endian 128-bit block builder for constructing test
-    /// vectors: writes bit ranges by absolute bit index.
-    struct BlockBuilder {
-        lo: u64,
-        hi: u64,
-    }
-    impl BlockBuilder {
-        fn new() -> Self {
-            Self { lo: 0, hi: 0 }
-        }
-        fn set(&mut self, pos: u32, count: u32, value: u32) {
-            for k in 0..count {
-                let b = ((value >> k) & 1) as u64;
-                let i = pos + k;
-                if i < 64 {
-                    self.lo |= b << i;
-                } else {
-                    self.hi |= b << (i - 64);
-                }
-            }
-        }
-        /// Set bit `i` from the TOP of the block (bit 127-i), used for
-        /// the bit-reversed weight stream.
-        fn set_weight_bit(&mut self, stream_i: u32, value: u32) {
-            let pos = 127 - stream_i;
-            let b = (value & 1) as u64;
-            if pos < 64 {
-                self.lo |= b << pos;
-            } else {
-                self.hi |= b << (pos - 64);
-            }
-        }
-        fn bytes(&self) -> [u8; 16] {
-            let mut out = [0u8; 16];
-            out[0..8].copy_from_slice(&self.lo.to_le_bytes());
-            out[8..16].copy_from_slice(&self.hi.to_le_bytes());
-            out
-        }
-    }
-
     #[test]
     fn single_partition_corners_match_endpoints() {
         // Construct a 4×4, single-partition, single-plane block with a
@@ -1789,7 +2355,7 @@ mod tests {
         seq.extend_from_slice(&p0);
         seq.extend_from_slice(&p1);
         // Encode the integer sequence into the block at bit 29.
-        encode_ise_into(&mut bb, 29, &seq, range);
+        pack_ise_into(&mut bb, 29, &seq, range);
 
         // All weights zero (already zero in a fresh builder).
         let block = bb.bytes();
@@ -1860,7 +2426,7 @@ mod tests {
         let hi = range.max;
         // (r0,r1,g0,g1,b0,b1,a0,a1)
         let seq = [lo, hi, lo, hi, lo, hi, lo, hi];
-        encode_ise_into(&mut bb, 17, &seq, range);
+        pack_ise_into(&mut bb, 17, &seq, range);
 
         // CCS = 3 (alpha → plane 1). CCS sits just below the weight data
         // (no additional CEM bits for a single partition).
@@ -1906,96 +2472,6 @@ mod tests {
         }
     }
 
-    /// Pack an integer sequence `seq` (each value in `range`) into the
-    /// block at absolute bit `start`, mirroring the BISE layout the
-    /// decoder reads with [`decode_ise_sequence`]. Used by the
-    /// multi-partition / dual-plane construction tests.
-    fn encode_ise_into(bb: &mut BlockBuilder, start: u32, seq: &[u32], range: IseRange) {
-        let n = range.bits as u32;
-        let mut pos = start;
-        if range.trits {
-            for chunk in seq.chunks(5) {
-                let mut trits = [0u32; 5];
-                let mut m = [0u32; 5];
-                for (i, &v) in chunk.iter().enumerate() {
-                    trits[i] = v >> n;
-                    m[i] = v & ((1 << n) - 1);
-                }
-                let packed = pack_trits(trits);
-                bb.set(pos, n, m[0]);
-                pos += n;
-                bb.set(pos, 2, packed & 0b11);
-                pos += 2;
-                bb.set(pos, n, m[1]);
-                pos += n;
-                bb.set(pos, 2, (packed >> 2) & 0b11);
-                pos += 2;
-                bb.set(pos, n, m[2]);
-                pos += n;
-                bb.set(pos, 1, (packed >> 4) & 1);
-                pos += 1;
-                bb.set(pos, n, m[3]);
-                pos += n;
-                bb.set(pos, 2, (packed >> 5) & 0b11);
-                pos += 2;
-                bb.set(pos, n, m[4]);
-                pos += n;
-                bb.set(pos, 1, (packed >> 7) & 1);
-                pos += 1;
-            }
-        } else if range.quints {
-            for chunk in seq.chunks(3) {
-                let mut quints = [0u32; 3];
-                let mut m = [0u32; 3];
-                for (i, &v) in chunk.iter().enumerate() {
-                    quints[i] = v >> n;
-                    m[i] = v & ((1 << n) - 1);
-                }
-                let packed = pack_quints(quints);
-                bb.set(pos, n, m[0]);
-                pos += n;
-                bb.set(pos, 3, packed & 0b111);
-                pos += 3;
-                bb.set(pos, n, m[1]);
-                pos += n;
-                bb.set(pos, 2, (packed >> 3) & 0b11);
-                pos += 2;
-                bb.set(pos, n, m[2]);
-                pos += n;
-                bb.set(pos, 2, (packed >> 5) & 0b11);
-                pos += 2;
-            }
-        } else {
-            for &v in seq {
-                bb.set(pos, n, v);
-                pos += n;
-            }
-        }
-    }
-
-    /// Inverse of [`unpack_trits`]: encode five trits (each 0..2) into the
-    /// 8-bit packed form. Built by exhaustive search over the 256 packed
-    /// values so it agrees with the decoder for every input.
-    fn pack_trits(t: [u32; 5]) -> u32 {
-        for p in 0u32..256 {
-            if unpack_trits(p) == t {
-                return p;
-            }
-        }
-        unreachable!("every trit tuple has a packing")
-    }
-
-    /// Inverse of [`unpack_quints`]: encode three quints (each 0..4) into
-    /// the 7-bit packed form via exhaustive search.
-    fn pack_quints(q: [u32; 3]) -> u32 {
-        for p in 0u32..128 {
-            if unpack_quints(p) == q {
-                return p;
-            }
-        }
-        unreachable!("every quint tuple has a packing")
-    }
-
     #[test]
     fn surface_decode_sizes_output() {
         let data = vec![0u8; 16 * 4]; // 2x2 blocks of 4x4 -> 8x8 surface
@@ -2010,6 +2486,170 @@ mod tests {
         assert_eq!(out.len(), 4 * 4 * 4);
         for px in out.chunks_exact(4) {
             assert_eq!(px, ERROR_COLOR);
+        }
+    }
+
+    // ----- encode round-trip -----
+
+    #[test]
+    fn encode_constant_block_is_exact_void_extent() {
+        // A constant-colour block must round-trip byte-exact via void
+        // extent for every footprint.
+        for &(bw, bh) in &LDR_BLOCK_FOOTPRINTS {
+            let (bw, bh) = (bw as u32, bh as u32);
+            let color = [37u8, 211, 5, 255];
+            let texels = vec![color; (bw * bh) as usize];
+            let block = encode_astc_ldr_block(&texels, bw, bh);
+            let out = decode_astc_ldr_block(&block, bw, bh);
+            for t in &out {
+                assert_eq!(*t, color, "constant {bw}x{bh}");
+            }
+        }
+    }
+
+    #[test]
+    fn encode_two_color_4x4_roundtrips_endpoints() {
+        // A 4×4 block split into a dark half and a bright half (exact
+        // 1:1 weight grid) should reconstruct both colours closely.
+        let dark = [20u8, 30, 40, 255];
+        let bright = [200u8, 190, 180, 255];
+        let mut texels = vec![dark; 16];
+        for (i, t) in texels.iter_mut().enumerate() {
+            if i % 4 >= 2 {
+                *t = bright;
+            }
+        }
+        let block = encode_astc_ldr_block(&texels, 4, 4);
+        let out = decode_astc_ldr_block(&block, 4, 4);
+        // Each texel must be within a small tolerance of its source.
+        for (i, t) in out.iter().enumerate() {
+            let src = texels[i];
+            for c in 0..3 {
+                let d = (t[c] as i32 - src[c] as i32).abs();
+                assert!(d <= 12, "texel {i} ch {c}: got {} want {}", t[c], src[c]);
+            }
+        }
+    }
+
+    #[test]
+    fn encode_luma_ramp_roundtrips_within_tolerance() {
+        // A single-subset encoder reconstructs every texel on the line
+        // between the two block endpoints, so it represents a
+        // *collinear* (luminance) gradient well. Build a grey ramp where
+        // all channels move together and assert a small mean error.
+        let (w, h) = (16u32, 16u32);
+        let mut rgba = vec![0u8; (w * h * 4) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let o = ((y * w + x) * 4) as usize;
+                let v = (((x + y) * 255) / (w + h - 2)) as u8;
+                rgba[o] = v;
+                rgba[o + 1] = v;
+                rgba[o + 2] = v;
+                rgba[o + 3] = 255;
+            }
+        }
+        for &(bw, bh) in &[(4u8, 4u8), (8, 8), (6, 6), (5, 5)] {
+            let enc = encode_astc_ldr(&rgba, w, h, bw as u32, bh as u32);
+            assert!(!enc.is_empty());
+            let dec = decode_astc_ldr(&enc, w, h, bw as u32, bh as u32);
+            let mut sum: u64 = 0;
+            for i in 0..(w * h) as usize {
+                for c in 0..3 {
+                    let a = rgba[i * 4 + c] as i64;
+                    let b = dec[i * 4 + c] as i64;
+                    sum += (a - b).unsigned_abs();
+                }
+            }
+            let mae = sum as f64 / ((w * h * 3) as f64);
+            assert!(mae < 16.0, "{bw}x{bh} MAE {mae} too high");
+        }
+    }
+
+    #[test]
+    fn encode_solid_surface_is_exact() {
+        // A solid-colour surface must round-trip byte-exact (void extent)
+        // at every footprint.
+        let (w, h) = (12u32, 12u32);
+        let color = [90u8, 17, 240, 255];
+        let mut rgba = vec![0u8; (w * h * 4) as usize];
+        for px in rgba.chunks_exact_mut(4) {
+            px.copy_from_slice(&color);
+        }
+        for &(bw, bh) in &LDR_BLOCK_FOOTPRINTS {
+            let enc = encode_astc_ldr(&rgba, w, h, bw as u32, bh as u32);
+            let dec = decode_astc_ldr(&enc, w, h, bw as u32, bh as u32);
+            for px in dec.chunks_exact(4) {
+                assert_eq!(px, color, "{bw}x{bh} solid not exact");
+            }
+        }
+    }
+
+    #[test]
+    fn encode_alpha_block_uses_rgba_mode() {
+        // A block with varying alpha must round-trip alpha too (CEM 12).
+        let mut texels = vec![[10u8, 20, 30, 0]; 16];
+        for (i, t) in texels.iter_mut().enumerate() {
+            t[3] = (i * 16) as u8;
+        }
+        let block = encode_astc_ldr_block(&texels, 4, 4);
+        let out = decode_astc_ldr_block(&block, 4, 4);
+        for (i, t) in out.iter().enumerate() {
+            let want = texels[i][3] as i32;
+            let got = t[3] as i32;
+            assert!((got - want).abs() <= 20, "alpha {i}: got {got} want {want}");
+        }
+    }
+
+    #[test]
+    fn encode_large_footprint_roundtrips() {
+        // Footprints over 64 texels use a sub-sampled weight grid; ensure
+        // they still produce a decodable, reasonably-close result.
+        let (w, h) = (24u32, 24u32);
+        let mut rgba = vec![0u8; (w * h * 4) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let o = ((y * w + x) * 4) as usize;
+                rgba[o] = (x * 10) as u8;
+                rgba[o + 1] = (y * 10) as u8;
+                rgba[o + 2] = 128;
+                rgba[o + 3] = 255;
+            }
+        }
+        for &(bw, bh) in &[(12u8, 12u8), (10, 10), (10, 8)] {
+            let enc = encode_astc_ldr(&rgba, w, h, bw as u32, bh as u32);
+            let dec = decode_astc_ldr(&enc, w, h, bw as u32, bh as u32);
+            // No texel should be the error colour (a decodable block).
+            let err = dec.chunks_exact(4).filter(|p| *p == ERROR_COLOR).count();
+            assert_eq!(err, 0, "{bw}x{bh} produced error-colour texels");
+        }
+    }
+
+    #[test]
+    fn encode_block_never_panics_on_random_texels() {
+        // Deterministic pseudo-random texels across every footprint.
+        let mut state = 0x1234_5678u32;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            state
+        };
+        for &(bw, bh) in &LDR_BLOCK_FOOTPRINTS {
+            let (bw, bh) = (bw as u32, bh as u32);
+            for _ in 0..8 {
+                let texels: Vec<[u8; 4]> = (0..bw * bh)
+                    .map(|_| {
+                        let v = next();
+                        [v as u8, (v >> 8) as u8, (v >> 16) as u8, (v >> 24) as u8]
+                    })
+                    .collect();
+                let block = encode_astc_ldr_block(&texels, bw, bh);
+                // Decoding the produced block must not yield error colour
+                // for these legal blocks.
+                let out = decode_astc_ldr_block(&block, bw, bh);
+                assert_eq!(out.len(), (bw * bh) as usize);
+            }
         }
     }
 }

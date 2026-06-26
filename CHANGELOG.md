@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **ASTC LDR encoder — `src/astc.rs` (round 372).** The decoder gains a
+  matching single-partition, single-plane LDR encoder:
+  `encode_astc_ldr_block` (one 128-bit block from `block_w × block_h`
+  RGBA8 texels), `encode_astc_ldr` (a tiled surface at any of the 14 2D
+  footprints, 4×4 … 12×12) and `encode_astc_ldr_surface` (footprint
+  pulled from a `DxgiFormat::Astc` value). Constant-colour blocks emit a
+  **void-extent** block and round-trip byte-exact at every footprint;
+  other blocks use colour endpoint mode 8 (LDR RGB direct) when alpha is
+  uniformly opaque, else mode 12 (LDR RGBA direct), with per-channel
+  min/max endpoints and a per-texel weight chosen by projecting onto the
+  endpoint axis. The weight grid is the footprint itself for ≤ 36-texel
+  blocks (an exact 1:1 mapping with no bilinear-infill loss) and a
+  sub-sampled grid for the larger footprints. Block-mode fields, colour
+  values and weights are all derived by **inverting the decoder's own**
+  `decode_block_mode` / `unquant_color` / `unquant_weight` model, so the
+  encoder and decoder can never disagree about a block's meaning — the
+  encoder consults nothing but this crate's existing decode code. The
+  production ISE / block-builder helpers were promoted out of the
+  `#[cfg(test)]` module so both halves share one packing implementation.
+  Sourced from the Khronos Data Format Specification 1.4, chapter 23
+  (the same source the decoder was written from). Round-trip is exact for
+  solid blocks, within a small tolerance for collinear (luminance)
+  gradients, and decodable (no error-colour texels) for arbitrary input.
+  Single-subset only — non-collinear 2D detail is approximated, since one
+  endpoint pair reconstructs texels along a single RGB line. Eight new
+  `astc` unit tests cover void-extent exactness, two-colour and alpha
+  round-trips, the luma ramp tolerance, large-footprint decodability, and
+  a per-footprint random-block panic sweep.
+
 ### Fixed
 
 - **`encode_dds_uncompressed` / `encode_dds_volume` no longer panic on a

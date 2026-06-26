@@ -120,7 +120,23 @@ weight unquantization + bilinear infill, multi-partition pattern
 generation, dual-plane mode, and void-extent constant-colour blocks.
 HDR endpoints and illegal blocks decode to the spec error colour
 (opaque magenta). Sourced from the Khronos Data Format Specification
-1.4 chapter 23. ASTC is decode-only (no encoder).
+1.4 chapter 23.
+
+**ASTC LDR encode.** `encode_astc_ldr` / `encode_astc_ldr_block` /
+`encode_astc_ldr_surface` emit valid `DXGI_FORMAT_ASTC_*` surfaces from
+RGBA8 at any of the 14 2D footprints. The encoder is single-partition,
+single-plane: a constant-colour block becomes a void-extent block
+(byte-exact round-trip), otherwise colour endpoint mode 8 (LDR RGB
+direct, opaque alpha) or mode 12 (LDR RGBA direct) carries per-channel
+min/max endpoints and each texel picks the weight that best
+reconstructs it as a blend of the two endpoints. Footprints with ≤ 36
+texels use a 1:1 weight grid (no bilinear-infill loss); larger ones use
+a sub-sampled grid. Block-mode, colour and weight quantization are all
+derived by inverting the crate's own decode model, so encode and decode
+agree by construction. Round-trip is exact for solid blocks and within
+a documented tolerance for collinear gradients; non-collinear 2D detail
+is approximated (single-subset — one endpoint pair reconstructs texels
+along a single RGB line). No HDR encode.
 
 **Block-compressed encode.**
 

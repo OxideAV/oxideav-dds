@@ -219,7 +219,8 @@ pub mod registry;
 pub const CODEC_ID_STR: &str = "dds";
 
 pub use astc::{
-    decode_astc_ldr, decode_astc_ldr_block, decode_astc_ldr_surface, is_valid_footprint,
+    decode_astc_ldr, decode_astc_ldr_block, decode_astc_ldr_surface, encode_astc_ldr,
+    encode_astc_ldr_block, encode_astc_ldr_surface, is_valid_footprint,
     ERROR_COLOR as ASTC_ERROR_COLOR, LDR_BLOCK_FOOTPRINTS,
 };
 pub use bc6h::decode_bc6h;
