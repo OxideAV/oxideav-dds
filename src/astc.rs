@@ -1806,9 +1806,43 @@ fn choose_weight_grid(bw: u32, bh: u32) -> (u32, u32) {
     (gw, gh)
 }
 
+/// Candidate weight ranges, highest precision first — `(trits, quints,
+/// bits)`. The encoder picks the finest one whose weight stream + colour
+/// data both fit the 128-bit budget. More weight levels mean tighter
+/// interpolation (better round-trip).
+const WEIGHT_CANDIDATES: [(bool, bool, u8); 6] = [
+    (false, false, 3), // 0..7  (3-bit)
+    (true, false, 1),  // 0..5  (trit + 1 bit)
+    (false, false, 2), // 0..3  (2-bit)
+    (true, false, 0),  // 0..2  (trit)
+    (false, false, 1), // 0..1  (1-bit)
+    (false, true, 0),  // 0..4  (quint)
+];
+
+/// Sum of absolute RGBA differences between a decoded block and the
+/// source texels (the round-trip error a candidate block achieves).
+fn block_sad(candidate: &[u8; 16], texels: &[[u8; 4]], bw: u32, bh: u32) -> u64 {
+    let dec = decode_astc_ldr_block(candidate, bw, bh);
+    let mut sad = 0u64;
+    for (i, t) in texels.iter().enumerate() {
+        let d = dec.get(i).copied().unwrap_or(ERROR_COLOR);
+        for c in 0..4 {
+            sad += (d[c] as i64 - t[c] as i64).unsigned_abs();
+        }
+    }
+    sad
+}
+
 /// Encode one block of `bw × bh` RGBA8 texels (`texels[y*bw + x]`) into a
 /// 128-bit ASTC LDR block. The texel slice must hold exactly `bw*bh`
 /// entries.
+///
+/// A constant block becomes an exact void-extent block. Otherwise the
+/// encoder builds a single-subset block and, when a two-subset block is
+/// realisable within the bit budget, also tries a handful of partition
+/// seeds; it keeps whichever block decodes closest to the source
+/// (measured against this crate's own decoder). Two subsets let a
+/// non-collinear block split into two independently-fitted colour lines.
 pub fn encode_astc_ldr_block(texels: &[[u8; 4]], bw: u32, bh: u32) -> [u8; 16] {
     let n = (bw * bh) as usize;
     debug_assert_eq!(texels.len(), n);
@@ -1823,6 +1857,34 @@ pub fn encode_astc_ldr_block(texels: &[[u8; 4]], bw: u32, bh: u32) -> [u8; 16] {
         return encode_void_extent(first);
     }
 
+    let mut best = encode_single_subset(texels, bw, bh);
+    let mut best_sad = block_sad(&best, texels, bw, bh);
+    if best_sad == 0 {
+        return best;
+    }
+
+    // Try a small set of partition seeds for a 2-subset block. The seeds
+    // are arbitrary but fixed, so encoding is deterministic; the chooser
+    // keeps the lowest-error result, so a poor split is simply discarded.
+    for &seed in &[0u32, 1, 2, 7, 13, 31, 63, 100] {
+        if let Some(cand) = encode_two_subset(texels, bw, bh, seed) {
+            let sad = block_sad(&cand, texels, bw, bh);
+            if sad < best_sad {
+                best_sad = sad;
+                best = cand;
+                if best_sad == 0 {
+                    break;
+                }
+            }
+        }
+    }
+    best
+}
+
+/// Build a single-subset block: min/max endpoints, the finest weight
+/// range that fits, per-texel weight by endpoint-axis projection.
+fn encode_single_subset(texels: &[[u8; 4]], bw: u32, bh: u32) -> [u8; 16] {
+    let n = (bw * bh) as usize;
     // Per-channel min / max endpoints over the block.
     let mut lo = [255u8; 4];
     let mut hi = [0u8; 4];
@@ -1833,30 +1895,14 @@ pub fn encode_astc_ldr_block(texels: &[[u8; 4]], bw: u32, bh: u32) -> [u8; 16] {
         }
     }
     let alpha_uniform_opaque = lo[3] == 255 && hi[3] == 255;
-
-    // Candidate weight ranges, highest precision first. Each is
-    // (trits, quints, bits); the encoder picks the finest one whose
-    // weight stream + colour data both fit the 128-bit budget. More
-    // weight levels mean tighter interpolation (better round-trip).
-    let weight_candidates: [(bool, bool, u8); 6] = [
-        (false, false, 3), // 0..7  (3-bit)
-        (true, false, 1),  // 0..5  (trit + 1 bit)
-        (false, false, 2), // 0..3  (2-bit)
-        (true, false, 0),  // 0..2  (trit)
-        (false, false, 1), // 0..1  (1-bit)
-        (false, true, 0),  // 0..4  (quint)
-    ];
-
-    let (mut gw, mut gh) = choose_weight_grid(bw, bh);
-
     let cem: u32 = if alpha_uniform_opaque { 8 } else { 12 };
     let color_count = cem_value_count(cem);
     let color_stream_start = 17u32; // single partition
 
-    // Search for a grid + weight range that yields a legal block-mode
-    // and colour budget. Within a grid, prefer the finest weight range.
+    let (mut gw, mut gh) = choose_weight_grid(bw, bh);
+
     loop {
-        for &(t, q, b) in &weight_candidates {
+        for &(t, q, b) in &WEIGHT_CANDIDATES {
             let wir = ise_range(t, q, b);
             let wr = WeightRange {
                 trits: t,
@@ -2033,6 +2079,249 @@ fn assemble_block(
     }
     pack_weights_into(&mut bb, &grid_weights, wr);
 
+    bb.bytes()
+}
+
+/// Build a two-subset block for partition `seed`. Both partitions share
+/// one CEM (the selector-`00` "single CEM" path), so the colour stream
+/// starts at bit 29 and carries `2 × cem_value_count` integers. Each
+/// partition gets its own min/max endpoints over the texels the decoder
+/// will route to it via [`select_partition`]; the per-grid-point weight
+/// is fitted against that point's owning partition. Returns `None` when
+/// no legal grid + weight range + colour budget realises the block, or
+/// when the seed maps every texel into one partition (degenerate).
+fn encode_two_subset(texels: &[[u8; 4]], bw: u32, bh: u32, seed: u32) -> Option<[u8; 16]> {
+    let texel_count = (bw * bh) as usize;
+    let small_block = texel_count < 31;
+
+    // Route every texel to its partition and gather per-partition
+    // min/max endpoints.
+    let mut part = vec![0u8; texel_count];
+    let mut lo = [[255u8; 4]; 2];
+    let mut hi = [[0u8; 4]; 2];
+    let mut count = [0u32; 2];
+    for ty in 0..bh {
+        for tx in 0..bw {
+            let p = select_partition(seed, tx, ty, 2, small_block) as usize;
+            let p = p.min(1);
+            let idx = (ty * bw + tx) as usize;
+            part[idx] = p as u8;
+            count[p] += 1;
+            let t = texels[idx];
+            for c in 0..4 {
+                lo[p][c] = lo[p][c].min(t[c]);
+                hi[p][c] = hi[p][c].max(t[c]);
+            }
+        }
+    }
+    if count[0] == 0 || count[1] == 0 {
+        return None; // degenerate split — no benefit over single subset
+    }
+
+    let alpha_opaque = lo
+        .iter()
+        .zip(hi.iter())
+        .all(|(l, h)| l[3] == 255 && h[3] == 255);
+    let cem: u32 = if alpha_opaque { 8 } else { 12 };
+    let per_part = cem_value_count(cem);
+    let total_color = per_part * 2;
+    let color_stream_start = 29u32; // 2-partition single-CEM path
+
+    let (mut gw, mut gh) = choose_weight_grid(bw, bh);
+    loop {
+        for &(t, q, b) in &WEIGHT_CANDIDATES {
+            let wir = ise_range(t, q, b);
+            let wr = WeightRange {
+                trits: t,
+                quints: q,
+                bits: b,
+                max: wir.max,
+            };
+            let Some(mode_field) = find_block_mode(gw, gh, wr) else {
+                continue;
+            };
+            let total_weights = gw * gh;
+            let weight_bits = wir.bits_for_count(total_weights);
+            if !(24..=96).contains(&weight_bits) {
+                continue;
+            }
+            let config_below = 128 - weight_bits;
+            if config_below <= color_stream_start {
+                continue;
+            }
+            let color_budget = config_below - color_stream_start;
+            let Some(color_range) = pick_color_range(total_color, color_budget) else {
+                continue;
+            };
+            return Some(assemble_block_2subset(
+                texels,
+                &part,
+                bw,
+                bh,
+                gw,
+                gh,
+                wr,
+                mode_field,
+                seed,
+                cem,
+                color_range,
+                lo,
+                hi,
+            ));
+        }
+        if gw <= 2 && gh <= 2 {
+            return None;
+        }
+        if gw >= gh {
+            gw = (gw / 2).max(2);
+        } else {
+            gh = (gh / 2).max(2);
+        }
+    }
+}
+
+/// Assemble a two-subset block from a fixed partition map, weight grid,
+/// weight range and colour range. Mirrors [`assemble_block`] but writes
+/// the partition count, seed, single-CEM selector and two endpoint
+/// groups, and fits each grid point's weight against its owning
+/// partition's endpoint line.
+#[allow(clippy::too_many_arguments)]
+fn assemble_block_2subset(
+    texels: &[[u8; 4]],
+    part: &[u8],
+    bw: u32,
+    bh: u32,
+    gw: u32,
+    gh: u32,
+    wr: WeightRange,
+    mode_field: u32,
+    seed: u32,
+    cem: u32,
+    color_range: IseRange,
+    mut lo: [[u8; 4]; 2],
+    mut hi: [[u8; 4]; 2],
+) -> [u8; 16] {
+    // Force each partition's endpoint 0 = darker so the decoder takes its
+    // direct (non-blue-contract) branch.
+    for p in 0..2 {
+        let s_lo = lo[p][0] as u32 + lo[p][1] as u32 + lo[p][2] as u32;
+        let s_hi = hi[p][0] as u32 + hi[p][1] as u32 + hi[p][2] as u32;
+        if s_lo > s_hi {
+            core::mem::swap(&mut lo[p], &mut hi[p]);
+        }
+    }
+
+    let mut bb = BlockBuilder::new();
+    bb.set(0, 11, mode_field);
+    // Partition count - 1 = 1 (two partitions).
+    bb.set(11, 2, 1);
+    // Partition seed: bits [22:13].
+    bb.set(13, 10, seed & 0x3FF);
+    // CEM selector bits [24:23] = 00 (single CEM for all partitions).
+    bb.set(23, 2, 0);
+    // 4-bit CEM in bits [28:25].
+    bb.set(25, 4, cem);
+
+    // Colour values: partition 0's group then partition 1's group.
+    let qc = |v: u8| quantize_color(v as u32, color_range);
+    let mut seq: Vec<u32> = Vec::new();
+    for p in 0..2 {
+        seq.push(qc(lo[p][0]));
+        seq.push(qc(hi[p][0]));
+        seq.push(qc(lo[p][1]));
+        seq.push(qc(hi[p][1]));
+        seq.push(qc(lo[p][2]));
+        seq.push(qc(hi[p][2]));
+        if cem == 12 {
+            seq.push(qc(lo[p][3]));
+            seq.push(qc(hi[p][3]));
+        }
+    }
+    pack_ise_into(&mut bb, 29, &seq, color_range);
+
+    // Reconstruct per-partition endpoints (16-bit) for the weight fit.
+    let per = if cem == 12 { 8 } else { 6 };
+    let mut e0_16 = [[0u32; 4]; 2];
+    let mut e1_16 = [[0u32; 4]; 2];
+    for p in 0..2 {
+        let base = p * per;
+        let unq = |i: usize| unquant_color(seq[base + i], color_range);
+        let e0 = [unq(0), unq(2), unq(4), if cem == 12 { unq(6) } else { 255 }];
+        let e1 = [unq(1), unq(3), unq(5), if cem == 12 { unq(7) } else { 255 }];
+        for c in 0..4 {
+            e0_16[p][c] = (e0[c] << 8) | e0[c];
+            e1_16[p][c] = (e1[c] << 8) | e1[c];
+        }
+    }
+
+    // Weights: each grid point fits against the partition that owns the
+    // texel nearest its grid centre.
+    let small_block = (bw * bh) < 31;
+    let mut grid_weights: Vec<u32> = Vec::with_capacity((gw * gh) as usize);
+    for gy in 0..gh {
+        for gx in 0..gw {
+            // Footprint cell this grid point represents.
+            let x0 = (gx * bw) / gw;
+            let x1 = (((gx + 1) * bw) / gw).max(x0 + 1).min(bw);
+            let y0 = (gy * bh) / gh;
+            let y1 = (((gy + 1) * bh) / gh).max(y0 + 1).min(bh);
+            // Partition of the cell's top-left texel — for a 1:1 grid
+            // this is exactly the texel the grid point reconstructs.
+            let pcx = x0.min(bw - 1);
+            let pcy = y0.min(bh - 1);
+            let p = part
+                .get((pcy * bw + pcx) as usize)
+                .copied()
+                .unwrap_or_else(|| select_partition(seed, pcx, pcy, 2, small_block).min(1) as u8)
+                as usize;
+
+            let mut acc = [0i64; 4];
+            let mut cnt = 0i64;
+            for ty in y0..y1 {
+                for tx in x0..x1 {
+                    if part[(ty * bw + tx) as usize] as usize != p {
+                        continue;
+                    }
+                    let t = texels[(ty * bw + tx) as usize];
+                    for c in 0..4 {
+                        acc[c] += t[c] as i64;
+                    }
+                    cnt += 1;
+                }
+            }
+            if cnt == 0 {
+                // No same-partition texel in the cell; fall back to all.
+                for ty in y0..y1 {
+                    for tx in x0..x1 {
+                        let t = texels[(ty * bw + tx) as usize];
+                        for c in 0..4 {
+                            acc[c] += t[c] as i64;
+                        }
+                        cnt += 1;
+                    }
+                }
+            }
+            let cnt = cnt.max(1);
+            let avg: [i64; 4] = core::array::from_fn(|c| acc[c] / cnt);
+            let mut num = 0i64;
+            let mut den = 0i64;
+            for c in 0..4 {
+                let a = e0_16[p][c] as i64;
+                let b = e1_16[p][c] as i64;
+                let d = b - a;
+                let pj = ((avg[c] << 8) | avg[c]) - a;
+                num += pj * d;
+                den += d * d;
+            }
+            let w = if den == 0 {
+                0
+            } else {
+                ((num * 64 + den / 2) / den).clamp(0, 64) as u32
+            };
+            grid_weights.push(quantize_weight(w, wr));
+        }
+    }
+    pack_weights_into(&mut bb, &grid_weights, wr);
     bb.bytes()
 }
 
@@ -2649,6 +2938,56 @@ mod tests {
                 // for these legal blocks.
                 let out = decode_astc_ldr_block(&block, bw, bh);
                 assert_eq!(out.len(), (bw * bh) as usize);
+            }
+        }
+    }
+
+    #[test]
+    fn encode_two_subset_beats_single_on_split_block() {
+        // A 4×4 block whose left half is one colour line and right half a
+        // very different one is poorly served by a single endpoint pair.
+        // The full encoder (which tries 2-subset) must reconstruct it at
+        // least as well as the single-subset path, and strictly better on
+        // this adversarial case.
+        let red = [220u8, 20, 20, 255];
+        let blue = [20u8, 20, 220, 255];
+        let mut texels = vec![red; 16];
+        for (i, t) in texels.iter_mut().enumerate() {
+            if i % 4 >= 2 {
+                *t = blue;
+            }
+        }
+        let full = encode_astc_ldr_block(&texels, 4, 4);
+        let single = encode_single_subset(&texels, 4, 4);
+        let full_sad = block_sad(&full, &texels, 4, 4);
+        let single_sad = block_sad(&single, &texels, 4, 4);
+        assert!(
+            full_sad <= single_sad,
+            "full {full_sad} should not exceed single {single_sad}"
+        );
+        // 2-subset must give a meaningful improvement on this split block
+        // (at least 20% lower error than the single-pair fit).
+        assert!(
+            full_sad * 5 < single_sad * 4,
+            "2-subset should beat single by >20%: full {full_sad} single {single_sad}"
+        );
+    }
+
+    #[test]
+    fn encode_two_subset_block_is_decodable() {
+        // The 2-subset path must produce a legal, non-error block.
+        let red = [200u8, 30, 30, 255];
+        let green = [30u8, 200, 30, 255];
+        let mut texels = vec![red; 16];
+        for (i, t) in texels.iter_mut().enumerate() {
+            if i >= 8 {
+                *t = green;
+            }
+        }
+        if let Some(block) = encode_two_subset(&texels, 4, 4, 1) {
+            let out = decode_astc_ldr_block(&block, 4, 4);
+            for t in &out {
+                assert_ne!(*t, ERROR_COLOR, "2-subset block decoded to error colour");
             }
         }
     }

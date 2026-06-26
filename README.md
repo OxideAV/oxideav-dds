@@ -133,10 +133,15 @@ reconstructs it as a blend of the two endpoints. Footprints with ≤ 36
 texels use a 1:1 weight grid (no bilinear-infill loss); larger ones use
 a sub-sampled grid. Block-mode, colour and weight quantization are all
 derived by inverting the crate's own decode model, so encode and decode
-agree by construction. Round-trip is exact for solid blocks and within
-a documented tolerance for collinear gradients; non-collinear 2D detail
-is approximated (single-subset — one endpoint pair reconstructs texels
-along a single RGB line). No HDR encode. `encode_dds_astc` wraps the
+agree by construction. The encoder also tries two-subset
+(partition) blocks — it splits the texels via the decoder's own
+partition pattern over a few seeds, fits each subset with its own
+endpoint line, and keeps whichever block (single- or two-subset) decodes
+closest to the source — so a non-collinear block (e.g. two distinct
+colour regions) is reconstructed far better than a single endpoint pair
+allows. Round-trip is exact for solid blocks and within a documented
+tolerance for collinear gradients. No HDR encode; three-subset and
+dual-plane encode are future work. `encode_dds_astc` wraps the
 encoder in a complete DX10-header `.dds` file (correct
 `DXGI_FORMAT_ASTC_*` code, optional fabricated mipmap chain), so an
 RGBA8 surface round-trips to disk and back through `parse_dds`.

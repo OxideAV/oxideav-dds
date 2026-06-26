@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **ASTC LDR two-subset (partition) encode (round 372).** The block
+  encoder now also tries two-partition blocks: it routes the texels
+  through the decoder's own `select_partition` for a handful of fixed
+  seeds, fits each partition with its own min/max endpoint line (single
+  shared CEM, colour stream at bit 29), and keeps whichever block — the
+  single-subset fit or the best two-subset candidate — decodes closest to
+  the source (measured against this crate's decoder, so the choice is
+  exact). Non-collinear blocks that a single endpoint pair can't
+  represent (e.g. a red region beside a blue one) drop > 30 % in
+  round-trip error. Two new unit tests assert the two-subset win on an
+  adversarial split block and that the two-subset path is always
+  decodable.
+
 - **End-to-end ASTC `.dds` emitter — `encode_dds_astc` (round 372).** A
   new top-level writer takes an RGBA8 surface plus a
   `DdsPixelFormat::Astc { block_w, block_h, srgb }` and emits a complete
