@@ -98,3 +98,9 @@ name = "decode_depth"
 path = "fuzz_targets/decode_depth.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "encode_astc"
+path = "fuzz_targets/encode_astc.rs"
+test = false
+doc = false

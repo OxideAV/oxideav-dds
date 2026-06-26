@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **ASTC encode fuzz target + benchmark (round 372).** A ninth
+  `cargo-fuzz` target `encode_astc` drives arbitrary RGBA8 texels /
+  surfaces through `encode_astc_ldr_block` / `encode_astc_ldr`,
+  re-decodes the output, and asserts the byte counts round-trip — the
+  encoder must be panic-free and only ever emit blocks it can itself
+  decode. A 30-second local run logged 22k+ executions with no crash. A
+  paired `encode_astc` criterion scenario (128×128 → ASTC 4×4) is added
+  to `benches/encode.rs`.
+
 - **ASTC LDR two-subset (partition) encode (round 372).** The block
   encoder now also tries two-partition blocks: it routes the texels
   through the decoder's own `select_partition` for a handful of fixed

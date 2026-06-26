@@ -244,6 +244,27 @@ fn bench_encode_bc7(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_encode_astc(c: &mut Criterion) {
+    // The ASTC encoder's per-block cost is dominated by the block-mode
+    // search (decode_block_mode over the 2048-entry mode space), the
+    // brute-force colour/weight quantization, and the two-subset seed
+    // sweep that re-decodes each candidate. Benched on a 128×128 surface
+    // at the 4×4 footprint (the most blocks per surface).
+    let mut group = c.benchmark_group("encode_astc");
+    let w = 128usize;
+    let h = 128usize;
+    let rgba = build_rgba8(w, h, 0x0A57_C0DE);
+    group.throughput(Throughput::Bytes((w * h * 4) as u64));
+    group.sample_size(10);
+    group.bench_with_input(BenchmarkId::new("128x128", "ASTC_4x4"), &rgba, |b, src| {
+        b.iter(|| {
+            let out = oxideav_dds::encode_astc_ldr(src, w as u32, h as u32, 4, 4);
+            criterion::black_box(out.first().copied());
+        });
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_encode_bc1,
@@ -252,5 +273,6 @@ criterion_group!(
     bench_encode_bc5,
     bench_encode_bc6h,
     bench_encode_bc7,
+    bench_encode_astc,
 );
 criterion_main!(benches);

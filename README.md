@@ -192,10 +192,11 @@ recognised but return `DdsError::Unsupported` from the layout resolver.
   mutates one header field at a time and asserts `parse_dds` returns
   `Err` rather than panicking. Surface-size and block-grid arithmetic
   uses `checked_` / `saturating_` multiplication throughout.
-- Eight `cargo-fuzz` panic-free targets under `fuzz/` (`parse_dds`,
+- Nine `cargo-fuzz` panic-free targets under `fuzz/` (`parse_dds`,
   `decode_bcn`, `decode_bc6h`, `decode_bc7`, `decode_astc`,
-  `decode_yuv`, `decode_depth`, `roundtrip`), driven daily by
-  `.github/workflows/fuzz.yml`. The ASTC
+  `decode_yuv`, `decode_depth`, `roundtrip`, `encode_astc`), driven daily
+  by `.github/workflows/fuzz.yml`. The `encode_astc` target round-trips
+  arbitrary RGBA8 through the ASTC encoder and re-decodes the output. The ASTC
   block + surface decoders are additionally exercised by
   `tests/astc_robustness.rs` (a 70k random-block sweep over every
   footprint plus an exhaustive 2^11 block-mode-field sweep).
