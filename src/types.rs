@@ -801,6 +801,36 @@ impl DxgiFormat {
         })
     }
 
+    /// The `_UNORM` (or `_UNORM_SRGB`) `DXGI_FORMAT_ASTC_*` value for a
+    /// `(block_w, block_h)` footprint, used when writing an ASTC surface.
+    /// `None` if the footprint is not one of the 14 LDR 2D footprints.
+    /// Per `astc-ldr-notes.md` §11.
+    pub fn astc_unorm(block_w: u32, block_h: u32, srgb: bool) -> Option<Self> {
+        let unorm = match (block_w, block_h) {
+            (4, 4) => Self::Astc4x4Unorm,
+            (5, 4) => Self::Astc5x4Unorm,
+            (5, 5) => Self::Astc5x5Unorm,
+            (6, 5) => Self::Astc6x5Unorm,
+            (6, 6) => Self::Astc6x6Unorm,
+            (8, 5) => Self::Astc8x5Unorm,
+            (8, 6) => Self::Astc8x6Unorm,
+            (8, 8) => Self::Astc8x8Unorm,
+            (10, 5) => Self::Astc10x5Unorm,
+            (10, 6) => Self::Astc10x6Unorm,
+            (10, 8) => Self::Astc10x8Unorm,
+            (10, 10) => Self::Astc10x10Unorm,
+            (12, 10) => Self::Astc12x10Unorm,
+            (12, 12) => Self::Astc12x12Unorm,
+            _ => return None,
+        };
+        if !srgb {
+            return Some(unorm);
+        }
+        // The `_UNORM_SRGB` value sits one slot above the `_UNORM` one
+        // in the 133..=187 range (TYPELESS, UNORM, UNORM_SRGB triples).
+        Some(Self::from_u32(unorm.to_u32() + 1))
+    }
+
     /// True for any format whose pixel data is laid out in 4×4 blocks
     /// of fixed byte size (BC1..BC7 plus the typeless variants).
     pub fn is_block_compressed(self) -> bool {

@@ -245,8 +245,8 @@ pub use depth::{
     decode_depth_x32_g8x24_uint_surface, DepthStencil,
 };
 pub use encoder::{
-    encode_dds_block_compressed, encode_dds_block_compressed_from_rgba8, encode_dds_uncompressed,
-    encode_dds_volume,
+    encode_dds_astc, encode_dds_block_compressed, encode_dds_block_compressed_from_rgba8,
+    encode_dds_uncompressed, encode_dds_volume,
 };
 pub use error::{DdsError, Result};
 pub use hdr::{

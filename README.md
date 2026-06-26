@@ -136,7 +136,10 @@ derived by inverting the crate's own decode model, so encode and decode
 agree by construction. Round-trip is exact for solid blocks and within
 a documented tolerance for collinear gradients; non-collinear 2D detail
 is approximated (single-subset — one endpoint pair reconstructs texels
-along a single RGB line). No HDR encode.
+along a single RGB line). No HDR encode. `encode_dds_astc` wraps the
+encoder in a complete DX10-header `.dds` file (correct
+`DXGI_FORMAT_ASTC_*` code, optional fabricated mipmap chain), so an
+RGBA8 surface round-trips to disk and back through `parse_dds`.
 
 **Block-compressed encode.**
 

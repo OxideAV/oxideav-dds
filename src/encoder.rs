@@ -983,6 +983,141 @@ pub fn encode_dds_block_compressed_from_rgba8(
     )
 }
 
+/// Total stored bytes of one ASTC mip-0 surface: `ceil(w/bw) ×
+/// ceil(h/bh)` blocks of 16 bytes each.
+fn astc_surface_bytes(bw: u32, bh: u32, w: u32, h: u32) -> usize {
+    (w.max(1).div_ceil(bw) as usize) * (h.max(1).div_ceil(bh) as usize) * 16
+}
+
+/// Encode an RGBA8 surface to a complete ASTC LDR `.dds` file.
+///
+/// `pixel_format` must be a [`DdsPixelFormat::Astc`] value carrying the
+/// footprint and the sRGB flag; `rgba8` holds `width × height × 4`
+/// bytes. The file always uses the `DX10` extension header (ASTC has no
+/// legacy FourCC) with the matching `DXGI_FORMAT_ASTC_*` value. When
+/// `mip_map_count > 1` the chain is fabricated by 2×2 box-filter
+/// downsampling, mirroring [`encode_dds_block_compressed_from_rgba8`].
+///
+/// The emitted blocks come from the single-partition
+/// [`crate::astc::encode_astc_ldr`] encoder, so the file round-trips
+/// through [`crate::parse_dds`] + [`crate::decode_astc_ldr_surface`]
+/// within that encoder's documented tolerance.
+pub fn encode_dds_astc(
+    rgba8: &[u8],
+    width: u32,
+    height: u32,
+    pixel_format: DdsPixelFormat,
+    mip_map_count: u32,
+) -> Result<Vec<u8>> {
+    let (bw, bh, srgb) = match pixel_format {
+        DdsPixelFormat::Astc {
+            block_w,
+            block_h,
+            srgb,
+        } => (block_w, block_h, srgb),
+        _ => {
+            return Err(DdsError::unsupported(format!(
+                "encode_dds_astc requires an ASTC pixel_format (got {})",
+                pixel_format.name()
+            )));
+        }
+    };
+    if width == 0 || height == 0 {
+        return Err(DdsError::invalid(format!(
+            "zero-sized surface: {width}x{height}"
+        )));
+    }
+    if !crate::astc::is_valid_footprint(bw as u8, bh as u8) {
+        return Err(DdsError::invalid(format!(
+            "invalid ASTC footprint {bw}x{bh}"
+        )));
+    }
+    let need_in = (width as usize) * (height as usize) * 4;
+    if rgba8.len() < need_in {
+        return Err(DdsError::invalid(format!(
+            "RGBA8 input {} bytes < expected {} for {}x{}",
+            rgba8.len(),
+            need_in,
+            width,
+            height
+        )));
+    }
+
+    let mip = mip_map_count.max(1);
+    let with_mips = mip > 1;
+    let mip_dims = mip_dimensions(width, height, mip);
+
+    // Encode every level. Level 0 from the supplied RGBA8; subsequent
+    // levels from a box-filtered downsample of the previous level.
+    let mut payload: Vec<u8> = Vec::new();
+    let mut prev_rgba: Vec<u8> = rgba8[..need_in].to_vec();
+    let mut prev_w = width;
+    let mut prev_h = height;
+    for (level, &(mw, mh)) in mip_dims.iter().enumerate() {
+        let level_rgba: Vec<u8> = if level == 0 {
+            rgba8[..need_in].to_vec()
+        } else {
+            let (down, nw, nh) = box_downsample(&prev_rgba, prev_w, prev_h, 4);
+            prev_rgba = down.clone();
+            prev_w = nw;
+            prev_h = nh;
+            down
+        };
+        let blocks = crate::astc::encode_astc_ldr(&level_rgba, mw, mh, bw, bh);
+        payload.extend_from_slice(&blocks);
+    }
+
+    let dxgi = DxgiFormat::astc_unorm(bw, bh, srgb)
+        .map(|f| f.to_u32())
+        .ok_or_else(|| DdsError::invalid(format!("no DXGI ASTC code for {bw}x{bh}")))?;
+
+    let mip0_bytes = astc_surface_bytes(bw, bh, width, height);
+    let flags = DDSD_REQUIRED | DDSD_LINEARSIZE | if with_mips { DDSD_MIPMAPCOUNT } else { 0 };
+    let caps = DDSCAPS_TEXTURE
+        | if with_mips {
+            DDSCAPS_COMPLEX | DDSCAPS_MIPMAP
+        } else {
+            0
+        };
+
+    let header_bytes = 4 + DDS_HEADER_SIZE + DDS_HEADER_DXT10_SIZE;
+    let mut out = Vec::with_capacity(header_bytes + payload.len());
+    push_u32(&mut out, DDS_MAGIC);
+    push_u32(&mut out, DDS_HEADER_SIZE as u32);
+    push_u32(&mut out, flags);
+    push_u32(&mut out, height);
+    push_u32(&mut out, width);
+    push_u32(&mut out, mip0_bytes as u32);
+    push_u32(&mut out, 0); // depth
+    push_u32(&mut out, mip);
+    for _ in 0..11 {
+        push_u32(&mut out, 0); // reserved1
+    }
+    // DDS_PIXELFORMAT: DX10 FourCC.
+    push_u32(&mut out, DDS_PIXELFORMAT_SIZE as u32);
+    push_u32(&mut out, DDPF_FOURCC);
+    push_u32(&mut out, FOURCC_DX10);
+    push_u32(&mut out, 0); // rgb_bit_count
+    push_u32(&mut out, 0); // r mask
+    push_u32(&mut out, 0); // g mask
+    push_u32(&mut out, 0); // b mask
+    push_u32(&mut out, 0); // a mask
+    push_u32(&mut out, caps);
+    push_u32(&mut out, 0); // caps2
+    push_u32(&mut out, 0); // caps3
+    push_u32(&mut out, 0); // caps4
+    push_u32(&mut out, 0); // reserved2
+                           // DDS_HEADER_DXT10.
+    push_u32(&mut out, dxgi);
+    push_u32(&mut out, DDS_DIMENSION_TEXTURE2D);
+    push_u32(&mut out, 0); // misc_flag
+    push_u32(&mut out, 1); // array_size
+    push_u32(&mut out, 0); // misc_flags2
+
+    out.extend_from_slice(&payload);
+    Ok(out)
+}
+
 /// Encode a single RGBA8 mip level into the destination BC* format.
 fn encode_rgba8_to_bc_level(
     rgba: &[u8],

@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **End-to-end ASTC `.dds` emitter — `encode_dds_astc` (round 372).** A
+  new top-level writer takes an RGBA8 surface plus a
+  `DdsPixelFormat::Astc { block_w, block_h, srgb }` and emits a complete
+  DX10-header `.dds` file: the matching `DXGI_FORMAT_ASTC_*` code (via
+  the new `DxgiFormat::astc_unorm` footprint → UNORM/UNORM_SRGB helper),
+  a fabricated box-filter mipmap chain when `mip_map_count > 1`, and the
+  per-level ASTC blocks from `encode_astc_ldr`. The file round-trips
+  through `parse_dds` + `decode_astc_ldr_surface`: solid surfaces
+  byte-exact, collinear gradients within tolerance. Five new
+  `tests/astc_encode.rs` end-to-end tests cover the 14-footprint solid
+  round-trip, the luma-ramp tolerance, the DX10 header + mip-chain shape,
+  the sRGB code path, and bad-input rejection.
+
 - **ASTC LDR encoder — `src/astc.rs` (round 372).** The decoder gains a
   matching single-partition, single-plane LDR encoder:
   `encode_astc_ldr_block` (one 128-bit block from `block_w × block_h`
