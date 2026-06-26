@@ -519,6 +519,37 @@ fn uncompressed_dxgi_code(pix: DdsPixelFormat) -> Option<u32> {
     })
 }
 
+/// Map any uncompressed [`DdsPixelFormat`] that has a `DXGI_FORMAT`
+/// counterpart to its code — including the legacy-mask 32-bit RGBA
+/// families, which only need a DX10 code when carried as a texture array
+/// or cube array (a shape the legacy header cannot describe). Per
+/// Microsoft's `DXGI_FORMAT` reference; the chosen code is the one whose
+/// `pixel_format_from_dxgi` mapping is the identity for this variant.
+fn any_uncompressed_dxgi_code(pix: DdsPixelFormat) -> Option<u32> {
+    if let Some(code) = uncompressed_dxgi_code(pix) {
+        return Some(code);
+    }
+    use DdsPixelFormat::*;
+    Some(match pix {
+        // R8G8B8A8 (RGBA on disk) ← crate-local A8B8G8R8.
+        A8B8G8R8 => DxgiFormat::R8G8B8A8Unorm.to_u32(),
+        // B8G8R8A8 / B8G8R8X8 (BGRA / BGRX on disk).
+        A8R8G8B8 => DxgiFormat::B8G8R8A8Unorm.to_u32(),
+        X8R8G8B8 => DxgiFormat::B8G8R8X8Unorm.to_u32(),
+        // 16-bit packed colour with a DXGI equivalent.
+        R5G6B5 => DxgiFormat::B5G6R5Unorm.to_u32(),
+        A1R5G5B5 => DxgiFormat::B5G5R5A1Unorm.to_u32(),
+        A4R4G4B4 => DxgiFormat::B4G4R4A4Unorm.to_u32(),
+        // Single-channel byte luminance / alpha → R8 / A8.
+        L8 => DxgiFormat::R8Unorm.to_u32(),
+        A8 => DxgiFormat::A8Unorm.to_u32(),
+        // No DXGI counterpart (X8B8G8R8, R8G8B8, X1R5G5B5, X4R4G4B4,
+        // A8L8, L16, A4L4): a legacy-only layout. The DX10 array path
+        // cannot carry these without a DXGI code.
+        _ => return None,
+    })
+}
+
 /// Encode a [`DdsImage`] carrying a DX10-only uncompressed pixel format
 /// (high-bit-depth, floating-point, packed-HDR, plain-integer,
 /// normalised single/dual-channel, or depth/depth-stencil) as a DDS
@@ -698,6 +729,193 @@ pub fn encode_dds_uncompressed_dx10(image: &DdsImage) -> Result<Vec<u8>> {
         }
     }
 
+    Ok(out)
+}
+
+/// Encode an uncompressed cubemap or DX10 texture-array DDS file from a
+/// pre-populated [`DdsImage::surfaces`] list.
+///
+/// `image.surfaces` must carry every `(array_slice, face, mip_level)`
+/// surface in Microsoft's mandated on-disk order (outer loop over array
+/// slice, then over cubemap face, then over mip level), each holding
+/// exactly `mip_w × mip_h × bytes_per_pixel` bytes. `image.is_cubemap`
+/// and/or `image.array_size > 1` select the shape; a plain 2D surface
+/// (neither set) should go through [`encode_dds_uncompressed`] instead.
+///
+/// A **legacy-mask** cubemap (`is_cubemap`, `array_size == 1`, and a
+/// pixel format with a legacy `DDS_PIXELFORMAT` layout) is written with
+/// the legacy header and all six `DDSCAPS2_CUBEMAP_*` face-presence bits
+/// (every face must be present since Direct3D 9). Any **texture array**
+/// (`array_size > 1`), **DX10-only** pixel format, or **cube array**
+/// uses the `DDS_HEADER_DXT10` extension with the
+/// `DDS_RESOURCE_MISC_TEXTURECUBE` misc flag (for cubemaps) and the
+/// `array_size` element count. Both shapes round-trip through
+/// [`crate::parse_dds`].
+///
+/// Volume (3D) textures are not a cubemap/array shape — use
+/// [`encode_dds_volume`].
+pub fn encode_dds_uncompressed_cubemap_array(image: &DdsImage) -> Result<Vec<u8>> {
+    let pix = image.pixel_format;
+    if pix.is_block_compressed() || pix.astc_footprint().is_some() {
+        return Err(DdsError::unsupported(format!(
+            "encode_dds_uncompressed_cubemap_array does not handle {} (uncompressed only)",
+            pix.name()
+        )));
+    }
+    if !image.is_cubemap && image.array_size <= 1 {
+        return Err(DdsError::invalid(
+            "encode_dds_uncompressed_cubemap_array requires is_cubemap or array_size > 1 (use encode_dds_uncompressed for plain 2D)",
+        ));
+    }
+    if image.depth > 1 {
+        return Err(DdsError::unsupported(
+            "a cubemap / texture array cannot also be a volume (3D) texture".to_string(),
+        ));
+    }
+    let width = image.width;
+    let height = image.height;
+    if width == 0 || height == 0 {
+        return Err(DdsError::invalid(format!(
+            "zero-sized surface: {width}x{height}"
+        )));
+    }
+    let bpp = pix.bytes_per_pixel().ok_or_else(|| {
+        DdsError::unsupported(format!("{} has no flat bytes-per-pixel layout", pix.name()))
+    })?;
+
+    let mip = image.mip_map_count.max(1);
+    let with_mips = mip > 1;
+    let array_n = image.array_size.max(1);
+    let face_count: u32 = if image.is_cubemap { 6 } else { 1 };
+    let mip_dims = mip_dimensions(width, height, mip);
+    let surfaces_per_slice = (face_count * mip) as usize;
+    let total_surfaces = (array_n as usize) * surfaces_per_slice;
+    if image.surfaces.len() < total_surfaces {
+        return Err(DdsError::invalid(format!(
+            "cubemap/array encode requires {total_surfaces} surface(s) (slice × face × mip), got {}",
+            image.surfaces.len()
+        )));
+    }
+
+    // Validate + collect the payload in canonical (slice → face → mip)
+    // order, verifying each surface's dimensions and byte count.
+    let mut payload = Vec::new();
+    let mut si = 0usize;
+    for _slice in 0..array_n {
+        for _face in 0..face_count {
+            for (mi, &(mw, mh)) in mip_dims.iter().enumerate() {
+                let s = &image.surfaces[si];
+                if s.width != mw || s.height != mh {
+                    return Err(DdsError::invalid(format!(
+                        "surface[{si}] dims {}x{} != canonical mip {mi} ({mw}x{mh})",
+                        s.width, s.height
+                    )));
+                }
+                let want = (mw as usize) * (mh as usize) * bpp as usize;
+                if s.plane.data.len() < want {
+                    return Err(DdsError::invalid(format!(
+                        "surface[{si}] has {} bytes, expected ≥ {want} ({mw}x{mh} {} @ {} bpp)",
+                        s.plane.data.len(),
+                        pix.name(),
+                        bpp * 8,
+                    )));
+                }
+                payload.extend_from_slice(&s.plane.data[..want]);
+                si += 1;
+            }
+        }
+    }
+
+    // A legacy cubemap (no array) with a legacy-mask format uses the
+    // legacy header + face-presence bits. Everything else (array,
+    // DX10-only format) needs the DX10 extension.
+    let legacy_pf = legacy_pixel_format_fields(pix).ok();
+    let dx10_code = any_uncompressed_dxgi_code(pix);
+    let use_dx10 = array_n > 1 || legacy_pf.is_none();
+    if use_dx10 && dx10_code.is_none() && image.dxgi_format.is_none() {
+        return Err(DdsError::unsupported(format!(
+            "{} has no DX10 DXGI code and no legacy cubemap layout for this shape",
+            pix.name()
+        )));
+    }
+
+    let pitch = width as u64 * bpp as u64;
+    let flags = DDSD_REQUIRED | DDSD_PITCH | if with_mips { DDSD_MIPMAPCOUNT } else { 0 };
+    let mut caps = DDSCAPS_TEXTURE;
+    if with_mips {
+        caps |= DDSCAPS_MIPMAP;
+    }
+    // A cubemap or a mipmapped surface has child surfaces.
+    if with_mips || image.is_cubemap {
+        caps |= DDSCAPS_COMPLEX;
+    }
+    let caps2 = if image.is_cubemap {
+        DDSCAPS2_CUBEMAP | DDSCAPS2_CUBEMAP_ALL_FACES
+    } else {
+        0
+    };
+
+    let pf = if use_dx10 {
+        DdsPixelFormatHeader {
+            size: DDS_PIXELFORMAT_SIZE as u32,
+            flags: DDPF_FOURCC,
+            four_cc: FOURCC_DX10,
+            rgb_bit_count: 0,
+            r_bit_mask: 0,
+            g_bit_mask: 0,
+            b_bit_mask: 0,
+            a_bit_mask: 0,
+        }
+    } else {
+        legacy_pf.expect("legacy pixel format available")
+    };
+
+    let header_bytes = 4 + DDS_HEADER_SIZE + if use_dx10 { DDS_HEADER_DXT10_SIZE } else { 0 };
+    let mut out = Vec::with_capacity(header_bytes + payload.len());
+    push_u32(&mut out, DDS_MAGIC);
+    push_u32(&mut out, DDS_HEADER_SIZE as u32);
+    push_u32(&mut out, flags);
+    push_u32(&mut out, height);
+    push_u32(&mut out, width);
+    push_u32(&mut out, pitch as u32);
+    push_u32(&mut out, 0); // depth
+    push_u32(&mut out, mip);
+    for _ in 0..11 {
+        push_u32(&mut out, 0); // reserved1
+    }
+    push_u32(&mut out, pf.size);
+    push_u32(&mut out, pf.flags);
+    push_u32(&mut out, pf.four_cc);
+    push_u32(&mut out, pf.rgb_bit_count);
+    push_u32(&mut out, pf.r_bit_mask);
+    push_u32(&mut out, pf.g_bit_mask);
+    push_u32(&mut out, pf.b_bit_mask);
+    push_u32(&mut out, pf.a_bit_mask);
+    push_u32(&mut out, caps);
+    push_u32(&mut out, caps2);
+    push_u32(&mut out, 0); // caps3
+    push_u32(&mut out, 0); // caps4
+    push_u32(&mut out, 0); // reserved2
+
+    if use_dx10 {
+        let dxgi = image
+            .dxgi_format
+            .map(|f| f.to_u32())
+            .or(dx10_code)
+            .expect("DXGI code checked above");
+        push_u32(&mut out, dxgi);
+        push_u32(&mut out, DDS_DIMENSION_TEXTURE2D);
+        let misc_flag = if image.is_cubemap {
+            DDS_RESOURCE_MISC_TEXTURECUBE
+        } else {
+            0
+        };
+        push_u32(&mut out, misc_flag);
+        push_u32(&mut out, array_n);
+        push_u32(&mut out, 0); // misc_flags2
+    }
+
+    out.extend_from_slice(&payload);
     Ok(out)
 }
 

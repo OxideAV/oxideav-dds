@@ -180,6 +180,13 @@ surfaces verbatim, otherwise box-filter downsampled);
 (DX10 `TEXTURE3D` header, per-mip depth-halving, non-power-of-two
 footprints).
 
+**Cubemap / array emission.**
+`encode_dds_uncompressed_cubemap_array` writes an uncompressed cubemap
+(legacy header + six face bits, or DX10 `TEXTURECUBE`) or DX10 texture /
+cube array from a pre-populated `surfaces` list;
+`encode_dds_block_compressed_from_rgba8` covers the block-compressed
+cubemap / array path from RGBA8.
+
 **Format table.** Every `DXGI_FORMAT` value Microsoft assigns (1..=132)
 plus the Windows 8.1-era ASTC range (133..=187) is enumerated by name in
 `DxgiFormat` for lossless round-trip; the plain

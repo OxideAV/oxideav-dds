@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Uncompressed cubemap / texture-array encode (round 375).**
+  `encode_dds_uncompressed_cubemap_array` writes a cubemap or DX10
+  texture array from a pre-populated `DdsImage::surfaces` list (slice →
+  face → mip on-disk order). A legacy-mask single cubemap uses the legacy
+  header with all six `DDSCAPS2_CUBEMAP_*` face-presence bits (every face
+  present since Direct3D 9, per the cubic-environment-map layout page);
+  any texture array, cube array, or DX10-only format uses a
+  `DDS_HEADER_DXT10` extension with the `DDS_RESOURCE_MISC_TEXTURECUBE`
+  misc flag (cubemaps) and the `array_size` element count. The legacy
+  32-bit RGBA / 16-bit packed / L8 / A8 mask formats gain a DXGI-code
+  fallback so they can be carried in the array path. Both shapes
+  round-trip byte-for-byte through `parse_dds`. Seven new tests cover
+  single-mip / mipmapped legacy cubemaps, DX10 texture arrays, DX10-only
+  cubemaps, cube arrays, and the plain-2D / block-compressed rejection
+  paths.
+
 - **DX10-header uncompressed encode (round 375).**
   `encode_dds_uncompressed_dx10` serialises the uncompressed formats that
   have no legacy `DDS_PIXELFORMAT` mask layout: the high-bit-depth
