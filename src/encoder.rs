@@ -451,6 +451,256 @@ fn volume_mip_depths(base_depth: u32, mip_count: u32) -> Vec<u32> {
     (0..mip_count).map(|m| (base_depth >> m).max(1)).collect()
 }
 
+/// Map an uncompressed [`DdsPixelFormat`] to the canonical
+/// `DXGI_FORMAT` integer code that [`crate::decoder::parse_dds`] routes
+/// back to the same variant. Returns `None` for the legacy-only mask
+/// layouts (those go through [`encode_dds_uncompressed`]) and for any
+/// format that has no flat byte layout. Per Microsoft's public
+/// `DXGI_FORMAT` reference; the chosen code is the one whose
+/// `pixel_format_from_dxgi` mapping is the identity for this variant.
+fn uncompressed_dxgi_code(pix: DdsPixelFormat) -> Option<u32> {
+    use DdsPixelFormat::*;
+    Some(match pix {
+        // High-bit-depth / floating-point uncompressed layouts.
+        R16G16B16A16Unorm => DxgiFormat::R16G16B16A16Unorm.to_u32(),
+        R16G16B16A16Snorm => DxgiFormat::R16G16B16A16Snorm.to_u32(),
+        R16Float => DxgiFormat::R16Float.to_u32(),
+        R16G16Float => DxgiFormat::R16G16Float.to_u32(),
+        R16G16B16A16Float => DxgiFormat::R16G16B16A16Float.to_u32(),
+        R32Float => DxgiFormat::R32Float.to_u32(),
+        R32G32Float => DxgiFormat::R32G32Float.to_u32(),
+        R32G32B32A32Float => DxgiFormat::R32G32B32A32Float.to_u32(),
+        // Packed 10:10:10:2.
+        R10G10B10A2Unorm => DxgiFormat::R10G10B10A2Unorm.to_u32(),
+        R10G10B10A2Uint => DxgiFormat::R10G10B10A2Uint.to_u32(),
+        // Horizontally sub-sampled packed RGB.
+        R8G8B8G8Unorm => DxgiFormat::R8G8B8G8Unorm.to_u32(),
+        G8R8G8B8Unorm => DxgiFormat::G8R8G8B8Unorm.to_u32(),
+        // Plain-integer 8/16/32-bit layouts.
+        R8Uint => DxgiFormat::R8Uint.to_u32(),
+        R8Sint => DxgiFormat::R8Sint.to_u32(),
+        R8G8Uint => DxgiFormat::R8G8Uint.to_u32(),
+        R8G8Sint => DxgiFormat::R8G8Sint.to_u32(),
+        R8G8B8A8Uint => DxgiFormat::R8G8B8A8Uint.to_u32(),
+        R8G8B8A8Sint => DxgiFormat::R8G8B8A8Sint.to_u32(),
+        R16Uint => DxgiFormat::R16Uint.to_u32(),
+        R16Sint => DxgiFormat::R16Sint.to_u32(),
+        R16G16Uint => DxgiFormat::R16G16Uint.to_u32(),
+        R16G16Sint => DxgiFormat::R16G16Sint.to_u32(),
+        R16G16B16A16Uint => DxgiFormat::R16G16B16A16Uint.to_u32(),
+        R16G16B16A16Sint => DxgiFormat::R16G16B16A16Sint.to_u32(),
+        R32Uint => DxgiFormat::R32Uint.to_u32(),
+        R32Sint => DxgiFormat::R32Sint.to_u32(),
+        R32G32Uint => DxgiFormat::R32G32Uint.to_u32(),
+        R32G32Sint => DxgiFormat::R32G32Sint.to_u32(),
+        R32G32B32Uint => DxgiFormat::R32G32B32Uint.to_u32(),
+        R32G32B32Sint => DxgiFormat::R32G32B32Sint.to_u32(),
+        R32G32B32A32Uint => DxgiFormat::R32G32B32A32Uint.to_u32(),
+        R32G32B32A32Sint => DxgiFormat::R32G32B32A32Sint.to_u32(),
+        // Normalised single/dual-channel 8/16-bit layouts.
+        R8Snorm => DxgiFormat::R8Snorm.to_u32(),
+        R8G8Snorm => DxgiFormat::R8G8Snorm.to_u32(),
+        R8G8B8A8Snorm => DxgiFormat::R8G8B8A8Snorm.to_u32(),
+        R16Unorm => DxgiFormat::R16Unorm.to_u32(),
+        R16Snorm => DxgiFormat::R16Snorm.to_u32(),
+        R16G16Unorm => DxgiFormat::R16G16Unorm.to_u32(),
+        R16G16Snorm => DxgiFormat::R16G16Snorm.to_u32(),
+        // Depth / depth-stencil surfaces (decode-only on the read side,
+        // but the byte payload round-trips verbatim through a DX10 header).
+        D16Unorm => DxgiFormat::D16Unorm.to_u32(),
+        D32Float => DxgiFormat::D32Float.to_u32(),
+        D24UnormS8Uint => DxgiFormat::D24UnormS8Uint.to_u32(),
+        D32FloatS8X24Uint => DxgiFormat::D32FloatS8X24Uint.to_u32(),
+        // Everything else: the legacy mask formats (route through
+        // encode_dds_uncompressed), block-compressed, ASTC, YUV, the
+        // single-aspect depth views, and the RGBA8/L8/A8 families that
+        // already have a legacy mask layout.
+        _ => return None,
+    })
+}
+
+/// Encode a [`DdsImage`] carrying a DX10-only uncompressed pixel format
+/// (high-bit-depth, floating-point, packed-HDR, plain-integer,
+/// normalised single/dual-channel, or depth/depth-stencil) as a DDS
+/// file with a `DDS_HEADER_DXT10` extension.
+///
+/// The DX10 uncompressed formats have no legacy `DDS_PIXELFORMAT` mask
+/// layout (or, like `R8_UNORM`, an ambiguous one), so they are written
+/// with the `DX10` FourCC + extension header carrying the matching
+/// `DXGI_FORMAT` integer. The plane bytes are copied verbatim — the
+/// stored little-endian channels ARE the on-disk payload (the
+/// `decode_*_surface` helpers widen them on read; this encoder does not
+/// pack or normalise). The file round-trips through
+/// [`crate::parse_dds`] back to the same [`DdsPixelFormat`].
+///
+/// `image.planes[0]` must hold at least `width × height ×
+/// bytes_per_pixel` bytes with `stride == width × bytes_per_pixel`. When
+/// `image.mip_map_count > 1` a box-filter mip chain is fabricated unless
+/// `image.surfaces` already supplies the canonical chain (same rule as
+/// [`encode_dds_uncompressed`]). For DX10-only formats whose channels
+/// are not independent bytes (the packed and >8-bit layouts), supply a
+/// pre-computed `image.surfaces` chain; the byte-domain fabricator is a
+/// noisy approximation for those.
+///
+/// Use [`encode_dds_uncompressed`] for the legacy mask formats and
+/// [`encode_dds_volume`] / [`encode_dds_volume_block_compressed`] for 3D
+/// textures.
+pub fn encode_dds_uncompressed_dx10(image: &DdsImage) -> Result<Vec<u8>> {
+    let pix = image.pixel_format;
+    let dxgi = match uncompressed_dxgi_code(pix) {
+        Some(code) => code,
+        None => {
+            return Err(DdsError::unsupported(format!(
+                "encode_dds_uncompressed_dx10 does not handle {} — use encode_dds_uncompressed for legacy mask formats",
+                pix.name()
+            )));
+        }
+    };
+    if image.planes.len() != 1 {
+        return Err(DdsError::invalid(format!(
+            "DdsImage must carry exactly one plane (got {})",
+            image.planes.len()
+        )));
+    }
+    if image.is_cubemap || image.array_size > 1 {
+        return Err(DdsError::unsupported(
+            "cubemap / texture-array DX10 uncompressed emission is not yet supported".to_string(),
+        ));
+    }
+    let width = image.width;
+    let height = image.height;
+    if width == 0 || height == 0 {
+        return Err(DdsError::invalid(format!(
+            "zero-sized surface: {width}x{height}"
+        )));
+    }
+    let bpp = pix.bytes_per_pixel().ok_or_else(|| {
+        DdsError::unsupported(format!("{} has no flat bytes-per-pixel layout", pix.name()))
+    })?;
+    let plane = &image.planes[0];
+    let pitch = width as u64 * bpp as u64;
+    let need = pitch * height as u64;
+    if (plane.data.len() as u64) < need {
+        return Err(DdsError::invalid(format!(
+            "plane data {} bytes < expected {} bytes ({}x{} {} @ {} bpp)",
+            plane.data.len(),
+            need,
+            width,
+            height,
+            pix.name(),
+            bpp * 8,
+        )));
+    }
+    if plane.stride != pitch as usize {
+        return Err(DdsError::invalid(format!(
+            "plane.stride {} != width × bytes_per_pixel = {}",
+            plane.stride, pitch
+        )));
+    }
+
+    let mip = image.mip_map_count.max(1);
+    let with_mips = mip > 1;
+    let mip_dims = mip_dimensions(width, height, mip);
+
+    // Pre-supplied chain (verbatim) if image.surfaces matches the
+    // canonical chain; else fabricate by byte-domain box-filter.
+    let pre_supplied_chain: Option<Vec<&[u8]>> =
+        if !with_mips || image.surfaces.len() < mip as usize {
+            None
+        } else {
+            let mut ok = true;
+            let mut chain: Vec<&[u8]> = Vec::with_capacity(mip as usize);
+            for (i, (w, h)) in mip_dims.iter().enumerate() {
+                let s = &image.surfaces[i];
+                let want = (*w as usize) * (*h as usize) * bpp as usize;
+                if s.width != *w || s.height != *h || s.plane.data.len() < want {
+                    ok = false;
+                    break;
+                }
+                chain.push(&s.plane.data[..want]);
+            }
+            if ok {
+                Some(chain)
+            } else {
+                None
+            }
+        };
+
+    let total_payload: usize = mip_dims
+        .iter()
+        .map(|(w, h)| (*w as usize) * (*h as usize) * bpp as usize)
+        .sum();
+
+    let flags = DDSD_REQUIRED | DDSD_PITCH | if with_mips { DDSD_MIPMAPCOUNT } else { 0 };
+    let caps = DDSCAPS_TEXTURE
+        | if with_mips {
+            DDSCAPS_COMPLEX | DDSCAPS_MIPMAP
+        } else {
+            0
+        };
+
+    let header_bytes = 4 + DDS_HEADER_SIZE + DDS_HEADER_DXT10_SIZE;
+    let mut out = Vec::with_capacity(header_bytes + total_payload);
+    push_u32(&mut out, DDS_MAGIC);
+    push_u32(&mut out, DDS_HEADER_SIZE as u32);
+    push_u32(&mut out, flags);
+    push_u32(&mut out, height);
+    push_u32(&mut out, width);
+    push_u32(&mut out, pitch as u32);
+    push_u32(&mut out, 0); // depth
+    push_u32(&mut out, mip);
+    for _ in 0..11 {
+        push_u32(&mut out, 0); // reserved1
+    }
+    // DDS_PIXELFORMAT: DX10 FourCC.
+    push_u32(&mut out, DDS_PIXELFORMAT_SIZE as u32);
+    push_u32(&mut out, DDPF_FOURCC);
+    push_u32(&mut out, FOURCC_DX10);
+    push_u32(&mut out, 0); // rgb_bit_count
+    push_u32(&mut out, 0); // r mask
+    push_u32(&mut out, 0); // g mask
+    push_u32(&mut out, 0); // b mask
+    push_u32(&mut out, 0); // a mask
+    push_u32(&mut out, caps);
+    push_u32(&mut out, 0); // caps2
+    push_u32(&mut out, 0); // caps3
+    push_u32(&mut out, 0); // caps4
+    push_u32(&mut out, 0); // reserved2
+                           // DDS_HEADER_DXT10.
+    let dxgi = image.dxgi_format.map(|f| f.to_u32()).unwrap_or(dxgi);
+    push_u32(&mut out, dxgi);
+    push_u32(&mut out, DDS_DIMENSION_TEXTURE2D);
+    push_u32(&mut out, 0); // misc_flag
+    push_u32(&mut out, 1); // array_size
+    push_u32(&mut out, 0); // misc_flags2
+
+    // Emit mip 0.
+    let mip0_bytes = need as usize;
+    out.extend_from_slice(&plane.data[..mip0_bytes]);
+
+    // Emit mip 1..n.
+    if with_mips {
+        if let Some(chain) = pre_supplied_chain {
+            for level_data in chain.iter().skip(1) {
+                out.extend_from_slice(level_data);
+            }
+        } else {
+            let mut prev: Vec<u8> = plane.data[..mip0_bytes].to_vec();
+            let mut prev_w = width;
+            let mut prev_h = height;
+            for _ in 1..mip {
+                let (next, nw, nh) = box_downsample(&prev, prev_w, prev_h, bpp);
+                out.extend_from_slice(&next);
+                prev = next;
+                prev_w = nw;
+                prev_h = nh;
+            }
+        }
+    }
+
+    Ok(out)
+}
+
 /// Encode an uncompressed volume (3D) texture as a DDS file.
 ///
 /// `image.depth` is the mip-0 depth (z) slice count and must be `> 1`

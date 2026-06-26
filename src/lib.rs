@@ -246,7 +246,8 @@ pub use depth::{
 };
 pub use encoder::{
     encode_dds_astc, encode_dds_block_compressed, encode_dds_block_compressed_from_rgba8,
-    encode_dds_uncompressed, encode_dds_volume, encode_dds_volume_block_compressed,
+    encode_dds_uncompressed, encode_dds_uncompressed_dx10, encode_dds_volume,
+    encode_dds_volume_block_compressed,
 };
 pub use error::{DdsError, Result};
 pub use hdr::{

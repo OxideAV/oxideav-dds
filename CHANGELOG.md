@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **DX10-header uncompressed encode (round 375).**
+  `encode_dds_uncompressed_dx10` serialises the uncompressed formats that
+  have no legacy `DDS_PIXELFORMAT` mask layout: the high-bit-depth
+  16-bit-per-channel UNORM/SNORM, the half-float and `f32` families, the
+  packed `R10G10B10A2_UNORM` / `_UINT` and sub-sampled
+  `R8G8_B8G8` / `G8R8_G8B8`, the plain-integer 8/16/32-bit `_UINT`/`_SINT`
+  families, the normalised single-/dual-channel 8/16-bit `_UNORM`/`_SNORM`
+  layouts, and the four depth / depth-stencil surfaces. Each stores its
+  little-endian channels verbatim on disk, so the encoder copies the
+  plane bytes unchanged under a `DDS_HEADER_DXT10` extension carrying the
+  matching `DXGI_FORMAT` code — the byte stream round-trips through
+  `parse_dds` back to the same `DdsPixelFormat`. A box-filter mip chain is
+  fabricated unless a canonical `image.surfaces` chain is supplied (use
+  the latter for the >8-bit / packed channels, where byte-domain
+  filtering is approximate). Legacy-mask, block-compressed, ASTC, YUV,
+  cubemap and array inputs are rejected with a clear error. Ten new
+  round-trip tests cover every supported format plus the rejection and
+  `dxgi_format`-override paths.
+
 - **Block-compressed volume (3D) encode (round 375).**
   `encode_dds_volume_block_compressed` writes a BC1..BC7 volume texture to
   a `.dds` file: each depth slice is an independent 4×4-block surface, the

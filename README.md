@@ -160,8 +160,20 @@ RGBA8 surface round-trips to disk and back through `parse_dds`.
   (1-subset absolute + delta modes, 2-subset partitions) for both
   unsigned and signed formats.
 
-**Mipmap emission.** `encode_dds_uncompressed` emits a full mipmap chain
-(caller-supplied surfaces verbatim, otherwise box-filter downsampled);
+**Uncompressed encode.** `encode_dds_uncompressed` writes the legacy
+`DDS_PIXELFORMAT` mask layouts (A8R8G8B8 … A8, L16, A4L4). The
+DX10-only uncompressed formats — high-bit-depth 16-bit-per-channel
+UNORM/SNORM, half-float / `f32`, packed `R10G10B10A2_UNORM`/`_UINT`,
+sub-sampled `R8G8_B8G8`/`G8R8_G8B8`, plain-integer 8/16/32-bit
+`_UINT`/`_SINT`, normalised single-/dual-channel `_UNORM`/`_SNORM`, and
+the four depth/depth-stencil surfaces — are written by
+`encode_dds_uncompressed_dx10` with a `DDS_HEADER_DXT10` extension
+carrying the matching `DXGI_FORMAT`; the plane bytes are stored
+verbatim and round-trip byte-for-byte through `parse_dds`.
+
+**Mipmap emission.** `encode_dds_uncompressed` /
+`encode_dds_uncompressed_dx10` emit a full mipmap chain (caller-supplied
+surfaces verbatim, otherwise box-filter downsampled);
 `encode_dds_block_compressed` writes pre-encoded per-mip block bytes;
 `encode_dds_volume` round-trips an uncompressed volume and
 `encode_dds_volume_block_compressed` a BC1..BC7 volume (3D) texture
