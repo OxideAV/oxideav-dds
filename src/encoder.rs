@@ -455,9 +455,8 @@ fn volume_mip_depths(base_depth: u32, mip_count: u32) -> Vec<u32> {
 ///
 /// `image.depth` is the mip-0 depth (z) slice count and must be `> 1`
 /// (use [`encode_dds_uncompressed`] for plain 2D surfaces).
-/// `image.pixel_format` must be one of the uncompressed formats (the
-/// block-compressed formats are rejected — symmetry with the 2D
-/// uncompressed encoder).
+/// `image.pixel_format` must be one of the uncompressed formats; for a
+/// block-compressed (BC*) volume use [`encode_dds_volume_block_compressed`].
 ///
 /// The caller supplies every depth slice via `image.surfaces` in the
 /// on-disk order Microsoft mandates for volume textures: outer loop
@@ -480,7 +479,7 @@ pub fn encode_dds_volume(image: &DdsImage) -> Result<Vec<u8>> {
     }
     if image.pixel_format.is_block_compressed() {
         return Err(DdsError::unsupported(format!(
-            "encode_dds_volume cannot serialise block-compressed {} (uncompressed volume only)",
+            "encode_dds_volume cannot serialise block-compressed {} — use encode_dds_volume_block_compressed",
             image.pixel_format.name()
         )));
     }
@@ -593,6 +592,145 @@ pub fn encode_dds_volume(image: &DdsImage) -> Result<Vec<u8>> {
     push_u32(&mut out, 0); // caps3
     push_u32(&mut out, 0); // caps4
     push_u32(&mut out, 0); // reserved2
+
+    out.extend_from_slice(&payload);
+    Ok(out)
+}
+
+/// Encode a block-compressed (BC*) volume (3D) texture as a DDS file.
+///
+/// `image.depth` is the mip-0 depth (z) slice count and must be `> 1`.
+/// `image.pixel_format` must be a block-compressed format (`Bc1`..`Bc7`,
+/// `Bc6hUf16`, `Bc6hSf16`). Each depth slice is an independent 4×4-block
+/// surface; the slices are laid out exactly like an uncompressed volume
+/// (outer loop over mip level, inner loop over depth slice) per
+/// Microsoft's volume-texture file layout, the only difference being
+/// each slice stores `ceil(w/4) × ceil(h/4) × block_bytes` compressed
+/// block bytes instead of `w × h × bpp` raw bytes.
+///
+/// The caller supplies every slice via `image.surfaces`, one entry per
+/// `(mip_level, depth_slice)` in on-disk order; at mip level `m` there
+/// are `max(1, depth >> m)` slices at `(width >> m, height >> m)`
+/// (floored to 1). Each surface's `plane.data` must hold at least the
+/// block-byte count for that slice's dimensions.
+///
+/// A BC volume always uses the `DDS_HEADER_DXT10` extension with
+/// `resource_dimension == DDS_DIMENSION_TEXTURE3D` and `array_size == 1`
+/// (Microsoft requires `arraySize == 1` for a 3D texture), plus the
+/// legacy `DDSD_DEPTH` flag, `header.depth` slice count, and
+/// `DDSCAPS2_VOLUME` so a legacy reader still recognises the shape.
+pub fn encode_dds_volume_block_compressed(image: &DdsImage) -> Result<Vec<u8>> {
+    let pix = image.pixel_format;
+    if !pix.is_block_compressed() {
+        return Err(DdsError::unsupported(format!(
+            "encode_dds_volume_block_compressed requires a block-compressed pixel_format (got {})",
+            pix.name()
+        )));
+    }
+    let width = image.width;
+    let height = image.height;
+    let depth = image.depth;
+    if width == 0 || height == 0 || depth == 0 {
+        return Err(DdsError::invalid(format!(
+            "zero-sized volume: {width}x{height}x{depth}"
+        )));
+    }
+    if depth < 2 {
+        return Err(DdsError::invalid(
+            "encode_dds_volume_block_compressed requires depth > 1",
+        ));
+    }
+    if image.is_cubemap || image.array_size > 1 {
+        return Err(DdsError::unsupported(
+            "a volume texture cannot also be a cubemap or texture array".to_string(),
+        ));
+    }
+
+    let mip = image.mip_map_count.max(1);
+    let with_mips = mip > 1;
+    let mip_dims = mip_dimensions(width, height, mip);
+    let mip_depths = volume_mip_depths(depth, mip);
+
+    // Validate the supplied surface list: one surface per (mip, slice),
+    // mip-major order, each carrying the right dimensions + block bytes.
+    let total_surfaces: usize = mip_depths.iter().map(|&d| d as usize).sum();
+    if image.surfaces.len() < total_surfaces {
+        return Err(DdsError::invalid(format!(
+            "BC volume encode requires {} surface(s) (sum of per-mip slice counts), got {}",
+            total_surfaces,
+            image.surfaces.len()
+        )));
+    }
+    let mut si = 0usize;
+    let mut payload = Vec::new();
+    for (mi, &(mw, mh)) in mip_dims.iter().enumerate() {
+        let want = block_compressed_surface_bytes(pix, mw, mh);
+        for z in 0..mip_depths[mi] {
+            let s = &image.surfaces[si];
+            if s.width != mw || s.height != mh {
+                return Err(DdsError::invalid(format!(
+                    "surface[{si}] dims {}x{} != canonical mip {mi} slice {z} ({mw}x{mh})",
+                    s.width, s.height
+                )));
+            }
+            if s.plane.data.len() < want {
+                return Err(DdsError::invalid(format!(
+                    "surface[{si}] has {} block bytes, expected ≥ {want} ({mw}x{mh} {})",
+                    s.plane.data.len(),
+                    pix.name(),
+                )));
+            }
+            payload.extend_from_slice(&s.plane.data[..want]);
+            si += 1;
+        }
+    }
+
+    let mip0_bytes = block_compressed_surface_bytes(pix, width, height);
+    let flags =
+        DDSD_REQUIRED | DDSD_LINEARSIZE | DDSD_DEPTH | if with_mips { DDSD_MIPMAPCOUNT } else { 0 };
+    let mut caps = DDSCAPS_TEXTURE | DDSCAPS_COMPLEX;
+    if with_mips {
+        caps |= DDSCAPS_MIPMAP;
+    }
+    let caps2 = DDSCAPS2_VOLUME;
+
+    let header_bytes = 4 + DDS_HEADER_SIZE + DDS_HEADER_DXT10_SIZE;
+    let mut out = Vec::with_capacity(header_bytes + payload.len());
+    push_u32(&mut out, DDS_MAGIC);
+    push_u32(&mut out, DDS_HEADER_SIZE as u32);
+    push_u32(&mut out, flags);
+    push_u32(&mut out, height);
+    push_u32(&mut out, width);
+    push_u32(&mut out, mip0_bytes as u32); // pitch_or_linear_size = mip-0 byte count
+    push_u32(&mut out, depth);
+    push_u32(&mut out, mip);
+    for _ in 0..11 {
+        push_u32(&mut out, 0); // reserved1
+    }
+    // DDS_PIXELFORMAT: DX10 FourCC (BC volumes always go through DXT10).
+    push_u32(&mut out, DDS_PIXELFORMAT_SIZE as u32);
+    push_u32(&mut out, DDPF_FOURCC);
+    push_u32(&mut out, FOURCC_DX10);
+    push_u32(&mut out, 0); // rgb_bit_count
+    push_u32(&mut out, 0); // r mask
+    push_u32(&mut out, 0); // g mask
+    push_u32(&mut out, 0); // b mask
+    push_u32(&mut out, 0); // a mask
+    push_u32(&mut out, caps);
+    push_u32(&mut out, caps2);
+    push_u32(&mut out, 0); // caps3
+    push_u32(&mut out, 0); // caps4
+    push_u32(&mut out, 0); // reserved2
+                           // DDS_HEADER_DXT10.
+    let dxgi = image
+        .dxgi_format
+        .map(|f| f.to_u32())
+        .unwrap_or_else(|| block_compressed_dxgi_code(pix));
+    push_u32(&mut out, dxgi);
+    push_u32(&mut out, DDS_DIMENSION_TEXTURE3D);
+    push_u32(&mut out, 0); // misc_flag
+    push_u32(&mut out, 1); // array_size (must be 1 for a 3D texture)
+    push_u32(&mut out, 0); // misc_flags2
 
     out.extend_from_slice(&payload);
     Ok(out)

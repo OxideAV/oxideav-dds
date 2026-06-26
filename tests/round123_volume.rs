@@ -10,7 +10,8 @@
 //! D3DX, NVTT, or squish source consulted.
 
 use oxideav_dds::{
-    encode_dds_volume, parse_dds, DdsImage, DdsPixelFormat, DdsPlane, DdsSurface, DxgiFormat,
+    encode_dds_volume, encode_dds_volume_block_compressed, parse_dds, DdsImage, DdsPixelFormat,
+    DdsPlane, DdsSurface, DxgiFormat,
 };
 
 // Header field constants (kept local so the test asserts the on-disk
@@ -359,5 +360,184 @@ fn encode_volume_rejects_depth_one() {
     assert!(
         encode_dds_volume(&img).is_err(),
         "depth==1 should be rejected by encode_dds_volume"
+    );
+}
+
+// --- Round 375: block-compressed (BC*) volume encode ------------------
+
+/// Synthesise per-(mip, slice) BC* block surfaces for a volume, each
+/// slice filled with a distinct tag byte across its block bytes.
+fn make_bc_volume_surfaces(
+    width: u32,
+    height: u32,
+    depth: u32,
+    mip_count: u32,
+    pix: DdsPixelFormat,
+) -> Vec<DdsSurface> {
+    let bb = pix.block_bytes().unwrap();
+    let mut surfaces = Vec::new();
+    let mut tag: u8 = 0;
+    for m in 0..mip_count {
+        let mw = (width >> m).max(1);
+        let mh = (height >> m).max(1);
+        let md = (depth >> m).max(1);
+        let bw = mw.div_ceil(4);
+        let bh = mh.div_ceil(4);
+        for z in 0..md {
+            let data = vec![tag; (bw * bh * bb) as usize];
+            surfaces.push(DdsSurface {
+                width: mw,
+                height: mh,
+                mip_level: m,
+                array_slice: 0,
+                face: None,
+                depth_slice: z,
+                plane: DdsPlane {
+                    stride: (bw * bb) as usize,
+                    data,
+                },
+            });
+            tag = tag.wrapping_add(1);
+        }
+    }
+    surfaces
+}
+
+fn bc_volume_image(
+    width: u32,
+    height: u32,
+    depth: u32,
+    mip_count: u32,
+    pix: DdsPixelFormat,
+) -> DdsImage {
+    let surfaces = make_bc_volume_surfaces(width, height, depth, mip_count, pix);
+    DdsImage {
+        width,
+        height,
+        pixel_format: pix,
+        planes: vec![surfaces[0].plane.clone()],
+        surfaces,
+        pts: None,
+        mip_map_count: mip_count,
+        has_dxt10_header: true,
+        dxgi_format: None,
+        is_cubemap: false,
+        array_size: 1,
+        depth,
+    }
+}
+
+#[test]
+fn roundtrip_bc1_volume_single_mip() {
+    // 8×8×4 BC1 volume, no mips → 4 depth slices, each 2×2 blocks × 8B.
+    let pix = DdsPixelFormat::Bc1;
+    let img = bc_volume_image(8, 8, 4, 1, pix);
+    let orig = img.surfaces.clone();
+
+    let bytes = encode_dds_volume_block_compressed(&img).expect("encode BC1 volume");
+    let decoded = parse_dds(&bytes).expect("re-parse BC1 volume");
+
+    assert_eq!(decoded.width, 8);
+    assert_eq!(decoded.height, 8);
+    assert_eq!(decoded.depth, 4);
+    assert!(decoded.has_dxt10_header);
+    assert_eq!(decoded.dxgi_format, Some(DxgiFormat::Bc1Unorm));
+    assert_eq!(decoded.pixel_format, DdsPixelFormat::Bc1);
+    assert_eq!(decoded.surfaces.len(), 4);
+    for (o, g) in orig.iter().zip(&decoded.surfaces) {
+        assert_eq!(o.depth_slice, g.depth_slice);
+        assert_eq!((o.width, o.height), (g.width, g.height));
+        assert_eq!(o.plane.data, g.plane.data);
+    }
+}
+
+#[test]
+fn roundtrip_bc3_volume_with_mips_depth_halving() {
+    // 8×8×8 BC3 with 4 mips: depths 8,4,2,1; dims 8,4,2,1.
+    // total slices = 8 + 4 + 2 + 1 = 15.
+    let pix = DdsPixelFormat::Bc3;
+    let img = bc_volume_image(8, 8, 8, 4, pix);
+    let orig = img.surfaces.clone();
+    assert_eq!(orig.len(), 15);
+
+    let bytes = encode_dds_volume_block_compressed(&img).expect("encode BC3 volume");
+    let decoded = parse_dds(&bytes).expect("re-parse BC3 volume");
+
+    assert_eq!(decoded.mip_map_count, 4);
+    assert_eq!(decoded.depth, 8);
+    assert_eq!(decoded.pixel_format, DdsPixelFormat::Bc3);
+    assert_eq!(decoded.surfaces.len(), 15);
+    for (o, g) in orig.iter().zip(&decoded.surfaces) {
+        assert_eq!(
+            (o.mip_level, o.depth_slice, o.width, o.height),
+            (g.mip_level, g.depth_slice, g.width, g.height)
+        );
+        assert_eq!(o.plane.data, g.plane.data);
+    }
+}
+
+#[test]
+fn roundtrip_bc7_volume_npot() {
+    // Non-power-of-two width/height: 7×5×3 BC7.
+    let pix = DdsPixelFormat::Bc7Unorm;
+    let img = bc_volume_image(7, 5, 3, 1, pix);
+    let orig = img.surfaces.clone();
+
+    let bytes = encode_dds_volume_block_compressed(&img).expect("encode BC7 npot volume");
+    let decoded = parse_dds(&bytes).expect("re-parse BC7 npot volume");
+
+    assert_eq!(decoded.width, 7);
+    assert_eq!(decoded.height, 5);
+    assert_eq!(decoded.depth, 3);
+    assert_eq!(decoded.dxgi_format, Some(DxgiFormat::Bc7Unorm));
+    assert_eq!(decoded.surfaces.len(), 3);
+    for (o, g) in orig.iter().zip(&decoded.surfaces) {
+        assert_eq!((o.width, o.height), (g.width, g.height));
+        assert_eq!(o.plane.data, g.plane.data);
+    }
+}
+
+#[test]
+fn encode_bc_volume_rejects_uncompressed() {
+    let pix = DdsPixelFormat::A8B8G8R8;
+    let img = bc_volume_image_uncompressed_shim(pix);
+    assert!(
+        encode_dds_volume_block_compressed(&img).is_err(),
+        "uncompressed format must be rejected by the BC volume encoder"
+    );
+}
+
+fn bc_volume_image_uncompressed_shim(pix: DdsPixelFormat) -> DdsImage {
+    let surfaces = make_volume_surfaces(4, 4, 2, 1, pix);
+    DdsImage {
+        width: 4,
+        height: 4,
+        pixel_format: pix,
+        planes: vec![surfaces[0].plane.clone()],
+        surfaces,
+        pts: None,
+        mip_map_count: 1,
+        has_dxt10_header: false,
+        dxgi_format: None,
+        is_cubemap: false,
+        array_size: 1,
+        depth: 2,
+    }
+}
+
+#[test]
+fn encode_bc_volume_rejects_depth_one() {
+    let pix = DdsPixelFormat::Bc1;
+    let img = bc_volume_image(8, 8, 2, 1, {
+        // depth==1 path: reuse builder then override below.
+        pix
+    });
+    // Force depth 1 with a single-slice surface list.
+    let mut img = img;
+    img.depth = 1;
+    img.surfaces.truncate(1);
+    assert!(
+        encode_dds_volume_block_compressed(&img).is_err(),
+        "depth==1 should be rejected by the BC volume encoder"
     );
 }

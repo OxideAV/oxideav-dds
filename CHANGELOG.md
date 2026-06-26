@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Block-compressed volume (3D) encode (round 375).**
+  `encode_dds_volume_block_compressed` writes a BC1..BC7 volume texture to
+  a `.dds` file: each depth slice is an independent 4×4-block surface, the
+  slices laid out in the same mip-major / depth-major order Microsoft
+  mandates for uncompressed volumes (per the "DDS file layout for volume
+  textures" page) but storing `ceil(w/4) × ceil(h/4) × block_bytes`
+  compressed bytes per slice. The file always uses a `DDS_HEADER_DXT10`
+  extension with `resource_dimension == DDS_DIMENSION_TEXTURE3D` and
+  `array_size == 1` (Microsoft requires `arraySize == 1` for a 3D
+  texture), plus the legacy `DDSD_DEPTH` flag, `header.depth` slice count,
+  and `DDSCAPS2_VOLUME` so a legacy reader still recognises the shape. The
+  per-mip depth-halving rule (`max(1, depth >> mip)` slices at each level)
+  matches the uncompressed `encode_dds_volume`. Six new round-trip tests
+  cover single-mip, mip-chain depth-halving, non-power-of-two
+  width/height, and the uncompressed-format / `depth == 1` rejection
+  paths. Decode already round-trips BC volumes via `parse_dds`.
+
 - **ASTC LDR dual-plane encode (round 372).** When a block's alpha varies
   independently of its RGB (the single-plane fit forces one shared weight
   per texel onto both), the encoder now also tries a dual-plane block:

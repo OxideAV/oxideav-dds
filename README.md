@@ -163,7 +163,10 @@ RGBA8 surface round-trips to disk and back through `parse_dds`.
 **Mipmap emission.** `encode_dds_uncompressed` emits a full mipmap chain
 (caller-supplied surfaces verbatim, otherwise box-filter downsampled);
 `encode_dds_block_compressed` writes pre-encoded per-mip block bytes;
-`encode_dds_volume` round-trips an uncompressed volume.
+`encode_dds_volume` round-trips an uncompressed volume and
+`encode_dds_volume_block_compressed` a BC1..BC7 volume (3D) texture
+(DX10 `TEXTURE3D` header, per-mip depth-halving, non-power-of-two
+footprints).
 
 **Format table.** Every `DXGI_FORMAT` value Microsoft assigns (1..=132)
 plus the Windows 8.1-era ASTC range (133..=187) is enumerated by name in
