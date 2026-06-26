@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **ASTC encoder block-mode lookup cached (round 372).** `find_block_mode`
+  previously re-scanned all 2048 block-mode fields through
+  `decode_block_mode` on every query (and the encoder queries it many
+  times per block). The single-plane normal modes are now derived once
+  into a `OnceLock` table and looked up, cutting ~18 % off the
+  `encode_astc` benchmark (128×128 4×4: 14.7 ms → 12.1 ms) with identical
+  output — the table is still built from the decoder, so encode and
+  decode stay in lockstep.
+
 ### Added
 
 - **ASTC encode fuzz target + benchmark (round 372).** A ninth

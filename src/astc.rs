@@ -1694,27 +1694,51 @@ fn pack_weights_into(bb: &mut BlockBuilder, seq: &[u32], range: WeightRange) {
     }
 }
 
-/// Find the 11-bit block-mode field that the decoder reads back as a
-/// single-plane normal block with the requested weight grid and weight
-/// range. Enumerates the whole mode space and matches against the
-/// decoder's own [`decode_block_mode`], so encoder and decoder can never
-/// disagree about a mode's meaning. Returns `None` if no mode realises
-/// the request (caller falls back to a coarser grid).
-fn find_block_mode(ww: u32, wh: u32, range: WeightRange) -> Option<u32> {
-    for m in 0u32..2048 {
-        if let ModeClass::Normal(bm) = decode_block_mode(m) {
-            if !bm.dual_plane
-                && bm.weight_w == ww
-                && bm.weight_h == wh
-                && bm.range.trits == range.trits
-                && bm.range.quints == range.quints
-                && bm.range.bits == range.bits
-            {
-                return Some(m);
+/// One entry of the precomputed single-plane block-mode table:
+/// `(weight_w, weight_h, trits, quints, bits, mode_field)`.
+type ModeEntry = (u32, u32, bool, bool, u8, u32);
+
+/// The full set of single-plane normal block modes, derived once from
+/// the decoder's own [`decode_block_mode`] over the 2048-entry mode
+/// space. Building it from the decoder keeps encode and decode in lock-
+/// step; caching it removes the per-block 2048-iteration scan.
+fn block_mode_table() -> &'static [ModeEntry] {
+    use std::sync::OnceLock;
+    static TABLE: OnceLock<Vec<ModeEntry>> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        let mut out = Vec::new();
+        for m in 0u32..2048 {
+            if let ModeClass::Normal(bm) = decode_block_mode(m) {
+                if !bm.dual_plane {
+                    out.push((
+                        bm.weight_w,
+                        bm.weight_h,
+                        bm.range.trits,
+                        bm.range.quints,
+                        bm.range.bits,
+                        m,
+                    ));
+                }
             }
         }
-    }
-    None
+        out
+    })
+}
+
+/// Find the 11-bit block-mode field that the decoder reads back as a
+/// single-plane normal block with the requested weight grid and weight
+/// range. Looks the request up in the cached [`block_mode_table`], so
+/// encoder and decoder can never disagree about a mode's meaning.
+/// Returns `None` if no mode realises the request (caller falls back to
+/// a coarser grid). The first hit (lowest mode field) is returned, which
+/// matches the original ascending scan.
+fn find_block_mode(ww: u32, wh: u32, range: WeightRange) -> Option<u32> {
+    block_mode_table()
+        .iter()
+        .find(|&&(w, h, t, q, b, _)| {
+            w == ww && h == wh && t == range.trits && q == range.quints && b == range.bits
+        })
+        .map(|&(_, _, _, _, _, m)| m)
 }
 
 /// Quantize an 8-bit colour component to the index in `range` whose
