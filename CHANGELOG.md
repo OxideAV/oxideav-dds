@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`encode_round375` fuzz target (round 375).** A tenth `cargo-fuzz`
+  panic-free target feeds every parser-accepted `DdsImage` through
+  whichever round-375 encoder its shape matches
+  (`encode_dds_uncompressed_dx10`,
+  `encode_dds_volume_block_compressed`,
+  `encode_dds_uncompressed_cubemap_array`) and re-parses any successful
+  output, so unchecked arithmetic, slice bounds, or a non-round-trippable
+  header in the new writers surfaces as a finding.
+
 - **ASTC LDR three-subset (three-partition) encode (round 375).**
   `encode_astc_ldr_block` now also evaluates three-subset candidates for
   opaque-alpha blocks. The single-CEM colour-value cap is 18 integers

@@ -104,3 +104,9 @@ name = "encode_astc"
 path = "fuzz_targets/encode_astc.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "encode_round375"
+path = "fuzz_targets/encode_round375.rs"
+test = false
+doc = false
