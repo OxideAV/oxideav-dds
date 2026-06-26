@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **ASTC LDR three-subset (three-partition) encode (round 375).**
+  `encode_astc_ldr_block` now also evaluates three-subset candidates for
+  opaque-alpha blocks. The single-CEM colour-value cap is 18 integers
+  (§23.11 of the Khronos Data Format Specification 1.4), so a
+  three-partition block can only use CEM 8 (LDR RGB direct, 6 values per
+  partition → 18 total); CEM 12 (24 values) overflows it. The encoder
+  therefore restricts the three-subset path to blocks whose alpha is
+  uniformly opaque, routes each texel to its partition via the decoder's
+  own `select_partition` over a fixed seed set, fits each partition with
+  its own RGB endpoint line, and keeps the result only when it decodes
+  strictly closer than the best single-/two-subset/dual-plane candidate.
+  This lets a block with three distinct opaque colour regions — which two
+  endpoint lines cannot separate — reconstruct from three independent
+  lines. Three new tests cover non-regression on a three-region block,
+  panic-free encode across all 14 footprints, and the solid-block fast
+  path.
+
 - **Uncompressed cubemap / texture-array encode (round 375).**
   `encode_dds_uncompressed_cubemap_array` writes a cubemap or DX10
   texture array from a pre-populated `DdsImage::surfaces` list (slice →

@@ -8,7 +8,8 @@
 //! (`docs/image/dds/`); no external DDS / ASTC tooling is consulted.
 
 use oxideav_dds::{
-    decode_astc_ldr_surface, encode_dds_astc, parse_dds, DdsPixelFormat, DxgiFormat,
+    decode_astc_ldr_block, decode_astc_ldr_surface, encode_astc_ldr_block, encode_dds_astc,
+    parse_dds, DdsPixelFormat, DxgiFormat,
 };
 
 fn astc_fmt(bw: u32, bh: u32) -> DdsPixelFormat {
@@ -144,4 +145,124 @@ fn rejects_bad_inputs() {
     assert!(encode_dds_astc(&[], 0, 0, astc_fmt(4, 4), 1).is_err());
     // Short input.
     assert!(encode_dds_astc(&[0u8; 4], 4, 4, astc_fmt(4, 4), 1).is_err());
+}
+
+/// A block with three sharply distinct opaque colour regions is
+/// reconstructed by the encoder no worse than the chooser's best
+/// non-three-subset candidate: enabling the three-subset path must never
+/// regress a block (the error-driven chooser only keeps a candidate that
+/// decodes strictly closer). We verify this by comparing the full
+/// encoder's output against a baseline that excludes the three-subset
+/// path — re-encoding the SAME texels but with all alpha forced to a
+/// non-opaque value, which disables the opaque-only three-subset branch
+/// while leaving the single-/two-subset/dual-plane search intact. The
+/// real (opaque) block's RGB error must be ≤ the baseline's RGB error.
+#[test]
+fn three_subset_never_regresses_three_region_block() {
+    let (bw, bh) = (8u32, 8u32);
+    let red = [220u8, 20, 20, 255];
+    let green = [20u8, 220, 20, 255];
+    let blue = [20u8, 20, 220, 255];
+    let mut texels = Vec::with_capacity((bw * bh) as usize);
+    for _y in 0..bh {
+        for x in 0..bw {
+            let t = match (x * 3) / bw {
+                0 => red,
+                1 => green,
+                _ => blue,
+            };
+            texels.push(t);
+        }
+    }
+
+    // RGB-only SAD helper (the baseline forces alpha, so compare RGB).
+    let rgb_sad = |dec: &[[u8; 4]], src: &[[u8; 4]]| -> u64 {
+        dec.iter()
+            .zip(src.iter())
+            .map(|(d, s)| {
+                (0..3)
+                    .map(|c| (d[c] as i64 - s[c] as i64).unsigned_abs())
+                    .sum::<u64>()
+            })
+            .sum()
+    };
+
+    // Full encoder (opaque → three-subset path active).
+    let block = encode_astc_ldr_block(&texels, bw, bh);
+    let decoded = decode_astc_ldr_block(&block, bw, bh);
+    assert!(
+        decoded.iter().all(|t| t[3] == 255),
+        "alpha must stay opaque"
+    );
+    let real_rgb_sad = rgb_sad(&decoded, &texels);
+
+    // Baseline: same RGB, alpha = 200 everywhere (uniform but non-opaque)
+    // disables the opaque-only three-subset branch.
+    let mut baseline_src = texels.clone();
+    for t in &mut baseline_src {
+        t[3] = 200;
+    }
+    let base_block = encode_astc_ldr_block(&baseline_src, bw, bh);
+    let base_decoded = decode_astc_ldr_block(&base_block, bw, bh);
+    let base_rgb_sad = rgb_sad(&base_decoded, &baseline_src);
+
+    assert!(
+        real_rgb_sad <= base_rgb_sad,
+        "three-subset path regressed RGB: opaque {real_rgb_sad} > baseline {base_rgb_sad}"
+    );
+}
+
+/// A solid opaque block still round-trips exactly even though the
+/// three-subset candidate is now also evaluated (the constant fast path
+/// short-circuits to a void extent before any subset search).
+#[test]
+fn solid_opaque_block_unaffected_by_three_subset() {
+    let (bw, bh) = (6u32, 6u32);
+    let col = [80u8, 160, 240, 255];
+    let texels = vec![col; (bw * bh) as usize];
+    let block = encode_astc_ldr_block(&texels, bw, bh);
+    let decoded = decode_astc_ldr_block(&block, bw, bh);
+    assert!(decoded.iter().all(|&t| t == col), "solid block not exact");
+}
+
+/// Every footprint encodes a three-region opaque block to a decodable,
+/// opaque-alpha block (no panic, correct texel count).
+#[test]
+fn three_region_block_all_footprints_panic_free() {
+    let footprints = [
+        (4u32, 4u32),
+        (5, 4),
+        (5, 5),
+        (6, 5),
+        (6, 6),
+        (8, 5),
+        (8, 6),
+        (8, 8),
+        (10, 5),
+        (10, 6),
+        (10, 8),
+        (10, 10),
+        (12, 10),
+        (12, 12),
+    ];
+    for (bw, bh) in footprints {
+        let mut texels = Vec::with_capacity((bw * bh) as usize);
+        for _y in 0..bh {
+            for x in 0..bw {
+                let t = match (x * 3) / bw {
+                    0 => [200u8, 30, 30, 255],
+                    1 => [30u8, 200, 30, 255],
+                    _ => [30u8, 30, 200, 255],
+                };
+                texels.push(t);
+            }
+        }
+        let block = encode_astc_ldr_block(&texels, bw, bh);
+        let decoded = decode_astc_ldr_block(&block, bw, bh);
+        assert_eq!(decoded.len(), (bw * bh) as usize, "{bw}x{bh} texel count");
+        assert!(
+            decoded.iter().all(|t| t[3] == 255),
+            "{bw}x{bh} alpha not opaque"
+        );
+    }
 }

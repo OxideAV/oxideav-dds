@@ -1921,7 +1921,27 @@ pub fn encode_astc_ldr_block(texels: &[[u8; 4]], bw: u32, bh: u32) -> [u8; 16] {
                 best_sad = sad;
                 best = cand;
                 if best_sad == 0 {
-                    break;
+                    return best;
+                }
+            }
+        }
+    }
+
+    // Three-subset candidates (opaque-alpha blocks only — CEM 8 fits the
+    // 18-value single-CEM colour cap, CEM 12 would overflow it). Worth
+    // trying when the block has three distinct colour regions that two
+    // endpoint lines cannot separate; the chooser discards a poor split.
+    let alpha_all_opaque = texels.iter().all(|t| t[3] == 255);
+    if alpha_all_opaque {
+        for &seed in &[0u32, 1, 2, 7, 13, 31, 63, 100] {
+            if let Some(cand) = encode_three_subset(texels, bw, bh, seed) {
+                let sad = block_sad(&cand, texels, bw, bh);
+                if sad < best_sad {
+                    best_sad = sad;
+                    best = cand;
+                    if best_sad == 0 {
+                        break;
+                    }
                 }
             }
         }
@@ -2354,6 +2374,251 @@ fn assemble_block_2subset(
             let mut num = 0i64;
             let mut den = 0i64;
             for c in 0..4 {
+                let a = e0_16[p][c] as i64;
+                let b = e1_16[p][c] as i64;
+                let d = b - a;
+                let pj = ((avg[c] << 8) | avg[c]) - a;
+                num += pj * d;
+                den += d * d;
+            }
+            let w = if den == 0 {
+                0
+            } else {
+                ((num * 64 + den / 2) / den).clamp(0, 64) as u32
+            };
+            grid_weights.push(quantize_weight(w, wr));
+        }
+    }
+    pack_weights_into(&mut bb, &grid_weights, wr);
+    bb.bytes()
+}
+
+/// Build a three-subset block for partition `seed`. All three partitions
+/// share one CEM via the selector-`00` "single CEM" path, so the colour
+/// stream starts at bit 29 and carries `3 × cem_value_count` integers.
+/// The single-CEM colour-value cap is 18 integers (§23.11), so a
+/// three-subset block can only use CEM 8 (LDR RGB direct, 6 values per
+/// partition → 18 total); CEM 12 (8 values per partition → 24) overflows
+/// the cap. The encoder therefore forces opaque-alpha CEM 8 and only
+/// produces a block when every partition's alpha is uniformly opaque
+/// (the common case for three-region colour content). Each partition
+/// gets its own min/max RGB endpoints over the texels the decoder routes
+/// to it via [`select_partition`]. Returns `None` when the seed maps the
+/// texels into fewer than three non-empty partitions, when any alpha is
+/// non-opaque, or when no legal grid + weight range + colour budget
+/// realises the block.
+fn encode_three_subset(texels: &[[u8; 4]], bw: u32, bh: u32, seed: u32) -> Option<[u8; 16]> {
+    let texel_count = (bw * bh) as usize;
+    let small_block = texel_count < 31;
+
+    // Route every texel to its partition and gather per-partition
+    // min/max endpoints.
+    let mut part = vec![0u8; texel_count];
+    let mut lo = [[255u8; 4]; 3];
+    let mut hi = [[0u8; 4]; 3];
+    let mut count = [0u32; 3];
+    for ty in 0..bh {
+        for tx in 0..bw {
+            let p = (select_partition(seed, tx, ty, 3, small_block) as usize).min(2);
+            let idx = (ty * bw + tx) as usize;
+            part[idx] = p as u8;
+            count[p] += 1;
+            let t = texels[idx];
+            for c in 0..4 {
+                lo[p][c] = lo[p][c].min(t[c]);
+                hi[p][c] = hi[p][c].max(t[c]);
+            }
+        }
+    }
+    if count.contains(&0) {
+        return None; // degenerate split — fewer than 3 non-empty subsets
+    }
+
+    // CEM 12 (RGBA) would need 24 colour values across 3 partitions,
+    // exceeding the 18-value single-CEM cap; only CEM 8 (RGB, 6 each)
+    // fits. So bail unless every partition's alpha is uniformly opaque.
+    let alpha_opaque = lo
+        .iter()
+        .zip(hi.iter())
+        .all(|(l, h)| l[3] == 255 && h[3] == 255);
+    if !alpha_opaque {
+        return None;
+    }
+    let cem: u32 = 8;
+    let per_part = cem_value_count(cem); // 6
+    let total_color = per_part * 3; // 18
+    let color_stream_start = 29u32; // multi-partition single-CEM path
+
+    let (mut gw, mut gh) = choose_weight_grid(bw, bh);
+    loop {
+        for &(t, q, b) in &WEIGHT_CANDIDATES {
+            let wir = ise_range(t, q, b);
+            let wr = WeightRange {
+                trits: t,
+                quints: q,
+                bits: b,
+                max: wir.max,
+            };
+            let Some(mode_field) = find_block_mode(gw, gh, wr) else {
+                continue;
+            };
+            let total_weights = gw * gh;
+            let weight_bits = wir.bits_for_count(total_weights);
+            if !(24..=96).contains(&weight_bits) {
+                continue;
+            }
+            let config_below = 128 - weight_bits;
+            if config_below <= color_stream_start {
+                continue;
+            }
+            let color_budget = config_below - color_stream_start;
+            let Some(color_range) = pick_color_range(total_color, color_budget) else {
+                continue;
+            };
+            return Some(assemble_block_3subset(
+                texels,
+                &part,
+                bw,
+                bh,
+                gw,
+                gh,
+                wr,
+                mode_field,
+                seed,
+                cem,
+                color_range,
+                lo,
+                hi,
+            ));
+        }
+        if gw <= 2 && gh <= 2 {
+            return None;
+        }
+        if gw >= gh {
+            gw = (gw / 2).max(2);
+        } else {
+            gh = (gh / 2).max(2);
+        }
+    }
+}
+
+/// Assemble a three-subset block. Mirrors [`assemble_block_2subset`] but
+/// writes partition count 2 (= 3 partitions), three endpoint groups, and
+/// fits each grid point's weight against its owning partition's endpoint
+/// line. CEM is always 8 (RGB direct, opaque alpha).
+#[allow(clippy::too_many_arguments)]
+fn assemble_block_3subset(
+    texels: &[[u8; 4]],
+    part: &[u8],
+    bw: u32,
+    bh: u32,
+    gw: u32,
+    gh: u32,
+    wr: WeightRange,
+    mode_field: u32,
+    seed: u32,
+    cem: u32,
+    color_range: IseRange,
+    mut lo: [[u8; 4]; 3],
+    mut hi: [[u8; 4]; 3],
+) -> [u8; 16] {
+    // Force each partition's endpoint 0 = darker so the decoder takes its
+    // direct (non-blue-contract) branch.
+    for p in 0..3 {
+        let s_lo = lo[p][0] as u32 + lo[p][1] as u32 + lo[p][2] as u32;
+        let s_hi = hi[p][0] as u32 + hi[p][1] as u32 + hi[p][2] as u32;
+        if s_lo > s_hi {
+            core::mem::swap(&mut lo[p], &mut hi[p]);
+        }
+    }
+
+    let mut bb = BlockBuilder::new();
+    bb.set(0, 11, mode_field);
+    // Partition count - 1 = 2 (three partitions).
+    bb.set(11, 2, 2);
+    // Partition seed: bits [22:13].
+    bb.set(13, 10, seed & 0x3FF);
+    // CEM selector bits [24:23] = 00 (single CEM for all partitions).
+    bb.set(23, 2, 0);
+    // 4-bit CEM in bits [28:25].
+    bb.set(25, 4, cem);
+
+    // Colour values: each partition's RGB endpoint group in order.
+    let qc = |v: u8| quantize_color(v as u32, color_range);
+    let mut seq: Vec<u32> = Vec::new();
+    for p in 0..3 {
+        seq.push(qc(lo[p][0]));
+        seq.push(qc(hi[p][0]));
+        seq.push(qc(lo[p][1]));
+        seq.push(qc(hi[p][1]));
+        seq.push(qc(lo[p][2]));
+        seq.push(qc(hi[p][2]));
+    }
+    pack_ise_into(&mut bb, 29, &seq, color_range);
+
+    // Reconstruct per-partition endpoints (16-bit) for the weight fit.
+    let per = 6; // CEM 8: 6 values (R0 R1 G0 G1 B0 B1)
+    let mut e0_16 = [[0u32; 4]; 3];
+    let mut e1_16 = [[0u32; 4]; 3];
+    for p in 0..3 {
+        let base = p * per;
+        let unq = |i: usize| unquant_color(seq[base + i], color_range);
+        let e0 = [unq(0), unq(2), unq(4), 255];
+        let e1 = [unq(1), unq(3), unq(5), 255];
+        for c in 0..4 {
+            e0_16[p][c] = (e0[c] << 8) | e0[c];
+            e1_16[p][c] = (e1[c] << 8) | e1[c];
+        }
+    }
+
+    // Weights: each grid point fits against its owning partition's line.
+    let small_block = (bw * bh) < 31;
+    let mut grid_weights: Vec<u32> = Vec::with_capacity((gw * gh) as usize);
+    for gy in 0..gh {
+        for gx in 0..gw {
+            let x0 = (gx * bw) / gw;
+            let x1 = (((gx + 1) * bw) / gw).max(x0 + 1).min(bw);
+            let y0 = (gy * bh) / gh;
+            let y1 = (((gy + 1) * bh) / gh).max(y0 + 1).min(bh);
+            let pcx = x0.min(bw - 1);
+            let pcy = y0.min(bh - 1);
+            let p = part
+                .get((pcy * bw + pcx) as usize)
+                .copied()
+                .unwrap_or_else(|| (select_partition(seed, pcx, pcy, 3, small_block).min(2)) as u8)
+                as usize;
+
+            let mut acc = [0i64; 4];
+            let mut cnt = 0i64;
+            for ty in y0..y1 {
+                for tx in x0..x1 {
+                    if part[(ty * bw + tx) as usize] as usize != p {
+                        continue;
+                    }
+                    let t = texels[(ty * bw + tx) as usize];
+                    for c in 0..4 {
+                        acc[c] += t[c] as i64;
+                    }
+                    cnt += 1;
+                }
+            }
+            if cnt == 0 {
+                for ty in y0..y1 {
+                    for tx in x0..x1 {
+                        let t = texels[(ty * bw + tx) as usize];
+                        for c in 0..4 {
+                            acc[c] += t[c] as i64;
+                        }
+                        cnt += 1;
+                    }
+                }
+            }
+            let cnt = cnt.max(1);
+            let avg: [i64; 4] = core::array::from_fn(|c| acc[c] / cnt);
+            let mut num = 0i64;
+            let mut den = 0i64;
+            // Fit on RGB only (alpha is fixed opaque for CEM 8).
+            for c in 0..3 {
                 let a = e0_16[p][c] as i64;
                 let b = e1_16[p][c] as i64;
                 let d = b - a;
