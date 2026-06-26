@@ -1694,14 +1694,14 @@ fn pack_weights_into(bb: &mut BlockBuilder, seq: &[u32], range: WeightRange) {
     }
 }
 
-/// One entry of the precomputed single-plane block-mode table:
-/// `(weight_w, weight_h, trits, quints, bits, mode_field)`.
-type ModeEntry = (u32, u32, bool, bool, u8, u32);
+/// One entry of the precomputed block-mode table:
+/// `(weight_w, weight_h, trits, quints, bits, dual_plane, mode_field)`.
+type ModeEntry = (u32, u32, bool, bool, u8, bool, u32);
 
-/// The full set of single-plane normal block modes, derived once from
-/// the decoder's own [`decode_block_mode`] over the 2048-entry mode
-/// space. Building it from the decoder keeps encode and decode in lock-
-/// step; caching it removes the per-block 2048-iteration scan.
+/// The full set of normal block modes, derived once from the decoder's
+/// own [`decode_block_mode`] over the 2048-entry mode space. Building it
+/// from the decoder keeps encode and decode in lockstep; caching it
+/// removes the per-block 2048-iteration scan.
 fn block_mode_table() -> &'static [ModeEntry] {
     use std::sync::OnceLock;
     static TABLE: OnceLock<Vec<ModeEntry>> = OnceLock::new();
@@ -1709,36 +1709,44 @@ fn block_mode_table() -> &'static [ModeEntry] {
         let mut out = Vec::new();
         for m in 0u32..2048 {
             if let ModeClass::Normal(bm) = decode_block_mode(m) {
-                if !bm.dual_plane {
-                    out.push((
-                        bm.weight_w,
-                        bm.weight_h,
-                        bm.range.trits,
-                        bm.range.quints,
-                        bm.range.bits,
-                        m,
-                    ));
-                }
+                out.push((
+                    bm.weight_w,
+                    bm.weight_h,
+                    bm.range.trits,
+                    bm.range.quints,
+                    bm.range.bits,
+                    bm.dual_plane,
+                    m,
+                ));
             }
         }
         out
     })
 }
 
-/// Find the 11-bit block-mode field that the decoder reads back as a
-/// single-plane normal block with the requested weight grid and weight
-/// range. Looks the request up in the cached [`block_mode_table`], so
-/// encoder and decoder can never disagree about a mode's meaning.
-/// Returns `None` if no mode realises the request (caller falls back to
-/// a coarser grid). The first hit (lowest mode field) is returned, which
+/// Find the 11-bit block-mode field for a normal block with the given
+/// weight grid, weight range and plane count. Looks the request up in
+/// the cached [`block_mode_table`], so encoder and decoder can never
+/// disagree about a mode's meaning. Returns `None` if no mode realises
+/// the request. The first hit (lowest mode field) is returned, which
 /// matches the original ascending scan.
-fn find_block_mode(ww: u32, wh: u32, range: WeightRange) -> Option<u32> {
+fn find_block_mode_planes(ww: u32, wh: u32, range: WeightRange, dual_plane: bool) -> Option<u32> {
     block_mode_table()
         .iter()
-        .find(|&&(w, h, t, q, b, _)| {
-            w == ww && h == wh && t == range.trits && q == range.quints && b == range.bits
+        .find(|&&(w, h, t, q, b, dp, _)| {
+            w == ww
+                && h == wh
+                && t == range.trits
+                && q == range.quints
+                && b == range.bits
+                && dp == dual_plane
         })
-        .map(|&(_, _, _, _, _, m)| m)
+        .map(|&(.., m)| m)
+}
+
+/// Single-plane convenience over [`find_block_mode_planes`].
+fn find_block_mode(ww: u32, wh: u32, range: WeightRange) -> Option<u32> {
+    find_block_mode_planes(ww, wh, range, false)
 }
 
 /// Quantize an 8-bit colour component to the index in `range` whose
@@ -1885,6 +1893,22 @@ pub fn encode_astc_ldr_block(texels: &[[u8; 4]], bw: u32, bh: u32) -> [u8; 16] {
     let mut best_sad = block_sad(&best, texels, bw, bh);
     if best_sad == 0 {
         return best;
+    }
+
+    // Dual-plane candidate: only worthwhile when alpha varies (it can
+    // then sit on its own interpolation axis, independent of RGB).
+    let alpha_varies = texels.iter().any(|t| t[3] != first[3]);
+    if alpha_varies {
+        if let Some(cand) = encode_dual_plane(texels, bw, bh) {
+            let sad = block_sad(&cand, texels, bw, bh);
+            if sad < best_sad {
+                best_sad = sad;
+                best = cand;
+                if best_sad == 0 {
+                    return best;
+                }
+            }
+        }
     }
 
     // Try a small set of partition seeds for a 2-subset block. The seeds
@@ -2346,6 +2370,191 @@ fn assemble_block_2subset(
         }
     }
     pack_weights_into(&mut bb, &grid_weights, wr);
+    bb.bytes()
+}
+
+/// Build a dual-plane single-partition block: CEM 12 (LDR RGBA direct),
+/// CCS = 3 so the alpha channel is driven by weight plane 1 and RGB by
+/// plane 0. This lets a block whose alpha varies independently of RGB fit
+/// alpha on its own interpolation axis. Returns `None` when no legal
+/// grid, weight range and colour budget realise the block (two weight
+/// planes double the weight-stream cost, so the grid is usually coarser).
+fn encode_dual_plane(texels: &[[u8; 4]], bw: u32, bh: u32) -> Option<[u8; 16]> {
+    // Per-channel min/max endpoints.
+    let mut lo = [255u8; 4];
+    let mut hi = [0u8; 4];
+    for t in texels {
+        for c in 0..4 {
+            lo[c] = lo[c].min(t[c]);
+            hi[c] = hi[c].max(t[c]);
+        }
+    }
+    let cem = 12u32; // RGBA direct
+    let color_count = cem_value_count(cem); // 8
+    let color_stream_start = 17u32; // single partition
+
+    let (mut gw, mut gh) = choose_weight_grid(bw, bh);
+    loop {
+        for &(t, q, b) in &WEIGHT_CANDIDATES {
+            let wir = ise_range(t, q, b);
+            let wr = WeightRange {
+                trits: t,
+                quints: q,
+                bits: b,
+                max: wir.max,
+            };
+            let Some(mode_field) = find_block_mode_planes(gw, gh, wr, true) else {
+                continue;
+            };
+            // Two weight planes: 2 weights per grid point.
+            let total_weights = gw * gh * 2;
+            let weight_bits = wir.bits_for_count(total_weights);
+            if !(24..=96).contains(&weight_bits) {
+                continue;
+            }
+            let config_below = 128 - weight_bits;
+            // Colour region excludes the 2 CCS bits that sit below weights.
+            let color_region_top = config_below.checked_sub(2)?;
+            if color_region_top <= color_stream_start {
+                continue;
+            }
+            let color_budget = color_region_top - color_stream_start;
+            let Some(color_range) = pick_color_range(color_count, color_budget) else {
+                continue;
+            };
+            return Some(assemble_block_dual_plane(
+                texels,
+                bw,
+                bh,
+                gw,
+                gh,
+                wr,
+                mode_field,
+                color_range,
+                lo,
+                hi,
+            ));
+        }
+        if gw <= 2 && gh <= 2 {
+            return None;
+        }
+        if gw >= gh {
+            gw = (gw / 2).max(2);
+        } else {
+            gh = (gh / 2).max(2);
+        }
+    }
+}
+
+/// Assemble a dual-plane block: RGB on weight plane 0, alpha on plane 1
+/// (CCS = 3). Mirrors [`assemble_block`] but writes both planes and the
+/// CCS field, and fits the two planes against their respective channels.
+#[allow(clippy::too_many_arguments)]
+fn assemble_block_dual_plane(
+    texels: &[[u8; 4]],
+    bw: u32,
+    bh: u32,
+    gw: u32,
+    gh: u32,
+    wr: WeightRange,
+    mode_field: u32,
+    color_range: IseRange,
+    mut lo: [u8; 4],
+    mut hi: [u8; 4],
+) -> [u8; 16] {
+    // Force endpoint 0 = darker RGB so the decoder's mode-12 direct
+    // branch is taken (no blue-contract).
+    let s_lo = lo[0] as u32 + lo[1] as u32 + lo[2] as u32;
+    let s_hi = hi[0] as u32 + hi[1] as u32 + hi[2] as u32;
+    if s_lo > s_hi {
+        core::mem::swap(&mut lo, &mut hi);
+    }
+
+    let total_weights = gw * gh; // per plane
+    let weight_bits = ise_range(wr.trits, wr.quints, wr.bits).bits_for_count(total_weights * 2);
+    let config_below = 128 - weight_bits;
+
+    let mut bb = BlockBuilder::new();
+    bb.set(0, 11, mode_field);
+    // Single partition; CEM 12 in bits[16..13].
+    bb.set(13, 4, 12);
+
+    // Colour values (r0,r1,g0,g1,b0,b1,a0,a1).
+    let qc = |v: u8| quantize_color(v as u32, color_range);
+    let seq = [
+        qc(lo[0]),
+        qc(hi[0]),
+        qc(lo[1]),
+        qc(hi[1]),
+        qc(lo[2]),
+        qc(hi[2]),
+        qc(lo[3]),
+        qc(hi[3]),
+    ];
+    pack_ise_into(&mut bb, 17, &seq, color_range);
+
+    // CCS = 3 (alpha → plane 1), at the top of the CCS region just below
+    // the weight data.
+    let ccs_pos = config_below - 2;
+    bb.set(ccs_pos, 2, 3);
+
+    // Reconstructed endpoints (16-bit) for the weight fit.
+    let unq = |i: usize| unquant_color(seq[i], color_range);
+    let e0 = [unq(0), unq(2), unq(4), unq(6)];
+    let e1 = [unq(1), unq(3), unq(5), unq(7)];
+    let e0_16: [i64; 4] = core::array::from_fn(|c| ((e0[c] << 8) | e0[c]) as i64);
+    let e1_16: [i64; 4] = core::array::from_fn(|c| ((e1[c] << 8) | e1[c]) as i64);
+
+    // Weights: per grid point, plane 0 fits RGB, plane 1 fits alpha. The
+    // stream interleaves the two planes per grid point (plane 0 then
+    // plane 1), matching the decoder's `planes`-strided weight read.
+    let mut seq_w: Vec<u32> = Vec::with_capacity((gw * gh * 2) as usize);
+    for gy in 0..gh {
+        for gx in 0..gw {
+            let x0 = (gx * bw) / gw;
+            let x1 = (((gx + 1) * bw) / gw).max(x0 + 1).min(bw);
+            let y0 = (gy * bh) / gh;
+            let y1 = (((gy + 1) * bh) / gh).max(y0 + 1).min(bh);
+            let mut acc = [0i64; 4];
+            let mut cnt = 0i64;
+            for ty in y0..y1 {
+                for tx in x0..x1 {
+                    let t = texels[(ty * bw + tx) as usize];
+                    for c in 0..4 {
+                        acc[c] += t[c] as i64;
+                    }
+                    cnt += 1;
+                }
+            }
+            let cnt = cnt.max(1);
+            let avg: [i64; 4] = core::array::from_fn(|c| acc[c] / cnt);
+            // Plane 0: project RGB (channels 0..3) onto the endpoint line.
+            let mut num = 0i64;
+            let mut den = 0i64;
+            for c in 0..3 {
+                let d = e1_16[c] - e0_16[c];
+                let p = ((avg[c] << 8) | avg[c]) - e0_16[c];
+                num += p * d;
+                den += d * d;
+            }
+            let w_rgb = if den == 0 {
+                0
+            } else {
+                ((num * 64 + den / 2) / den).clamp(0, 64) as u32
+            };
+            // Plane 1: alpha only.
+            let da = e1_16[3] - e0_16[3];
+            let pa = ((avg[3] << 8) | avg[3]) - e0_16[3];
+            let w_a = if da == 0 {
+                0
+            } else {
+                ((pa * 64 + da / 2) / da).clamp(0, 64) as u32
+            };
+            seq_w.push(quantize_weight(w_rgb, wr));
+            seq_w.push(quantize_weight(w_a, wr));
+        }
+    }
+    pack_weights_into(&mut bb, &seq_w, wr);
     bb.bytes()
 }
 
@@ -2995,6 +3204,46 @@ mod tests {
             full_sad * 5 < single_sad * 4,
             "2-subset should beat single by >20%: full {full_sad} single {single_sad}"
         );
+    }
+
+    #[test]
+    fn encode_dual_plane_helps_uncorrelated_alpha() {
+        // RGB is a smooth ramp one way, alpha a smooth ramp the *other*
+        // way — a single weight per texel (single-plane) can't track both.
+        // A dual-plane block gives alpha its own weight axis, so the full
+        // encoder must beat the single-subset fit here.
+        let mut texels = vec![[0u8; 4]; 16];
+        for (i, t) in texels.iter_mut().enumerate() {
+            let x = (i % 4) as u8;
+            let y = (i / 4) as u8;
+            let v = x * 60; // RGB increases with x
+            t[0] = v;
+            t[1] = v;
+            t[2] = v;
+            t[3] = 255 - y * 60; // alpha decreases with y
+        }
+        let full = encode_astc_ldr_block(&texels, 4, 4);
+        let single = encode_single_subset(&texels, 4, 4);
+        let full_sad = block_sad(&full, &texels, 4, 4);
+        let single_sad = block_sad(&single, &texels, 4, 4);
+        assert!(
+            full_sad < single_sad,
+            "dual-plane should beat single: full {full_sad} single {single_sad}"
+        );
+    }
+
+    #[test]
+    fn encode_dual_plane_block_is_decodable() {
+        let mut texels = vec![[40u8, 40, 40, 0]; 16];
+        for (i, t) in texels.iter_mut().enumerate() {
+            t[3] = (i * 16) as u8;
+        }
+        if let Some(block) = encode_dual_plane(&texels, 4, 4) {
+            let out = decode_astc_ldr_block(&block, 4, 4);
+            for t in &out {
+                assert_ne!(*t, ERROR_COLOR, "dual-plane decoded to error colour");
+            }
+        }
     }
 
     #[test]

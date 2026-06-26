@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **ASTC LDR dual-plane encode (round 372).** When a block's alpha varies
+  independently of its RGB (the single-plane fit forces one shared weight
+  per texel onto both), the encoder now also tries a dual-plane block:
+  CEM 12 (RGBA direct) with CCS = 3, RGB driven by weight plane 0 and
+  alpha by weight plane 1, each fitted on its own interpolation axis. The
+  candidate joins the single-/two-subset error-driven selection, so it is
+  kept only when it decodes closer to the source. Two new tests cover the
+  win on an RGB-vs-alpha cross-gradient and dual-plane decodability.
+
 ### Changed
 
 - **ASTC encoder block-mode lookup cached (round 372).** `find_block_mode`

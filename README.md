@@ -139,9 +139,12 @@ partition pattern over a few seeds, fits each subset with its own
 endpoint line, and keeps whichever block (single- or two-subset) decodes
 closest to the source — so a non-collinear block (e.g. two distinct
 colour regions) is reconstructed far better than a single endpoint pair
-allows. Round-trip is exact for solid blocks and within a documented
-tolerance for collinear gradients. No HDR encode; three-subset and
-dual-plane encode are future work. `encode_dds_astc` wraps the
+allows. When a block's
+alpha varies independently of RGB, a dual-plane candidate (CEM 12,
+CCS = 3 — RGB on weight plane 0, alpha on plane 1) is also tried and
+kept when it decodes closer. Round-trip is exact for solid blocks and
+within a documented tolerance for collinear gradients. No HDR encode;
+three-subset encode is future work. `encode_dds_astc` wraps the
 encoder in a complete DX10-header `.dds` file (correct
 `DXGI_FORMAT_ASTC_*` code, optional fabricated mipmap chain), so an
 RGBA8 surface round-trips to disk and back through `parse_dds`.
