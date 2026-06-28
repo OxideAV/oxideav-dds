@@ -599,7 +599,7 @@ pub fn decode_bc4_snorm_i8(input: &[u8], width: u32, height: u32) -> Result<Vec<
 ///
 /// The signed-output companion to [`decode_bc5_snorm`]: each of the two
 /// channels is a `BC4_SNORM` block decoded into the `[-127, 127]` range
-/// (the reserved `-128` codepoint clamps to `-127`). `R8G8_SNORM`-style
+/// (the reserved `-128` codepoint clamps to `-127`). Two-channel signed
 /// tangent-space normal maps stored as BC5 recover their signed `(x, y)`
 /// directly this way.
 pub fn decode_bc5_snorm_i8(input: &[u8], width: u32, height: u32) -> Result<Vec<i8>> {
