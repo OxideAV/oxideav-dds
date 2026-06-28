@@ -20,9 +20,18 @@ files without touching the codec API directly.
 
 **Uncompressed surfaces.** Bit-exact round-trip of the common layouts —
 A8R8G8B8, X8R8G8B8, A8B8G8R8, X8B8G8R8, R5G6B5, A1R5G5B5, X1R5G5B5,
-A4R4G4B4, X4R4G4B4, R8G8B8, A8L8, L16, A4L4, L8, A8 — every legacy
-`DDS_PIXELFORMAT` mask layout Microsoft tabulates in the "Common DDS
-File Resource Formats" table. High-bit-depth and floating-point layouts (16-bit-per-channel
+A4R4G4B4, X4R4G4B4, A8R3G3B2, R8G8B8, A8L8, L16, A4L4, L8, A8 — every
+legacy `DDS_PIXELFORMAT` mask layout Microsoft tabulates in the "Common
+DDS File Resource Formats" table, including the BGR-ordered 10:10:10:2
+`A2R10G10B10`, the two-channel `G16R16` (routed to the `R16G16_UNORM`
+byte layout), and the packed 3:3:2-plus-alpha `A8R3G3B2`.
+`A8R3G3B2` expands to RGBA8 via `decode_a8r3g3b2_surface` (3-bit / 2-bit
+channels widened by bit-replication) and `A2R10G10B10` to interleaved
+`u16` channels via `decode_a2r10g10b10_surface`; both round-trip
+byte-for-byte through `encode_dds_uncompressed`. The legacy ASCII-FourCC
+packed layouts `RGBG` / `GRGB` (sub-sampled RGB → `R8G8_B8G8` /
+`G8R8_G8B8`) and `YUY2` / `UYVY` (4:2:2 packed luma-chroma) are resolved
+from their FourCC tags. High-bit-depth and floating-point layouts (16-bit-per-channel
 UNORM / SNORM, half-float and `f32` variants) are recognised, sized, and
 exposed via `decode_float_surface` / `decode_rgba16_unorm_surface` /
 `decode_rgba16_snorm_surface`. Packed HDR layouts decode to interleaved
@@ -102,7 +111,10 @@ decoded to interleaved full-resolution `[Y, U, V, A]` samples via
 `decode_yuy2_surface` / `decode_y210_surface` / `decode_y216_surface` /
 `decode_nv12_surface` / `decode_p010_surface` / `decode_p016_surface` /
 `decode_420_opaque_surface` / `decode_nv11_surface` (`u8` for the 8-bit
-formats, `u16` for the 10/16-bit ones). Chroma is replicated across the
+formats, `u16` for the 10/16-bit ones). The legacy `D3DFMT_UYVY` 4:2:2
+layout — the byte-swizzled `[U, Y0, V, Y1]` sibling of `YUY2` carried
+under its own FourCC, with no DX10 `DXGI_FORMAT` — decodes the same way
+via `decode_uyvy_surface`. Chroma is replicated across the
 subsampled neighbourhood; opaque formats decode alpha to the channel
 maximum. A `YuvFormat` descriptor exposes per-format `sampling`,
 `stored_bits`, `has_alpha`, exact `surface_size_bytes`, and the
@@ -213,6 +225,10 @@ to their byte-identical `_UINT` sibling, since a typeless surface stores
 the same bytes with no fixed interpretation. The three under-documented
 video formats (`P208` / `V208` / `V408`) and palette formats are
 recognised but return `DdsError::Unsupported` from the layout resolver.
+The legacy bump-derived `D3DFMT_CxV8U8` (numeric FourCC 117) is likewise
+recognised but unsupported: the in-tree spec lists only its FourCC code,
+not the bit layout or the channel-derivation rule, so it is a documented
+docs gap rather than a guessed decode.
 
 ## Robustness
 
