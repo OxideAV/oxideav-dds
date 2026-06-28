@@ -94,7 +94,10 @@ encoding. Depth surfaces are decode-only.
 **Block-compressed decode.**
 
 - `decode_bc1`..`decode_bc5` + `decode_bc7` expand to RGBA8 / R8 / RG8.
-  BC7 covers all 8 modes.
+  BC7 covers all 8 modes. The signed `BC4_SNORM` / `BC5_SNORM` blocks
+  decode to `[-127, 127]` either as `i8`-reinterpreted-`u8` via
+  `decode_bc4_snorm` / `decode_bc5_snorm` or as a true `Vec<i8>` via
+  `decode_bc4_snorm_i8` / `decode_bc5_snorm_i8`.
 - `decode_bc6h` decodes all 14 BC6H modes to RGBA half-float, for both
   `BC6H_UF16` (unsigned) and `BC6H_SF16` (signed).
 - Raw BC1..BC7 block bytes are always available verbatim through

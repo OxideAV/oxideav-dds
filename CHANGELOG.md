@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Signed-output `BC4_SNORM` / `BC5_SNORM` decoders (round 379).**
+  `decode_bc4_snorm_i8` and `decode_bc5_snorm_i8` return a true `Vec<i8>`
+  (one / two interleaved signed channels per texel) rather than the
+  `i8`-reinterpreted-`u8` written by the existing `decode_bc4_snorm` /
+  `decode_bc5_snorm`, so signed displacement / signed-distance-field and
+  tangent-space normal-map content recovers its `[-127, 127]` channels
+  directly. The two APIs agree byte-for-byte under reinterpretation.
+
 - **Legacy `D3DFMT_A8R3G3B2` packed 3:3:2 + alpha layout (round 379).**
   The 16-bit-per-pixel layout from the "Common DDS File Resource Formats"
   table whose low byte packs 3:3:2 RGB (red bits 5..=7, green 2..=4, blue

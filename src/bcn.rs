@@ -547,6 +547,102 @@ pub fn decode_bc5_snorm(input: &[u8], width: u32, height: u32, output: &mut [u8]
     Ok(())
 }
 
+/// Decode a BC4 signed single-channel surface to a flat `Vec<i8>` of
+/// `width × height` samples (row-major, one signed red channel per
+/// texel).
+///
+/// This is the signed-output companion to [`decode_bc4_snorm`], which
+/// writes the same values reinterpreted into a caller-supplied `&mut
+/// [u8]`. The signed `BC4_SNORM` endpoints are interpolated in the
+/// `[-127, 127]` range (the reserved `-128` codepoint clamps to `-127`),
+/// so the returned `i8` values are the surface's signed red channel
+/// directly — useful for signed displacement / signed-distance-field
+/// content that a `u8` view would obscure.
+pub fn decode_bc4_snorm_i8(input: &[u8], width: u32, height: u32) -> Result<Vec<i8>> {
+    let want_in = block_input_bytes(width, height, 8);
+    if input.len() < want_in {
+        return Err(DdsError::invalid(format!(
+            "BC4 input {} bytes < expected {}",
+            input.len(),
+            want_in
+        )));
+    }
+    let stride = width as usize;
+    let mut out = vec![0i8; r8_surface_bytes(width, height)];
+    let bw = width.div_ceil(4) as usize;
+    let bh = height.div_ceil(4) as usize;
+    for by in 0..bh {
+        for bx in 0..bw {
+            let off = (by * bw + bx) * 8;
+            let block: [u8; 8] = input[off..off + 8].try_into().unwrap();
+            let pixels = decode_bc4_snorm_block(&block);
+            for py in 0..4u32 {
+                let yy = (by as u32) * 4 + py;
+                if yy >= height {
+                    continue;
+                }
+                for px in 0..4u32 {
+                    let xx = (bx as u32) * 4 + px;
+                    if xx >= width {
+                        continue;
+                    }
+                    out[yy as usize * stride + xx as usize] = pixels[(py * 4 + px) as usize];
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Decode a BC5 signed two-channel surface to a flat `Vec<i8>` of
+/// `width × height × 2` interleaved `[r0, g0, r1, g1, …]` samples.
+///
+/// The signed-output companion to [`decode_bc5_snorm`]: each of the two
+/// channels is a `BC4_SNORM` block decoded into the `[-127, 127]` range
+/// (the reserved `-128` codepoint clamps to `-127`). `R8G8_SNORM`-style
+/// tangent-space normal maps stored as BC5 recover their signed `(x, y)`
+/// directly this way.
+pub fn decode_bc5_snorm_i8(input: &[u8], width: u32, height: u32) -> Result<Vec<i8>> {
+    let want_in = block_input_bytes(width, height, 16);
+    if input.len() < want_in {
+        return Err(DdsError::invalid(format!(
+            "BC5 input {} bytes < expected {}",
+            input.len(),
+            want_in
+        )));
+    }
+    let stride = width as usize * 2;
+    let mut out = vec![0i8; rg8_surface_bytes(width, height)];
+    let bw = width.div_ceil(4) as usize;
+    let bh = height.div_ceil(4) as usize;
+    for by in 0..bh {
+        for bx in 0..bw {
+            let off = (by * bw + bx) * 16;
+            let r_block: [u8; 8] = input[off..off + 8].try_into().unwrap();
+            let g_block: [u8; 8] = input[off + 8..off + 16].try_into().unwrap();
+            let reds = decode_bc4_snorm_block(&r_block);
+            let greens = decode_bc4_snorm_block(&g_block);
+            for py in 0..4u32 {
+                let yy = (by as u32) * 4 + py;
+                if yy >= height {
+                    continue;
+                }
+                for px in 0..4u32 {
+                    let xx = (bx as u32) * 4 + px;
+                    if xx >= width {
+                        continue;
+                    }
+                    let i = (py * 4 + px) as usize;
+                    let dst = yy as usize * stride + xx as usize * 2;
+                    out[dst] = reds[i];
+                    out[dst + 1] = greens[i];
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
 // ---- Helpers ------------------------------------------------------------
 
 /// Required input byte length for a `width × height` BC-block surface
@@ -761,5 +857,39 @@ mod tests {
         for pair in out.chunks_exact(2) {
             assert_eq!(pair, &[200, 50]);
         }
+    }
+
+    #[test]
+    fn bc4_snorm_i8_matches_u8_reinterpretation() {
+        // Signed endpoints -100 (0x9c) and 40 (0x28) with all indices 0
+        // select the first endpoint everywhere.
+        let block = [0x9c, 0x28, 0, 0, 0, 0, 0, 0];
+        let i8_out = decode_bc4_snorm_i8(&block, 4, 4).unwrap();
+        let mut u8_out = vec![0u8; 4 * 4];
+        decode_bc4_snorm(&block, 4, 4, &mut u8_out).unwrap();
+        // The two APIs must agree byte-for-byte under reinterpretation.
+        for (s, &u) in i8_out.iter().zip(u8_out.iter()) {
+            assert_eq!(*s as u8, u);
+        }
+        // Endpoint 0 is -100; every texel decodes to it.
+        assert!(i8_out.iter().all(|&v| v == -100));
+    }
+
+    #[test]
+    fn bc5_snorm_i8_interleaves_signed_rg() {
+        let r_block = [0x9c, 0x28, 0, 0, 0, 0, 0, 0]; // -100, 40
+        let g_block = [0x14, 0xec, 0, 0, 0, 0, 0, 0]; // 20, -20
+        let mut input = Vec::new();
+        input.extend_from_slice(&r_block);
+        input.extend_from_slice(&g_block);
+        let out = decode_bc5_snorm_i8(&input, 4, 4).unwrap();
+        for pair in out.chunks_exact(2) {
+            assert_eq!(pair, &[-100, 20]);
+        }
+    }
+
+    #[test]
+    fn bc4_snorm_i8_rejects_short_input() {
+        assert!(decode_bc4_snorm_i8(&[0u8; 4], 4, 4).is_err());
     }
 }

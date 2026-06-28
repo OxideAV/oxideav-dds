@@ -230,8 +230,8 @@ pub use bc6h_enc::{
 pub use bc7::decode_bc7;
 pub use bc7_enc::encode_bc7;
 pub use bcn::{
-    decode_bc1, decode_bc2, decode_bc3, decode_bc4_snorm, decode_bc4_unorm, decode_bc5_snorm,
-    decode_bc5_unorm,
+    decode_bc1, decode_bc2, decode_bc3, decode_bc4_snorm, decode_bc4_snorm_i8, decode_bc4_unorm,
+    decode_bc5_snorm, decode_bc5_snorm_i8, decode_bc5_unorm,
 };
 pub use bcn_enc::{
     encode_bc1, encode_bc2, encode_bc3, encode_bc4_snorm, encode_bc4_unorm, encode_bc5_snorm,
