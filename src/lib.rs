@@ -251,12 +251,12 @@ pub use encoder::{
 };
 pub use error::{DdsError, Result};
 pub use hdr::{
-    decode_float_surface, decode_g8r8_g8b8_unorm_surface, decode_r10g10b10a2_uint_surface,
-    decode_r10g10b10a2_unorm_surface, decode_r11g11b10_float_surface,
-    decode_r8g8_b8g8_unorm_surface, decode_r9g9b9e5_sharedexp_surface, decode_rgba16_snorm_surface,
-    decode_rgba16_unorm_surface, decode_sint16_surface, decode_sint32_surface,
-    decode_sint8_surface, decode_snorm_surface, decode_uint16_surface, decode_uint32_surface,
-    decode_uint8_surface, decode_unorm_surface,
+    decode_a2r10g10b10_surface, decode_float_surface, decode_g8r8_g8b8_unorm_surface,
+    decode_r10g10b10a2_uint_surface, decode_r10g10b10a2_unorm_surface,
+    decode_r11g11b10_float_surface, decode_r8g8_b8g8_unorm_surface,
+    decode_r9g9b9e5_sharedexp_surface, decode_rgba16_snorm_surface, decode_rgba16_unorm_surface,
+    decode_sint16_surface, decode_sint32_surface, decode_sint8_surface, decode_snorm_surface,
+    decode_uint16_surface, decode_uint32_surface, decode_uint8_surface, decode_unorm_surface,
 };
 pub use image::{CubemapFace, DdsImage, DdsPixelFormat, DdsPlane, DdsSurface};
 pub use types::{

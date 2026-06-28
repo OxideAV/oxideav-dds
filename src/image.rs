@@ -146,6 +146,16 @@ pub enum DdsPixelFormat {
     /// integers — there is no `[0, 1]` normalisation, so the decoded
     /// `0..=1023` colour and `0..=3` alpha samples ARE the values.
     R10G10B10A2Uint,
+    /// 32 bpp packed 10:10:10:2 in BGR channel order, one little-endian
+    /// `u32` per pixel (legacy `D3DFMT_A2R10G10B10`). The BGR-ordered
+    /// sibling of [`Self::R10G10B10A2Unorm`]: blue occupies bits 0..=9,
+    /// green bits 10..=19, red bits 20..=29, alpha bits 30..=31 — the
+    /// reverse colour order. This layout has no DX10 `DXGI_FORMAT`
+    /// counterpart (Direct3D 10 dropped the BGR 10:10:10:2 packing), so
+    /// it is recognised only via its legacy `DDS_PIXELFORMAT` masks.
+    /// Decode the stored channels with
+    /// [`crate::decode_a2r10g10b10_surface`].
+    A2R10G10B10,
     /// 32 bpp per pixel-PAIR packed, horizontally sub-sampled RGB
     /// (DXGI `R8G8_B8G8_UNORM`, value 68). Each little-endian 32-bit
     /// block `[R, G0, B, G1]` describes two adjacent pixels that share
@@ -408,6 +418,7 @@ impl DdsPixelFormat {
             | Self::R32Float
             | Self::R10G10B10A2Unorm
             | Self::R10G10B10A2Uint
+            | Self::A2R10G10B10
             | Self::R16G16Uint
             | Self::R16G16Sint
             | Self::R8G8B8A8Uint
@@ -492,6 +503,7 @@ impl DdsPixelFormat {
             | Self::R32Float
             | Self::R10G10B10A2Unorm
             | Self::R10G10B10A2Uint
+            | Self::A2R10G10B10
             | Self::R16G16Uint
             | Self::R16G16Sint
             | Self::R8G8B8A8Uint
@@ -595,6 +607,7 @@ impl DdsPixelFormat {
             Self::R32G32B32A32Float => "R32G32B32A32_FLOAT",
             Self::R10G10B10A2Unorm => "R10G10B10A2_UNORM",
             Self::R10G10B10A2Uint => "R10G10B10A2_UINT",
+            Self::A2R10G10B10 => "A2R10G10B10",
             Self::R8G8B8G8Unorm => "R8G8_B8G8_UNORM",
             Self::G8R8G8B8Unorm => "G8R8_G8B8_UNORM",
             Self::R16Uint => "R16_UINT",

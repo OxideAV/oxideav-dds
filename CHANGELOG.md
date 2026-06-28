@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Legacy `D3DFMT_G16R16` + `D3DFMT_A2R10G10B10` mask layouts (round
+  379).** Two more entries from Microsoft's "Common DDS File Resource
+  Formats" table now resolve from their legacy `DDS_PIXELFORMAT` masks.
+  `G16R16` (a 16:16 two-channel layout, red in the low 16 bits, green in
+  the high 16 bits) routes to the existing `R16G16_UNORM` byte layout
+  under both the DDS_RGB and DDS_RGBA flag flavours the table lists.
+  `A2R10G10B10` — the BGR-ordered sibling of the already-supported
+  `A2B10G10R10` (red in the most-significant 10 colour bits, blue in the
+  least, alpha in the top two bits) — is a new `DdsPixelFormat` variant
+  with no DX10 `DXGI_FORMAT` counterpart; `decode_a2r10g10b10_surface`
+  expands its packed words to interleaved `[R, G, B, A]` `u16` samples
+  and the legacy encoder writes its masks, so a hand-built image
+  round-trips byte-for-byte through `parse_dds`.
+
 - **`encode_round375` fuzz target (round 375).** A tenth `cargo-fuzz`
   panic-free target feeds every parser-accepted `DdsImage` through
   whichever round-375 encoder its shape matches

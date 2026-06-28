@@ -198,6 +198,37 @@ fn pixel_format_from_legacy(p: &DdsPixelFormatHeader) -> Option<DdsPixelFormat> 
             return Some(DdsPixelFormat::R10G10B10A2Unorm);
         }
     }
+    if rgb && p.rgb_bit_count == 32 {
+        // G16R16 (D3DFMT_G16R16 / DXGI R16G16_UNORM): a two-channel
+        // 16:16 layout sharing the bytes of R16G16_UNORM. The red
+        // channel occupies the low 16 bits (mask 0x0000ffff), green the
+        // high 16 bits (mask 0xffff0000), no blue, no alpha. Microsoft's
+        // "Common DDS File Resource Formats" table lists it under both
+        // DDS_RGBA and DDS_RGB flag flavours (the spurious alpha flag in
+        // the RGBA row carries no alpha mask), so accept either.
+        if p.r_bit_mask == 0x0000_ffff
+            && p.g_bit_mask == 0xffff_0000
+            && p.b_bit_mask == 0
+            && p.a_bit_mask == 0
+        {
+            return Some(DdsPixelFormat::R16G16Unorm);
+        }
+    }
+    if rgb && p.rgb_bit_count == 32 && alpha_pixels {
+        // A2R10G10B10 (D3DFMT_A2R10G10B10): the BGR-ordered sibling of
+        // A2B10G10R10. The first named component (R) occupies the
+        // *most*-significant 10 bits here, blue the least-significant —
+        // the reverse channel order of R10G10B10A2_UNORM. Masks per the
+        // "Common DDS File Resource Formats" table: R=0x3ff00000,
+        // G=0x000ffc00, B=0x000003ff, A=0xc0000000.
+        if p.r_bit_mask == 0x3ff0_0000
+            && p.g_bit_mask == 0x000f_fc00
+            && p.b_bit_mask == 0x0000_03ff
+            && p.a_bit_mask == 0xc000_0000
+        {
+            return Some(DdsPixelFormat::A2R10G10B10);
+        }
+    }
     if rgb && p.rgb_bit_count == 32 && !alpha_pixels {
         // X8R8G8B8: same masks as A8R8G8B8 but no alpha.
         if p.r_bit_mask == 0x00ff_0000 && p.g_bit_mask == 0x0000_ff00 && p.b_bit_mask == 0x0000_00ff

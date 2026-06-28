@@ -914,6 +914,58 @@ fn decode_r10g10b10a2_raw(width: u32, height: u32, data: &[u8], what: &str) -> R
     Ok(out)
 }
 
+/// Decode a tightly-packed legacy `D3DFMT_A2R10G10B10` surface into a
+/// flat, interleaved `Vec<u16>` of `width × height × 4` stored samples
+/// (R, G, B, A per pixel, row-major).
+///
+/// This is the BGR-ordered sibling of
+/// [`decode_r10g10b10a2_unorm_surface`]: the channels are packed in the
+/// reverse order inside each little-endian 32-bit word. Per Microsoft's
+/// "Common DDS File Resource Formats" table the masks are
+/// R = `0x3ff00000`, G = `0x000ffc00`, B = `0x000003ff`, A =
+/// `0xc0000000`, so the red channel occupies the *most*-significant 10
+/// colour bits (bits 20..=29), green bits 10..=19, blue the least
+/// significant (bits 0..=9), and alpha bits 30..=31. The returned values
+/// are the raw stored unsigned-normalised integers — R / G / B in
+/// `0..=1023` and A in `0..=3`; the caller divides colour channels by
+/// `1023` and alpha by `3` to obtain the `[0, 1]` normalised values.
+///
+/// `data` must be at least `width × height × 4` bytes. Returns
+/// [`DdsError::InvalidData`] if it is shorter.
+pub fn decode_a2r10g10b10_surface(width: u32, height: u32, data: &[u8]) -> Result<Vec<u16>> {
+    let what = "decode_a2r10g10b10";
+    let px = (width as usize)
+        .checked_mul(height as usize)
+        .ok_or_else(|| DdsError::invalid(format!("{what}: dimension overflow")))?;
+    let need = px
+        .checked_mul(4)
+        .ok_or_else(|| DdsError::invalid(format!("{what}: byte-count overflow")))?;
+    if data.len() < need {
+        return Err(DdsError::invalid(format!(
+            "{what}: needs {need} bytes for {width}x{height}, have {}",
+            data.len()
+        )));
+    }
+    let total_samples = px
+        .checked_mul(4)
+        .ok_or_else(|| DdsError::invalid(format!("{what}: sample-count overflow")))?;
+    let mut out = Vec::with_capacity(total_samples);
+    let mut off = 0usize;
+    for _ in 0..px {
+        let word = read_u32_le(data, off);
+        let b = (word & 0x3ff) as u16;
+        let g = ((word >> 10) & 0x3ff) as u16;
+        let r = ((word >> 20) & 0x3ff) as u16;
+        let a = ((word >> 30) & 0x3) as u16;
+        out.push(r);
+        out.push(g);
+        out.push(b);
+        out.push(a);
+        off += 4;
+    }
+    Ok(out)
+}
+
 /// Decode a tightly-packed `R8G8_B8G8_UNORM` surface (`DXGI_FORMAT`
 /// value 68) into a flat, interleaved RGBA8 `Vec<u8>` of
 /// `width × height × 4` bytes (R, G, B, A per pixel, row-major;

@@ -190,6 +190,20 @@ fn legacy_pixel_format_fields(pix: DdsPixelFormat) -> Result<DdsPixelFormatHeade
             b_bit_mask: 0,
             a_bit_mask: 0x00ff,
         },
+        // Legacy BGR-ordered 10:10:10:2 (`D3DFMT_A2R10G10B10`). Masks per
+        // the "Common DDS File Resource Formats" table: red in the most
+        // significant 10 colour bits, blue in the least, alpha in the top
+        // two bits.
+        DdsPixelFormat::A2R10G10B10 => DdsPixelFormatHeader {
+            size: DDS_PIXELFORMAT_SIZE as u32,
+            flags: DDPF_RGB | DDPF_ALPHAPIXELS,
+            four_cc: 0,
+            rgb_bit_count: 32,
+            r_bit_mask: 0x3ff0_0000,
+            g_bit_mask: 0x000f_fc00,
+            b_bit_mask: 0x0000_03ff,
+            a_bit_mask: 0xc000_0000,
+        },
         bc if bc.is_block_compressed() => {
             return Err(DdsError::unsupported(format!(
                 "encode_dds_uncompressed cannot serialise block-compressed {} — round 1 is pass-through only",
