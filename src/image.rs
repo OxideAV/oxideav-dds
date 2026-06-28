@@ -76,6 +76,14 @@ pub enum DdsPixelFormat {
     L8,
     /// 8 bpp single-channel alpha (`D3DFMT_A8`).
     A8,
+    /// 16 bpp packed 3:3:2 RGB plus 8-bit alpha, one little-endian `u16`
+    /// per pixel (`D3DFMT_A8R3G3B2`). Per Microsoft's "Common DDS File
+    /// Resource Formats" table the masks are R=`0x00e0`, G=`0x001c`,
+    /// B=`0x0003`, A=`0xff00`: the colour channels occupy the low byte
+    /// (red bits 5..=7, green bits 2..=4, blue bits 0..=1) and the alpha
+    /// channel the high byte. Expand to RGBA8 with
+    /// [`crate::decode_a8r3g3b2_surface`].
+    A8R3G3B2,
 
     // --- Block-compressed pass-through (raw block bytes; not decoded
     //     in round 1) ----------------------------------------------------
@@ -405,6 +413,7 @@ impl DdsPixelFormat {
             | Self::X1R5G5B5
             | Self::A4R4G4B4
             | Self::X4R4G4B4
+            | Self::A8R3G3B2
             | Self::A8L8
             | Self::L16 => 16,
             Self::L8 | Self::A8 | Self::A4L4 | Self::R8Uint | Self::R8Sint => 8,
@@ -489,6 +498,7 @@ impl DdsPixelFormat {
             | Self::X1R5G5B5
             | Self::A4R4G4B4
             | Self::X4R4G4B4
+            | Self::A8R3G3B2
             | Self::A8L8
             | Self::L16 => 2,
             Self::L8 | Self::A8 | Self::A4L4 | Self::R8Uint | Self::R8Sint => 1,
@@ -586,6 +596,7 @@ impl DdsPixelFormat {
             Self::A4L4 => "A4L4",
             Self::L8 => "L8",
             Self::A8 => "A8",
+            Self::A8R3G3B2 => "A8R3G3B2",
             Self::Bc1 => "BC1",
             Self::Bc2 => "BC2",
             Self::Bc3 => "BC3",

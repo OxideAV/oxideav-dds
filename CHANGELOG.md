@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Legacy `D3DFMT_A8R3G3B2` packed 3:3:2 + alpha layout (round 379).**
+  The 16-bit-per-pixel layout from the "Common DDS File Resource Formats"
+  table whose low byte packs 3:3:2 RGB (red bits 5..=7, green 2..=4, blue
+  0..=1) and high byte an 8-bit alpha. New `DdsPixelFormat::A8R3G3B2`
+  variant resolves from its masks, the legacy encoder writes them
+  (byte-exact round-trip), and `decode_a8r3g3b2_surface` widens it to
+  RGBA8 with the standard bit-replication rule (an all-ones colour field
+  maps to `0xff`).
+
 - **Legacy ASCII-FourCC packed RGB / 4:2:2 layouts (round 379).** Four
   more "Common DDS File Resource Formats" entries that older `.dds`
   writers carry under an ASCII FourCC tag now resolve at parse time:

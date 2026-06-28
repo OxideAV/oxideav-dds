@@ -190,6 +190,19 @@ fn legacy_pixel_format_fields(pix: DdsPixelFormat) -> Result<DdsPixelFormatHeade
             b_bit_mask: 0,
             a_bit_mask: 0x00ff,
         },
+        // Packed 3:3:2 RGB + 8-bit alpha (`D3DFMT_A8R3G3B2`). Colour in
+        // the low byte (R=0x00e0, G=0x001c, B=0x0003), alpha in the high
+        // byte (A=0xff00).
+        DdsPixelFormat::A8R3G3B2 => DdsPixelFormatHeader {
+            size: DDS_PIXELFORMAT_SIZE as u32,
+            flags: DDPF_RGB | DDPF_ALPHAPIXELS,
+            four_cc: 0,
+            rgb_bit_count: 16,
+            r_bit_mask: 0x00e0,
+            g_bit_mask: 0x001c,
+            b_bit_mask: 0x0003,
+            a_bit_mask: 0xff00,
+        },
         // Legacy BGR-ordered 10:10:10:2 (`D3DFMT_A2R10G10B10`). Masks per
         // the "Common DDS File Resource Formats" table: red in the most
         // significant 10 colour bits, blue in the least, alpha in the top

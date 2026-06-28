@@ -22,8 +22,8 @@ use oxideav_dds::types::{
     DDS_PIXELFORMAT_SIZE,
 };
 use oxideav_dds::{
-    decode_a2r10g10b10_surface, encode_dds_uncompressed, parse_dds, DdsImage, DdsPixelFormat,
-    DdsPlane,
+    decode_a2r10g10b10_surface, decode_a8r3g3b2_surface, encode_dds_uncompressed, parse_dds,
+    DdsImage, DdsPixelFormat, DdsPlane,
 };
 
 /// Build a legacy (non-DX10) uncompressed DDS file from explicit
@@ -170,4 +170,68 @@ fn a2r10g10b10_roundtrips_through_encoder() {
 fn a2r10g10b10_decode_short_buffer_errors() {
     let err = decode_a2r10g10b10_surface(2, 2, &[0u8; 4]);
     assert!(err.is_err());
+}
+
+#[test]
+fn a8r3g3b2_legacy_mask_resolves_and_decodes() {
+    // One pixel: R3=0b101 (5), G3=0b010 (2), B2=0b11 (3), A=0x80.
+    // low byte = (R3<<5)|(G3<<2)|B2 = 0b101_010_11 = 0xab; word = 0x80ab.
+    let word: u16 = 0x80ab;
+    let payload = word.to_le_bytes().to_vec();
+    let dds = build_mask_dds(
+        DDPF_RGB | DDPF_ALPHAPIXELS,
+        16,
+        0x00e0,
+        0x001c,
+        0x0003,
+        0xff00,
+        1,
+        1,
+        &payload,
+    );
+    let img = parse_dds(&dds).expect("parse A8R3G3B2");
+    assert_eq!(img.pixel_format, DdsPixelFormat::A8R3G3B2);
+    assert_eq!(img.surfaces[0].plane.data, payload);
+
+    let out = decode_a8r3g3b2_surface(1, 1, &img.surfaces[0].plane.data).unwrap();
+    // R3=5 → (5<<5)|(5<<2)|(5>>1) = 160|20|2 = 182.
+    // G3=2 → (2<<5)|(2<<2)|(2>>1) = 64|8|1 = 73.
+    // B2=3 → (3<<6)|(3<<4)|(3<<2)|3 = 192|48|12|3 = 255.
+    assert_eq!(out, vec![182, 73, 255, 0x80]);
+}
+
+#[test]
+fn a8r3g3b2_all_ones_channels_saturate() {
+    // R3=7, G3=7, B2=3, A=0xff → low byte 0xff, word 0xffff.
+    let payload = 0xffffu16.to_le_bytes().to_vec();
+    let out = decode_a8r3g3b2_surface(1, 1, &payload).unwrap();
+    assert_eq!(out, vec![0xff, 0xff, 0xff, 0xff]);
+}
+
+#[test]
+fn a8r3g3b2_roundtrips_through_encoder() {
+    let payload: Vec<u8> = (0..(2 * 2 * 2))
+        .map(|i| ((i * 71 + 9) % 256) as u8)
+        .collect();
+    let img = DdsImage {
+        width: 2,
+        height: 2,
+        pixel_format: DdsPixelFormat::A8R3G3B2,
+        planes: vec![DdsPlane {
+            stride: 2 * 2,
+            data: payload.clone(),
+        }],
+        surfaces: Vec::new(),
+        pts: None,
+        mip_map_count: 1,
+        has_dxt10_header: false,
+        dxgi_format: None,
+        is_cubemap: false,
+        array_size: 1,
+        depth: 1,
+    };
+    let bytes = encode_dds_uncompressed(&img).expect("encode A8R3G3B2");
+    let decoded = parse_dds(&bytes).expect("re-parse A8R3G3B2");
+    assert_eq!(decoded.pixel_format, DdsPixelFormat::A8R3G3B2);
+    assert_eq!(decoded.surfaces[0].plane.data, payload);
 }

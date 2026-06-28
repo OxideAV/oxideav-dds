@@ -306,6 +306,18 @@ fn pixel_format_from_legacy(p: &DdsPixelFormatHeader) -> Option<DdsPixelFormat> 
         {
             return Some(DdsPixelFormat::X4R4G4B4);
         }
+        // A8R3G3B2: packed 3:3:2 RGB in the low byte plus an 8-bit alpha
+        // in the high byte (R=0x00e0, G=0x001c, B=0x0003, A=0xff00).
+        // Microsoft's "Common DDS File Resource Formats" table
+        // (DDS_RGBA, 16 bpp).
+        if alpha_pixels
+            && p.r_bit_mask == 0x00e0
+            && p.g_bit_mask == 0x001c
+            && p.b_bit_mask == 0x0003
+            && p.a_bit_mask == 0xff00
+        {
+            return Some(DdsPixelFormat::A8R3G3B2);
+        }
     }
 
     if luminance {

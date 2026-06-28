@@ -966,6 +966,59 @@ pub fn decode_a2r10g10b10_surface(width: u32, height: u32, data: &[u8]) -> Resul
     Ok(out)
 }
 
+/// Decode a tightly-packed legacy `D3DFMT_A8R3G3B2` surface into a flat,
+/// interleaved RGBA8 `Vec<u8>` of `width × height × 4` bytes (R, G, B, A
+/// per pixel, row-major).
+///
+/// Each pixel is one little-endian 16-bit word: the low byte holds 3:3:2
+/// RGB (red bits 5..=7, green bits 2..=4, blue bits 0..=1) and the high
+/// byte an 8-bit alpha, per Microsoft's "Common DDS File Resource
+/// Formats" table (R=`0x00e0`, G=`0x001c`, B=`0x0003`, A=`0xff00`). The
+/// 3-bit and 2-bit colour channels are widened to 8 bits by the standard
+/// bit-replication rule (the channel's high bits repeated into the low
+/// bits) so that an all-ones field maps to `0xff`.
+///
+/// `data` must be at least `width × height × 2` bytes. Returns
+/// [`DdsError::InvalidData`] if it is shorter.
+pub fn decode_a8r3g3b2_surface(width: u32, height: u32, data: &[u8]) -> Result<Vec<u8>> {
+    let what = "decode_a8r3g3b2";
+    let px = (width as usize)
+        .checked_mul(height as usize)
+        .ok_or_else(|| DdsError::invalid(format!("{what}: dimension overflow")))?;
+    let need = px
+        .checked_mul(2)
+        .ok_or_else(|| DdsError::invalid(format!("{what}: byte-count overflow")))?;
+    if data.len() < need {
+        return Err(DdsError::invalid(format!(
+            "{what}: needs {need} bytes for {width}x{height}, have {}",
+            data.len()
+        )));
+    }
+    let out_len = px
+        .checked_mul(4)
+        .ok_or_else(|| DdsError::invalid(format!("{what}: sample-count overflow")))?;
+    let mut out = Vec::with_capacity(out_len);
+    let mut off = 0usize;
+    for _ in 0..px {
+        let word = read_u16_le(data, off);
+        let r3 = ((word >> 5) & 0x7) as u8;
+        let g3 = ((word >> 2) & 0x7) as u8;
+        let b2 = (word & 0x3) as u8;
+        let a = ((word >> 8) & 0xff) as u8;
+        // 3-bit → 8-bit replication: vvv vvv vv (high bits repeated).
+        let r = (r3 << 5) | (r3 << 2) | (r3 >> 1);
+        let g = (g3 << 5) | (g3 << 2) | (g3 >> 1);
+        // 2-bit → 8-bit replication: vv vv vv vv.
+        let b = (b2 << 6) | (b2 << 4) | (b2 << 2) | b2;
+        out.push(r);
+        out.push(g);
+        out.push(b);
+        out.push(a);
+        off += 2;
+    }
+    Ok(out)
+}
+
 /// Decode a tightly-packed `R8G8_B8G8_UNORM` surface (`DXGI_FORMAT`
 /// value 68) into a flat, interleaved RGBA8 `Vec<u8>` of
 /// `width × height × 4` bytes (R, G, B, A per pixel, row-major;
