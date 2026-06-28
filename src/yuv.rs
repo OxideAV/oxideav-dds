@@ -116,6 +116,12 @@ pub enum YuvFormat {
     Opaque420,
     /// `DXGI_FORMAT_YUY2` (107): 8-bit 4:2:2 packed, Y0→R8 U0→G8 Y1→B8 V0→A8.
     Yuy2,
+    /// Legacy `D3DFMT_UYVY`: 8-bit 4:2:2 packed, the byte-swizzled sibling
+    /// of [`Self::Yuy2`]. Each 32-bit block is `[U, Y0, V, Y1]` — chroma
+    /// first — for a horizontal pixel pair sharing the U / V samples.
+    /// There is no DX10 `DXGI_FORMAT` for `UYVY`; it is recognised only
+    /// via its legacy FourCC.
+    Uyvy,
     /// `DXGI_FORMAT_Y210` (108): 10-bit 4:2:2 packed `u16`.
     Y210,
     /// `DXGI_FORMAT_Y216` (109): 16-bit 4:2:2 packed `u16`.
@@ -129,7 +135,9 @@ impl YuvFormat {
     pub fn sampling(self) -> YuvSampling {
         match self {
             YuvFormat::Ayuv | YuvFormat::Y410 | YuvFormat::Y416 => YuvSampling::S444,
-            YuvFormat::Yuy2 | YuvFormat::Y210 | YuvFormat::Y216 => YuvSampling::S422,
+            YuvFormat::Yuy2 | YuvFormat::Uyvy | YuvFormat::Y210 | YuvFormat::Y216 => {
+                YuvSampling::S422
+            }
             YuvFormat::Nv12 | YuvFormat::P010 | YuvFormat::P016 | YuvFormat::Opaque420 => {
                 YuvSampling::S420
             }
@@ -146,6 +154,7 @@ impl YuvFormat {
             | YuvFormat::Nv12
             | YuvFormat::Opaque420
             | YuvFormat::Yuy2
+            | YuvFormat::Uyvy
             | YuvFormat::Nv11 => 8,
             YuvFormat::Y410 => 10,
             YuvFormat::Y416
@@ -165,6 +174,7 @@ impl YuvFormat {
                 | YuvFormat::Nv12
                 | YuvFormat::Opaque420
                 | YuvFormat::Yuy2
+                | YuvFormat::Uyvy
                 | YuvFormat::Nv11
         )
     }
@@ -188,7 +198,7 @@ impl YuvFormat {
             YuvFormat::Y410 => w.checked_mul(h).and_then(|n| n.checked_mul(4)),
             YuvFormat::Y416 => w.checked_mul(h).and_then(|n| n.checked_mul(8)),
             // 4:2:2 packed, one group per pixel pair.
-            YuvFormat::Yuy2 => w.checked_mul(h).and_then(|n| n.checked_mul(2)),
+            YuvFormat::Yuy2 | YuvFormat::Uyvy => w.checked_mul(h).and_then(|n| n.checked_mul(2)),
             YuvFormat::Y210 | YuvFormat::Y216 => w.checked_mul(h).and_then(|n| n.checked_mul(4)),
             // 4:2:0 planar: Y plane (w*h) + UV plane (w*h/2). Microsoft:
             // "rowPitch * (height + (height / 2))".
@@ -297,6 +307,39 @@ pub fn decode_yuy2_surface(width: u32, height: u32, data: &[u8]) -> Result<Vec<u
             let u = data[s + 1];
             let y1 = data[s + 2];
             let v = data[s + 3];
+            let d = dst + pair * 8;
+            out[d..d + 4].copy_from_slice(&[y0, u, v, 0xff]);
+            out[d + 4..d + 8].copy_from_slice(&[y1, u, v, 0xff]);
+        }
+    }
+    Ok(out)
+}
+
+/// Decode a legacy `D3DFMT_UYVY` surface — 8-bit 4:2:2 packed — into
+/// interleaved `[Y, U, V, A]` `u8` samples, `width × height × 4` (chroma
+/// replicated across each horizontal pixel pair; alpha `0xff`).
+///
+/// `UYVY` is the byte-swizzled sibling of `YUY2`: the four bytes of each
+/// 32-bit block are `[U0, Y0, V0, Y1]` — chroma first — rather than
+/// `YUY2`'s `[Y0, U0, Y1, V0]`. Both carry two luma samples plus one
+/// shared U and one shared V for the pixel pair.
+pub fn decode_uyvy_surface(width: u32, height: u32, data: &[u8]) -> Result<Vec<u8>> {
+    YuvFormat::Uyvy.check_dims(width, height)?;
+    let need = YuvFormat::Uyvy.surface_size_bytes(width, height)?;
+    require_len(data, need, "decode_uyvy", width, height)?;
+    let w = width as usize;
+    let h = height as usize;
+    let mut out = vec![0u8; w * h * 4];
+    let row_bytes = w * 2; // 4 bytes per pixel pair = 2 bytes per pixel
+    for row in 0..h {
+        let src = row * row_bytes;
+        let dst = row * w * 4;
+        for pair in 0..(w / 2) {
+            let s = src + pair * 4;
+            let u = data[s];
+            let y0 = data[s + 1];
+            let v = data[s + 2];
+            let y1 = data[s + 3];
             let d = dst + pair * 8;
             out[d..d + 4].copy_from_slice(&[y0, u, v, 0xff]);
             out[d + 4..d + 8].copy_from_slice(&[y1, u, v, 0xff]);

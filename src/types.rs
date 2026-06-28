@@ -147,6 +147,21 @@ pub const FOURCC_ATI2: u32 = make_fourcc(b"ATI2");
 /// FourCC `'DX10'` — directs the reader to consume a `DDS_HEADER_DXT10`
 /// extension (which then carries the real DXGI format identifier).
 pub const FOURCC_DX10: u32 = make_fourcc(b"DX10");
+/// FourCC `'RGBG'` — `D3DFMT_R8G8_B8G8` / DXGI `R8G8_B8G8_UNORM` (value
+/// 68). The horizontally sub-sampled packed RGB layout where each
+/// 32-bit block describes a pixel pair sharing R/B with independent G.
+pub const FOURCC_RGBG: u32 = make_fourcc(b"RGBG");
+/// FourCC `'GRGB'` — `D3DFMT_G8R8_G8B8` / DXGI `G8R8_G8B8_UNORM` (value
+/// 69). The channel-reordered sibling of [`FOURCC_RGBG`].
+pub const FOURCC_GRGB: u32 = make_fourcc(b"GRGB");
+/// FourCC `'YUY2'` — `D3DFMT_YUY2` / DXGI `YUY2` 4:2:2 packed luma /
+/// chroma. Each 32-bit block carries `[Y0, U, Y1, V]` for a horizontal
+/// pixel pair sharing the chroma samples.
+pub const FOURCC_YUY2: u32 = make_fourcc(b"YUY2");
+/// FourCC `'UYVY'` — `D3DFMT_UYVY` 4:2:2 packed luma / chroma. The
+/// byte-swizzled sibling of [`FOURCC_YUY2`]: each 32-bit block carries
+/// `[U, Y0, V, Y1]` for a horizontal pixel pair sharing the chroma.
+pub const FOURCC_UYVY: u32 = make_fourcc(b"UYVY");
 
 // --- Legacy `D3DFMT` numeric FourCC codes -------------------------------
 //

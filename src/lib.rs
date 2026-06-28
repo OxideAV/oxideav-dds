@@ -265,8 +265,9 @@ pub use types::{
 };
 pub use yuv::{
     decode_420_opaque_surface, decode_ayuv_surface, decode_nv11_surface, decode_nv12_surface,
-    decode_p010_surface, decode_p016_surface, decode_y210_surface, decode_y216_surface,
-    decode_y410_surface, decode_y416_surface, decode_yuy2_surface, YuvFormat, YuvSampling,
+    decode_p010_surface, decode_p016_surface, decode_uyvy_surface, decode_y210_surface,
+    decode_y216_surface, decode_y410_surface, decode_y416_surface, decode_yuy2_surface, YuvFormat,
+    YuvSampling,
 };
 
 #[cfg(feature = "registry")]

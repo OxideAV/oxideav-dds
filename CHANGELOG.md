@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Legacy ASCII-FourCC packed RGB / 4:2:2 layouts (round 379).** Four
+  more "Common DDS File Resource Formats" entries that older `.dds`
+  writers carry under an ASCII FourCC tag now resolve at parse time:
+  `RGBG` (`D3DFMT_R8G8_B8G8`) and `GRGB` (`D3DFMT_G8R8_G8B8`) route to
+  the existing `R8G8_B8G8_UNORM` / `G8R8_G8B8_UNORM` byte layouts;
+  `YUY2` (`D3DFMT_YUY2`) routes to the existing 4:2:2 packed decoder; and
+  `UYVY` (`D3DFMT_UYVY`) — the byte-swizzled `[U, Y0, V, Y1]` sibling of
+  YUY2, with no DX10 `DXGI_FORMAT` — is a new `YuvFormat` variant decoded
+  by `decode_uyvy_surface` to interleaved `[Y, U, V, A]` samples (chroma
+  replicated across the pixel pair, alpha `0xff`). New
+  `tests/legacy_fourcc_formats.rs` covers all four.
+
 - **Legacy `D3DFMT_G16R16` + `D3DFMT_A2R10G10B10` mask layouts (round
   379).** Two more entries from Microsoft's "Common DDS File Resource
   Formats" table now resolve from their legacy `DDS_PIXELFORMAT` masks.

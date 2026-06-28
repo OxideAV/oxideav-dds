@@ -145,6 +145,15 @@ fn pixel_format_from_legacy(p: &DdsPixelFormatHeader) -> Option<DdsPixelFormat> 
             FOURCC_BC4S => Some(DdsPixelFormat::Bc4Snorm),
             FOURCC_BC5U | FOURCC_ATI2 => Some(DdsPixelFormat::Bc5Unorm),
             FOURCC_BC5S => Some(DdsPixelFormat::Bc5Snorm),
+            // Horizontally sub-sampled packed RGB carried under their
+            // legacy ASCII FourCC tags (the DX10 path routes the same two
+            // layouts via DXGI values 68 / 69).
+            FOURCC_RGBG => Some(DdsPixelFormat::R8G8B8G8Unorm),
+            FOURCC_GRGB => Some(DdsPixelFormat::G8R8G8B8Unorm),
+            // Legacy 4:2:2 packed luma/chroma FourCCs. YUY2 has a DX10
+            // DXGI counterpart (value 107); UYVY is FourCC-only.
+            FOURCC_YUY2 => Some(DdsPixelFormat::Yuv(crate::yuv::YuvFormat::Yuy2)),
+            FOURCC_UYVY => Some(DdsPixelFormat::Yuv(crate::yuv::YuvFormat::Uyvy)),
             // Legacy `D3DFMT` numeric FourCC codes for the extended
             // high-bit-depth / floating-point uncompressed layouts. The
             // mapping below is the one Microsoft tabulates in the
@@ -589,7 +598,7 @@ fn surface_stride_bytes(pix: DdsPixelFormat, width: u32) -> usize {
         return match f {
             Ayuv | Y410 => w * 4,
             Y416 => w * 8,
-            Yuy2 => w * 2,
+            Yuy2 | Uyvy => w * 2,
             Y210 | Y216 => w * 4,
             // Planar luma row pitch: 1 byte/sample (8-bit) or 2 (16-bit).
             Nv12 | Opaque420 | Nv11 => w,
