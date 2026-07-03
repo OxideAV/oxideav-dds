@@ -1,5 +1,7 @@
 # oxideav-dds
 
+[![CI](https://github.com/OxideAV/oxideav-dds/actions/workflows/ci.yml/badge.svg)](https://github.com/OxideAV/oxideav-dds/actions/workflows/ci.yml) [![crates.io](https://img.shields.io/crates/v/oxideav-dds.svg)](https://crates.io/crates/oxideav-dds) [![docs.rs](https://docs.rs/oxideav-dds/badge.svg)](https://docs.rs/oxideav-dds) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Pure-Rust reader / writer for Microsoft's DirectDraw Surface (DDS) texture
 container, the format Direct3D games ship their baked block-compressed art
 in. Part of the [oxideav workspace][oxideav-workspace] family of
