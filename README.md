@@ -30,7 +30,12 @@ byte layout), and the packed 3:3:2-plus-alpha `A8R3G3B2`.
 `A8R3G3B2` expands to RGBA8 via `decode_a8r3g3b2_surface` (3-bit / 2-bit
 channels widened by bit-replication) and `A2R10G10B10` to interleaved
 `u16` channels via `decode_a2r10g10b10_surface`; both round-trip
-byte-for-byte through `encode_dds_uncompressed`. The legacy ASCII-FourCC
+byte-for-byte through `encode_dds_uncompressed`. The DX10-only packed
+4:4:4:4 layout `A4B4G4R4_UNORM` (`DXGI_FORMAT` value 191 — alpha in the
+low nibble, red in the high, the reverse channel order of the legacy
+`A4R4G4B4`) expands to RGBA8 (each nibble widened 4→8 by
+bit-replication) via `decode_a4b4g4r4_unorm_surface` and round-trips
+verbatim through `encode_dds_uncompressed_dx10`. The legacy ASCII-FourCC
 packed layouts `RGBG` / `GRGB` (sub-sampled RGB → `R8G8_B8G8` /
 `G8R8_G8B8`) and `YUY2` / `UYVY` (4:2:2 packed luma-chroma) are resolved
 from their FourCC tags. High-bit-depth and floating-point layouts (16-bit-per-channel
@@ -207,9 +212,17 @@ cube array from a pre-populated `surfaces` list;
 `encode_dds_block_compressed_from_rgba8` covers the block-compressed
 cubemap / array path from RGBA8.
 
-**Format table.** Every `DXGI_FORMAT` value Microsoft assigns (1..=132)
-plus the Windows 8.1-era ASTC range (133..=187) is enumerated by name in
-`DxgiFormat` for lossless round-trip; the plain
+**Format table.** Every `DXGI_FORMAT` value Microsoft assigns (1..=132),
+the Windows 8.1-era ASTC range (133..=187), and the three top-of-range
+codes the DXGI enumeration adds after ASTC (`SAMPLER_FEEDBACK_MIN_MIP_OPAQUE`
+189, `SAMPLER_FEEDBACK_MIP_REGION_USED_OPAQUE` 190, `A4B4G4R4_UNORM` 191)
+is enumerated by name in `DxgiFormat` for lossless round-trip — the two
+sampler-feedback codes are opaque ("TBD" layout, round-trip only) while
+`A4B4G4R4_UNORM` decodes. The biased fixed-point `R10G10B10_XR_BIAS_A2_UNORM`
+(value 89) shares the 10:10:10:2 packing of `R10G10B10A2_UINT` and is
+resolved to its stored fixed-point codes (the documented enumeration
+does not give the bias→float constants, so the display-side transform is
+left to the caller). The plain
 8/16/32-bit integer colour formats (`R8`/`R8G8`/`R8G8B8A8`,
 `R16`/`R16G16`/`R16G16B16A16`, `R32`/`R32G32`/`R32G32B32`/`R32G32B32A32`,
 each in `_UINT` and `_SINT`) are sized and decoded, the eleven
