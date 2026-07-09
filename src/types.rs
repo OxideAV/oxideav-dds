@@ -401,6 +401,23 @@ pub enum DxgiFormat {
     P208,
     V208,
     V408,
+    /// `DXGI_FORMAT_SAMPLER_FEEDBACK_MIN_MIP_OPAQUE` (value 189). An
+    /// opaque sampler-feedback map whose byte layout Microsoft leaves
+    /// unspecified ("TBD" in the public enumeration); recognised for
+    /// lossless round-trip of the format code only, no decode.
+    SamplerFeedbackMinMipOpaque,
+    /// `DXGI_FORMAT_SAMPLER_FEEDBACK_MIP_REGION_USED_OPAQUE` (value 190).
+    /// The second opaque sampler-feedback map; layout likewise "TBD",
+    /// recognised for round-trip only.
+    SamplerFeedbackMipRegionUsedOpaque,
+    /// `DXGI_FORMAT_A4B4G4R4_UNORM` (value 191). A four-component,
+    /// 16-bit unsigned-normalised layout with 4 bits per channel
+    /// including alpha. Following the "first named component in the
+    /// least-significant bits" rule the packed little-endian word is
+    /// `RRRR GGGG BBBB AAAA` (alpha in bits 0..=3, blue 4..=7, green
+    /// 8..=11, red 12..=15). Decode to RGBA8 with
+    /// [`crate::decode_a4b4g4r4_unorm_surface`].
+    A4B4G4R4Unorm,
 
     // --- ASTC LDR block-compressed formats (DXGI 133..=187) -------------
     //
@@ -579,6 +596,9 @@ impl DxgiFormat {
             130 => Self::P208,
             131 => Self::V208,
             132 => Self::V408,
+            189 => Self::SamplerFeedbackMinMipOpaque,
+            190 => Self::SamplerFeedbackMipRegionUsedOpaque,
+            191 => Self::A4B4G4R4Unorm,
             // ASTC LDR (Windows 8.1-era dxgiformat.h, notes §11).
             133 => Self::Astc4x4Typeless,
             134 => Self::Astc4x4Unorm,
@@ -748,6 +768,9 @@ impl DxgiFormat {
             Self::P208 => 130,
             Self::V208 => 131,
             Self::V408 => 132,
+            Self::SamplerFeedbackMinMipOpaque => 189,
+            Self::SamplerFeedbackMipRegionUsedOpaque => 190,
+            Self::A4B4G4R4Unorm => 191,
             Self::Astc4x4Typeless => 133,
             Self::Astc4x4Unorm => 134,
             Self::Astc4x4UnormSrgb => 135,

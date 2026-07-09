@@ -497,6 +497,8 @@ fn uncompressed_dxgi_code(pix: DdsPixelFormat) -> Option<u32> {
         R32Float => DxgiFormat::R32Float.to_u32(),
         R32G32Float => DxgiFormat::R32G32Float.to_u32(),
         R32G32B32A32Float => DxgiFormat::R32G32B32A32Float.to_u32(),
+        // Packed 4:4:4:4 with alpha in the low nibble (DX10-only).
+        A4B4G4R4Unorm => DxgiFormat::A4B4G4R4Unorm.to_u32(),
         // Packed 10:10:10:2.
         R10G10B10A2Unorm => DxgiFormat::R10G10B10A2Unorm.to_u32(),
         R10G10B10A2Uint => DxgiFormat::R10G10B10A2Uint.to_u32(),

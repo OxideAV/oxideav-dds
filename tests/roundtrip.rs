@@ -424,10 +424,15 @@ fn pixel_format_helpers() {
 
 #[test]
 fn dxgi_format_round_trip_enum() {
-    for raw in [28u32, 29, 49, 61, 71, 72, 80, 95, 98, 115] {
+    for raw in [28u32, 29, 49, 61, 71, 72, 80, 95, 98, 115, 189, 190, 191] {
         let f = DxgiFormat::from_u32(raw);
         assert_eq!(f.to_u32(), raw, "DXGI {raw} did not round-trip");
+        assert!(
+            !matches!(f, DxgiFormat::Unknown(_)),
+            "DXGI {raw} should be a named variant, not Unknown"
+        );
     }
+    assert_eq!(DxgiFormat::from_u32(191), DxgiFormat::A4B4G4R4Unorm);
     assert_eq!(DxgiFormat::from_u32(123_456), DxgiFormat::Unknown(123_456));
     assert_eq!(DxgiFormat::Unknown(7).to_u32(), 7);
 }

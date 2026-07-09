@@ -84,6 +84,18 @@ pub enum DdsPixelFormat {
     /// channel the high byte. Expand to RGBA8 with
     /// [`crate::decode_a8r3g3b2_surface`].
     A8R3G3B2,
+    /// 16 bpp packed 4:4:4:4 with alpha, one little-endian `u16` per
+    /// pixel (DXGI `A4B4G4R4_UNORM`, value 191). The DX10-only 4-bit
+    /// sibling of [`Self::A4R4G4B4`] with the reverse colour order:
+    /// following the "first named component in the least-significant
+    /// bits" DXGI rule the word is `RRRR GGGG BBBB AAAA` — alpha in
+    /// bits 0..=3, blue 4..=7, green 8..=11, red 12..=15 (the mirror of
+    /// the legacy `A4R4G4B4`, whose alpha sits in the top nibble). No
+    /// legacy `DDS_PIXELFORMAT` mask carries this order, so it is
+    /// recognised only via the DX10 `DXGI_FORMAT` code. Expand to RGBA8
+    /// (each nibble widened 4→8 by bit-replication) with
+    /// [`crate::decode_a4b4g4r4_unorm_surface`].
+    A4B4G4R4Unorm,
 
     // --- Block-compressed pass-through (raw block bytes; not decoded
     //     in round 1) ----------------------------------------------------
@@ -414,6 +426,7 @@ impl DdsPixelFormat {
             | Self::A4R4G4B4
             | Self::X4R4G4B4
             | Self::A8R3G3B2
+            | Self::A4B4G4R4Unorm
             | Self::A8L8
             | Self::L16 => 16,
             Self::L8 | Self::A8 | Self::A4L4 | Self::R8Uint | Self::R8Sint => 8,
@@ -499,6 +512,7 @@ impl DdsPixelFormat {
             | Self::A4R4G4B4
             | Self::X4R4G4B4
             | Self::A8R3G3B2
+            | Self::A4B4G4R4Unorm
             | Self::A8L8
             | Self::L16 => 2,
             Self::L8 | Self::A8 | Self::A4L4 | Self::R8Uint | Self::R8Sint => 1,
@@ -597,6 +611,7 @@ impl DdsPixelFormat {
             Self::L8 => "L8",
             Self::A8 => "A8",
             Self::A8R3G3B2 => "A8R3G3B2",
+            Self::A4B4G4R4Unorm => "A4B4G4R4_UNORM",
             Self::Bc1 => "BC1",
             Self::Bc2 => "BC2",
             Self::Bc3 => "BC3",

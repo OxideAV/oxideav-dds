@@ -966,6 +966,60 @@ pub fn decode_a2r10g10b10_surface(width: u32, height: u32, data: &[u8]) -> Resul
     Ok(out)
 }
 
+/// Decode a tightly-packed `A4B4G4R4_UNORM` surface (`DXGI_FORMAT`
+/// value 191) into a flat, interleaved RGBA8 `Vec<u8>` of
+/// `width × height × 4` bytes (R, G, B, A per pixel, row-major).
+///
+/// Each pixel is one little-endian 16-bit word carrying four 4-bit
+/// unsigned-normalised channels. Microsoft's `DXGI_FORMAT` reference
+/// documents this as "a four-component, 16-bit unsigned-normalized
+/// integer format that supports 4 bits for each channel including
+/// alpha" and states, for formats without power-of-two-aligned
+/// components, that "the first named component is in the
+/// least-significant bits". For `A4B4G4R4` the first named component
+/// is alpha, so the packed word is `RRRR GGGG BBBB AAAA`: alpha in
+/// bits 0..=3, blue 4..=7, green 8..=11, red 12..=15 — the mirror of
+/// the legacy `A4R4G4B4` (which puts alpha in the top nibble). Each
+/// 4-bit channel is widened to 8 bits by bit-replication
+/// (`v << 4 | v`) so an all-ones nibble maps to `0xff`.
+///
+/// `data` must be at least `width × height × 2` bytes. Returns
+/// [`DdsError::InvalidData`] if it is shorter.
+pub fn decode_a4b4g4r4_unorm_surface(width: u32, height: u32, data: &[u8]) -> Result<Vec<u8>> {
+    let what = "decode_a4b4g4r4_unorm";
+    let px = (width as usize)
+        .checked_mul(height as usize)
+        .ok_or_else(|| DdsError::invalid(format!("{what}: dimension overflow")))?;
+    let need = px
+        .checked_mul(2)
+        .ok_or_else(|| DdsError::invalid(format!("{what}: byte-count overflow")))?;
+    if data.len() < need {
+        return Err(DdsError::invalid(format!(
+            "{what}: needs {need} bytes for {width}x{height}, have {}",
+            data.len()
+        )));
+    }
+    let out_len = px
+        .checked_mul(4)
+        .ok_or_else(|| DdsError::invalid(format!("{what}: sample-count overflow")))?;
+    let mut out = Vec::with_capacity(out_len);
+    let mut off = 0usize;
+    for _ in 0..px {
+        let word = read_u16_le(data, off);
+        let a4 = (word & 0xf) as u8;
+        let b4 = ((word >> 4) & 0xf) as u8;
+        let g4 = ((word >> 8) & 0xf) as u8;
+        let r4 = ((word >> 12) & 0xf) as u8;
+        // 4-bit → 8-bit replication: high nibble repeated into the low.
+        out.push((r4 << 4) | r4);
+        out.push((g4 << 4) | g4);
+        out.push((b4 << 4) | b4);
+        out.push((a4 << 4) | a4);
+        off += 2;
+    }
+    Ok(out)
+}
+
 /// Decode a tightly-packed legacy `D3DFMT_A8R3G3B2` surface into a flat,
 /// interleaved RGBA8 `Vec<u8>` of `width × height × 4` bytes (R, G, B, A
 /// per pixel, row-major).
@@ -1136,6 +1190,38 @@ fn decode_packed_subsampled_rgb(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a4b4g4r4_unorm_channel_order_and_replication() {
+        // One pixel: R=0xF, G=0x0, B=0xA, A=0x5.
+        // Packed word = RRRR GGGG BBBB AAAA = 0xF0A5.
+        let word: u16 = 0xF0A5;
+        let data = word.to_le_bytes();
+        let out = decode_a4b4g4r4_unorm_surface(1, 1, &data).unwrap();
+        // Bit-replication 4->8: 0xF->0xFF, 0x0->0x00, 0xA->0xAA, 0x5->0x55.
+        assert_eq!(out, vec![0xFF, 0x00, 0xAA, 0x55]);
+    }
+
+    #[test]
+    fn a4b4g4r4_unorm_all_ones_is_opaque_white() {
+        let data = 0xFFFFu16.to_le_bytes();
+        let out = decode_a4b4g4r4_unorm_surface(1, 1, &data).unwrap();
+        assert_eq!(out, vec![0xFF, 0xFF, 0xFF, 0xFF]);
+    }
+
+    #[test]
+    fn a4b4g4r4_unorm_multi_pixel_and_short_buffer() {
+        // 2x1 surface: pixel0 = 0x1234, pixel1 = 0x89AB.
+        let mut data = Vec::new();
+        data.extend_from_slice(&0x1234u16.to_le_bytes());
+        data.extend_from_slice(&0x89ABu16.to_le_bytes());
+        let out = decode_a4b4g4r4_unorm_surface(2, 1, &data).unwrap();
+        // p0: R=1,G=2,B=3,A=4 -> 0x11,0x22,0x33,0x44
+        // p1: R=8,G=9,B=A,A=B -> 0x88,0x99,0xAA,0xBB
+        assert_eq!(out, vec![0x11, 0x22, 0x33, 0x44, 0x88, 0x99, 0xAA, 0xBB]);
+        // A one-byte-short buffer is rejected, not panicking.
+        assert!(decode_a4b4g4r4_unorm_surface(2, 1, &data[..3]).is_err());
+    }
 
     #[test]
     fn r32_float_round_trip_values() {

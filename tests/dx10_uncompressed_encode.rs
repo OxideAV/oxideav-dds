@@ -12,8 +12,8 @@
 //! library source consulted.
 
 use oxideav_dds::{
-    encode_dds_uncompressed_dx10, parse_dds, DdsImage, DdsPixelFormat, DdsPlane, DdsSurface,
-    DxgiFormat,
+    decode_a4b4g4r4_unorm_surface, encode_dds_uncompressed_dx10, parse_dds, DdsImage,
+    DdsPixelFormat, DdsPlane, DdsSurface, DxgiFormat,
 };
 
 /// Build a single-plane DX10 image with a pseudo-random byte payload.
@@ -95,6 +95,46 @@ fn roundtrip_high_bit_depth_norm() {
         DdsPixelFormat::R16G16B16A16Snorm,
         DxgiFormat::R16G16B16A16Snorm,
     );
+}
+
+#[test]
+fn roundtrip_a4b4g4r4_unorm() {
+    // Verbatim byte round-trip through the DX10 header.
+    roundtrip_one(DdsPixelFormat::A4B4G4R4Unorm, DxgiFormat::A4B4G4R4Unorm);
+}
+
+#[test]
+fn a4b4g4r4_unorm_parse_then_decode() {
+    // End-to-end: build a 2x1 A4B4G4R4 surface, encode a DX10 .dds,
+    // re-parse, then expand to RGBA8 and check the channel order.
+    // p0 = 0xF0A5 (R=F,G=0,B=A,A=5), p1 = 0x1234 (R=1,G=2,B=3,A=4).
+    let mut data = Vec::new();
+    data.extend_from_slice(&0xF0A5u16.to_le_bytes());
+    data.extend_from_slice(&0x1234u16.to_le_bytes());
+    let img = DdsImage {
+        width: 2,
+        height: 1,
+        pixel_format: DdsPixelFormat::A4B4G4R4Unorm,
+        planes: vec![DdsPlane {
+            stride: 4,
+            data: data.clone(),
+        }],
+        surfaces: Vec::new(),
+        pts: None,
+        mip_map_count: 1,
+        has_dxt10_header: true,
+        dxgi_format: None,
+        is_cubemap: false,
+        array_size: 1,
+        depth: 1,
+    };
+    let bytes = encode_dds_uncompressed_dx10(&img).expect("encode a4b4g4r4");
+    let decoded = parse_dds(&bytes).expect("parse a4b4g4r4");
+    assert_eq!(decoded.pixel_format, DdsPixelFormat::A4B4G4R4Unorm);
+    assert_eq!(decoded.surfaces[0].plane.data, data);
+    let rgba = decode_a4b4g4r4_unorm_surface(2, 1, &decoded.surfaces[0].plane.data)
+        .expect("decode a4b4g4r4");
+    assert_eq!(rgba, vec![0xFF, 0x00, 0xAA, 0x55, 0x11, 0x22, 0x33, 0x44]);
 }
 
 #[test]

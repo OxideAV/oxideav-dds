@@ -371,6 +371,11 @@ fn pixel_format_from_dxgi(d: DxgiFormat) -> Option<DdsPixelFormat> {
         DxgiFormat::B5G6R5Unorm => DdsPixelFormat::R5G6B5,
         DxgiFormat::B5G5R5A1Unorm => DdsPixelFormat::A1R5G5B5,
         DxgiFormat::B4G4R4A4Unorm => DdsPixelFormat::A4R4G4B4,
+        // A4B4G4R4_UNORM (value 191): the DX10-only 4:4:4:4 layout with
+        // alpha in the least-significant nibble and red in the most —
+        // the reverse channel order of the legacy A4R4G4B4, so it needs
+        // its own variant rather than aliasing to A4R4G4B4.
+        DxgiFormat::A4B4G4R4Unorm => DdsPixelFormat::A4B4G4R4Unorm,
         DxgiFormat::R8Unorm | DxgiFormat::R8Typeless => DdsPixelFormat::L8,
         DxgiFormat::A8Unorm => DdsPixelFormat::A8,
         DxgiFormat::R8G8Unorm | DxgiFormat::R8G8Typeless => DdsPixelFormat::A8L8,
