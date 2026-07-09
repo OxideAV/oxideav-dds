@@ -542,6 +542,19 @@ fn pixel_format_from_dxgi(d: DxgiFormat) -> Option<DdsPixelFormat> {
         // UINT/UNORM siblings; route to the UINT decoder (stored integers,
         // no normalisation).
         DxgiFormat::R10G10B10A2Typeless => DdsPixelFormat::R10G10B10A2Uint,
+        // R10G10B10_XR_BIAS_A2_UNORM (value 89) shares the exact same
+        // 32-bit 10:10:10:2 packing (R in the least-significant 10 bits).
+        // Microsoft documents it only as a "2.8-biased fixed-point"
+        // format; the enumeration page does not state the bias→float
+        // arithmetic (the offset / scale constants), so we cannot decode
+        // it to normalised floats clean-room. We route it to the UINT
+        // decoder so the stored 10-bit fixed-point codes and 2-bit alpha
+        // are recovered verbatim; the caller applies the display-side
+        // bias transform (mirroring how the 16-bit UNORM/SNORM surfaces
+        // hand back raw channels pending a documented scaling rule). The
+        // `dxgi_format` field still carries the exact code 89 for
+        // round-trip.
+        DxgiFormat::R10G10B10XrBiasA2Unorm => DdsPixelFormat::R10G10B10A2Uint,
         // Everything else (the depth/colour-ambiguous views without a
         // byte-identical typed sibling, the packed/planar P208/V208/V408
         // video formats whose byte layout Microsoft does not document,

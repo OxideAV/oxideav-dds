@@ -303,3 +303,26 @@ fn dxgi_format_override_is_honoured() {
     let decoded = parse_dds(&bytes).expect("parse");
     assert_eq!(decoded.dxgi_format, Some(DxgiFormat::R8G8B8A8Uint));
 }
+
+#[test]
+fn xr_bias_a2_routes_to_stored_integers() {
+    // R10G10B10_XR_BIAS_A2_UNORM (89) shares the 10:10:10:2 packing of
+    // R10G10B10A2_UINT; the layout resolver routes it to the UINT
+    // decoder (stored fixed-point codes recovered verbatim) while the
+    // dxgi_format field preserves the exact code 89 for round-trip.
+    let mut img = make_image(4, 4, DdsPixelFormat::R10G10B10A2Uint, 1);
+    let orig = img.planes[0].data.clone();
+    img.dxgi_format = Some(DxgiFormat::R10G10B10XrBiasA2Unorm);
+    let bytes = encode_dds_uncompressed_dx10(&img).expect("encode xr-bias");
+    let decoded = parse_dds(&bytes).expect("parse xr-bias");
+    assert_eq!(
+        decoded.dxgi_format,
+        Some(DxgiFormat::R10G10B10XrBiasA2Unorm)
+    );
+    assert_eq!(decoded.pixel_format, DdsPixelFormat::R10G10B10A2Uint);
+    assert_eq!(decoded.surfaces[0].plane.data, orig);
+    // The stored 10:10:10:2 fixed-point codes are recoverable.
+    let ints = oxideav_dds::decode_r10g10b10a2_uint_surface(4, 4, &decoded.surfaces[0].plane.data)
+        .expect("decode stored ints");
+    assert_eq!(ints.len(), 4 * 4 * 4);
+}
