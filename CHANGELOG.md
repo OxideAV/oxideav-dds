@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.6](https://github.com/OxideAV/oxideav-dds/compare/v0.0.5...v0.0.6) - 2026-09-01
+
+### Other
+
+- clippy 1.98: needless_late_init — unpack_quints binds C from the branch expression
+- hide internal pub surface from rustdoc/semver (fleet rule 2026-09-01)
+- README — document A4B4G4R4_UNORM decode, DXGI 189/190/191 naming, XR_BIAS routing
+- resolve R10G10B10_XR_BIAS_A2_UNORM (DXGI 89) to stored 10:10:10:2 codes
+- A4B4G4R4_UNORM (DXGI 191) decode + DX10 round-trip; enum to 191
+- add CI / crates.io / docs.rs / MIT-license badges
+- reword BC5_SNORM_i8 doc comment (drop format-name '-style' phrasing)
+- signed-output BC4_SNORM/BC5_SNORM decoders -> Vec<i8> (round 379)
+- README — round 379 legacy mask/FourCC format coverage
+- legacy D3DFMT_A8R3G3B2 packed 3:3:2+alpha layout (round 379)
+- legacy RGBG/GRGB/YUY2/UYVY ASCII-FourCC packed layouts (round 379)
+- legacy D3DFMT_G16R16 + D3DFMT_A2R10G10B10 mask layouts (round 379)
+- encode_round375 panic-free target for the new encoders
+- three-subset (three-partition) LDR encode for opaque blocks
+- encode_dds_uncompressed_cubemap_array — uncompressed cubemap/array writer
+- encode_dds_uncompressed_dx10 — DX10-header uncompressed writer
+- encode_dds_volume_block_compressed — BC1..BC7 3D (volume) texture writer
+- drop auto-generated encode_astc corpus files
+- dual-plane encode for uncorrelated-alpha blocks
+- cache single-plane block-mode table (OnceLock)
+- encode_astc fuzz target + criterion bench
+- two-subset (partition) encode with error-driven selection
+- encode_dds_astc — full ASTC LDR .dds file writer
+- single-partition LDR encoder (encode_astc_ldr / _block / _surface)
+- route the plain colour _TYPELESS DXGI formats to verbatim UINT (round 367)
+- decode the four single-aspect depth/stencil view formats (round 367)
+- fix encoder panic on YUV / no-bpp formats (roundtrip fuzz crash)
+- retarget unsupported-DXGI injection test onto P8 palette
+- document depth / depth-stencil decode in README
+- cargo-fuzz panic-free target for the depth-surface decoders
+- end-to-end parse_dds tests for depth / depth-stencil surfaces
+- decode depth / depth-stencil surfaces (D16/D32/D24S8/D32S8)
+- document YUV decode in README + add decode_yuv fuzz target
+- recognise YUV DXGI formats in parse_dds (DdsPixelFormat::Yuv + sizing)
+- YUV DXGI surface decode module (AYUV/Y410/Y416/YUY2/Y210/Y216/NV12/P010/P016/420_OPAQUE/NV11)
+- add multi-partition + dual-plane block decode tests
+- fix high-precision weight ranges + dual-plane colour ISE budget
+- README + CHANGELOG: ASTC LDR decode
+- ASTC decoder fuzz target + panic-free property tests
+- ASTC DDS container recognition + decode integration
+- ASTC LDR block decoder (Khronos DFS 1.4 ch.23)
+- decode normalised 8/16-bit UNORM/SNORM single- and dual-channel surfaces (round 336)
+- resolve legacy X8B8G8R8 / X1R5G5B5 / X4R4G4B4 / L16 / A4L4 mask layouts
+- decode 8-bit and 32-bit plain-integer surfaces (round 326)
+- decode 16-bit plain-integer UINT/SINT surfaces (round 319)
+- decode sub-sampled packed R8G8_B8G8 / G8R8_G8B8 surfaces (round 314)
+- refresh to current status, drop per-round changelog cruft
+
 ### Added
 
 - **Signed-output `BC4_SNORM` / `BC5_SNORM` decoders (round 379).**
