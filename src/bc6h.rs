@@ -915,6 +915,7 @@ pub(crate) fn mode_info(mode: u32) -> Option<ModeInfo> {
 // ---- Half-float helpers --------------------------------------------------
 
 /// Reinterpret a u16 as IEEE-754 binary16 -> f32 (full precision).
+#[doc(hidden)]
 pub fn half_to_f32(h: u16) -> f32 {
     let sign = (h >> 15) & 1;
     let exp = ((h >> 10) & 0x1f) as i32;

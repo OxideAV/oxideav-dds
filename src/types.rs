@@ -934,6 +934,7 @@ impl DxgiFormat {
 /// nearest multiple of 4 before the block count is computed (Microsoft's
 /// public formula in the DDS programming guide's "Compressed texture
 /// resources" section).
+#[doc(hidden)]
 pub fn block_compressed_surface_size(width: u32, height: u32, block_bytes: u32) -> u64 {
     let bw = width.max(1).div_ceil(4) as u64;
     let bh = height.max(1).div_ceil(4) as u64;
