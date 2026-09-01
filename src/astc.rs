@@ -331,7 +331,6 @@ fn unpack_trits(t: u32) -> [u32; 5] {
 fn unpack_quints(q: u32) -> [u32; 3] {
     let qb = |i: u32| (q >> i) & 1;
     let mut out = [0u32; 3];
-    let c: u32;
     if (q >> 1) & 0b11 == 0b11 && (q >> 5) & 0b11 == 0b00 {
         // q2 = { Q0, ~Q4 & Q0?, ... } per spec:
         //   q2 = { Q[0], Q[4]&~Q[0], Q[3]&~Q[0] }; q1 = q0 = 4
@@ -340,14 +339,14 @@ fn unpack_quints(q: u32) -> [u32; 3] {
         out[0] = 4;
         return out;
     }
-    if (q >> 1) & 0b11 == 0b11 {
+    let c: u32 = if (q >> 1) & 0b11 == 0b11 {
         out[2] = 4;
         // C = { Q[4:3], ~Q[6:5], Q[0] }
-        c = ((q >> 3) & 0b11) << 3 | ((!(q >> 5) & 0b11) << 1) | qb(0);
+        ((q >> 3) & 0b11) << 3 | ((!(q >> 5) & 0b11) << 1) | qb(0)
     } else {
         out[2] = (q >> 5) & 0b11;
-        c = q & 0b11111;
-    }
+        q & 0b11111
+    };
     if c & 0b111 == 0b101 {
         out[1] = 4;
         out[0] = (c >> 3) & 0b11;
