@@ -7,7 +7,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Image-crate contract (`IMAGE_CRATE_API`, wave 4).** The crate root
+  now carries the fleet vocabulary: `probe`, `info` / `info_with`,
+  `decode` / `decode_with`, `decode_rgb8`, `decode_rgba8`, `decode_all` /
+  `decode_all_with`, `decode_from`, `encode`, `encode_rgb8`,
+  `encode_rgba8`, `encode_to`, `encode_all`, with the records `DdsImage`,
+  `Plane`, `ColorInfo`, `ColorRange`, `Metadata`, `RgbImage`, `RgbaImage`,
+  `ImageInfo`, `Frame`, `DecodeOptions`, `EncodeOptions`, the
+  `PixelFormat = DdsPixelFormat` alias and `Error = DdsError`. `decode`
+  returns the top-level surface expanded into a layout
+  `oxideav_core::PixelFormat` names (`Gray8`, `Ya8`, `Gray16Le`, `Bgr24`,
+  `Rgba`, `Bgra`, `Rgba64Le`, `GrayF32Le`, `RgbF32Le`, `RgbaF32Le`); the
+  BC1..BC7, BC6H and ASTC LDR block decoders run inside it. `decode_all`
+  returns every mip / face / slice / depth surface as a `Frame`;
+  `encode_all` mirrors it (cubemaps, arrays, volumes, explicit or
+  generated mip chains). `encode` picks the natural stored layout of the
+  image or the `EncodeOptions::surface_format` requested, converting
+  through the block encoders where asked and returning `Unsupported`
+  rather than converting silently.
+- **`DdsImage` and `DdsPixelFormat` changed meaning.** The pre-contract
+  `DdsImage` (the parsed file: header facts + every surface in its stored
+  layout) is now `DdsFile`, and the pre-contract `DdsPixelFormat` (the
+  ~70 `D3DFMT` / `DXGI_FORMAT` stored layouts) is now `SurfaceFormat`.
+  `parse_dds` returns `DdsFile`; every `encode_dds_*` depth writer takes
+  `&DdsFile`; `DdsSurface::plane` is a `Plane`. Both records are
+  `#[non_exhaustive]` with constructors (`DdsFile::new` / `single` +
+  `with_*`, `DdsSurface::new` + `with_*`); the `pts` field of the old
+  image record is gone (the registry adapter carries the packet's `pts`
+  itself). Per the contract ruling, names the contract reuses keep no
+  deprecated alias — this entry is the migration note.
+- **`DdsError`** gains `LimitExceeded(String)` and `Io(std::io::Error)`
+  (+ `From<std::io::Error>`), is `#[non_exhaustive]`, and no longer
+  derives `Clone` / `PartialEq`.
+- **`parse_dds` enforces `DecodeOptions::default()`** (1 GiB decoded-byte
+  cap); `parse_dds_with` takes explicit limits and `strict`.
+- **Registry adapter emits the native contract layout.** The framework
+  `Decoder` hands out the top-level surface in the layout `decode`
+  returns (`Bgra` for `B8G8R8A8`, `Rgba` for decoded BC7, `RgbaF32Le` for
+  float surfaces, …) instead of `Rgba` / `Gray8` only; the `.dds` demuxer
+  declares that layout on the stream from the header. The encoder accepts
+  every contract layout and parses `surface_format` / `mip_levels` /
+  `dx10_header` from `CodecParameters::options`. A colour signal is
+  stamped only for `_UNORM_SRGB` DXGI codes.
+- Volume textures may declare a mip chain as deep as `1 + log2(max(w, h,
+  depth))` — the 2D cap was applied before the volume flag was read, so a
+  `2×2×4` volume with three levels was rejected.
+- `Cargo.toml` excludes `/tests` and `/fuzz` from the published package.
+
 ### Added
+
+- `SurfaceFormat::R11G11B10Float` / `R9G9B9E5SharedExp` — the two packed
+  HDR layouts (`DXGI_FORMAT` 26 / 67) are now parsed and written (DX10
+  header), not only decodable from raw surface bytes.
+- `SurfaceFormat::contract_format`, `has_alpha`, `ALL`, `from_name`;
+  `DxgiFormat::is_srgb`; `DdsFile::surface` / `to_image` /
+  `primary_image` / `is_srgb` / `color_info`; `CubemapFace::index`.
+- `write_dds_file(&DdsFile, force_dx10)` — one general writer for every
+  stored layout and texture shape, validating the surface list against
+  the declared shape so every file it writes parses back into an equal
+  tree. Byte-identical to the pre-contract `encode_dds_uncompressed` /
+  `encode_dds_uncompressed_dx10` / `encode_dds_uncompressed_cubemap_array`
+  / `encode_dds_block_compressed_from_rgba8` / `encode_dds_astc` outputs
+  for the same inputs (pinned by `tests/contract.rs`).
+- Registry: `make_decoder` / `make_encoder` factories, `From<DdsImage>
+  for VideoFrame`, `DdsImage::from_video_frame` /
+  `TryFrom<(&VideoFrame, &CodecParameters)>`, `to_core_pixel_format` /
+  `from_core_pixel_format`, `to_color_signal` / `from_color_signal`,
+  `CodecOptionsStruct for EncodeOptions`.
+- `fuzz/fuzz_targets/contract.rs` drives `probe` / `info` / `decode` /
+  `decode_all` under every limit profile and asserts the lossless
+  re-encode round trip; `ci-standalone` now also runs clippy.
 
 - **Signed-output `BC4_SNORM` / `BC5_SNORM` decoders (round 379).**
   `decode_bc4_snorm_i8` and `decode_bc5_snorm_i8` return a true `Vec<i8>`
@@ -460,6 +531,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the decoded alpha to `0xff`. New `DdsPixelFormat::R8G8B8G8Unorm` /
   `G8R8G8B8Unorm` variants carry them, sized at two bytes per pixel, and
   `parse_dds` resolves them from the `DDS_HEADER_DXT10` `dxgi_format`.
+
+### Deprecated
+
+- `DdsPlane` — use `Plane` (same fields).
 
 ## [0.0.5](https://github.com/OxideAV/oxideav-dds/compare/v0.0.4...v0.0.5) - 2026-06-15
 

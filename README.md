@@ -2,18 +2,221 @@
 
 [![CI](https://github.com/OxideAV/oxideav-dds/actions/workflows/ci.yml/badge.svg)](https://github.com/OxideAV/oxideav-dds/actions/workflows/ci.yml) [![crates.io](https://img.shields.io/crates/v/oxideav-dds.svg)](https://crates.io/crates/oxideav-dds) [![docs.rs](https://docs.rs/oxideav-dds/badge.svg)](https://docs.rs/oxideav-dds) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Pure-Rust reader / writer for Microsoft's DirectDraw Surface (DDS) texture
-container, the format Direct3D games ship their baked block-compressed art
-in. Part of the [oxideav workspace][oxideav-workspace] family of
-single-format codec crates.
+Pure-Rust decoder / encoder for Microsoft's DirectDraw Surface (DDS)
+texture container, the format Direct3D games ship their baked
+block-compressed art in. Part of the [oxideav workspace][oxideav-workspace]
+family of single-format codec crates.
 
 [oxideav-workspace]: https://github.com/OxideAV/oxideav-workspace
 
-## Capabilities
+## Standalone use
+
+`oxideav-dds` follows the OxideAV image-crate contract
+(`IMAGE_CRATE_API`): the same small root vocabulary every
+`oxideav-<format>` image crate exposes, usable with
+`default-features = false` and no `oxideav-core`, returning pixels as
+plain `Vec<u8>`.
+
+```toml
+[dependencies]
+oxideav-dds = { version = "0.0", default-features = false }
+```
+
+```rust
+let bytes = std::fs::read("in.dds")?;
+if oxideav_dds::probe(&bytes) {
+    let info  = oxideav_dds::info(&bytes)?;         // header only: width, height, format, frames, shape
+    let img   = oxideav_dds::decode(&bytes)?;       // DdsImage: the top-level surface, native layout
+    let rgba: Vec<u8> = img.to_rgba8();             // tightly packed RGBA, 4 * width bytes per row
+    let (w, h) = (img.width(), img.height());
+
+    let opts = oxideav_dds::EncodeOptions::default()
+        .with_surface_format(oxideav_dds::SurfaceFormat::Bc7Unorm)
+        .with_mip_levels(0);                        // BC7 blocks, full mip chain
+    let out: Vec<u8> = oxideav_dds::encode_rgba8(w, h, &rgba, &opts)?;
+    std::fs::write("out.dds", out)?;
+}
+```
+
+| Item | Signature |
+|---|---|
+| `probe` | `fn(&[u8]) -> bool` — `DDS ` magic + `dwSize == 124`, allocation-free |
+| `info` / `info_with` | `fn(&[u8][, &DecodeOptions]) -> Result<ImageInfo, Error>` — `width`, `height`, `format`, `frames` (every surface), `has_alpha`, `color`, `has_icc` / `has_exif` / `has_xmp` (always `false`), plus `surface_format`, `dxgi_format`, `dx10_header`, `mip_levels`, `cubemap`, `array_size`, `depth` |
+| `decode` / `decode_with` | `fn(&[u8][, &DecodeOptions]) -> Result<DdsImage, Error>` — the top-level surface (mip 0, first face / slice) in its native contract layout |
+| `decode_rgb8` / `decode_rgba8` | `-> Result<RgbImage / RgbaImage, Error>` — `{ width, height, data }`, tightly packed, 3 / 4 bytes per pixel |
+| `decode_all` / `decode_all_with` | `-> Result<Vec<Frame>, Error>` — every surface as `Frame { image, delay: None, mip_level, array_slice, face, depth_slice }` in on-disk order |
+| `decode_from` | `fn<R: Read>(R) -> Result<DdsImage, Error>` |
+| `encode` | `fn(&DdsImage, &EncodeOptions) -> Result<Vec<u8>, Error>` — natural layout of the image format, or the requested `surface_format` |
+| `encode_rgb8` / `encode_rgba8` | `fn(w, h, &[u8], &EncodeOptions)` — `R8G8B8` / `R8G8B8A8_UNORM` |
+| `encode_to` | `fn<W: Write>(&DdsImage, &EncodeOptions, W) -> Result<(), Error>` |
+| `encode_all` | `fn(&[Frame], &EncodeOptions) -> Result<Vec<u8>, Error>` — mip chains, cubemaps, texture arrays and volumes from the frames' extras (the mirror of `decode_all`) |
+| `DdsImage` | `{ width, height, format: PixelFormat, planes: Vec<Plane>, color: ColorInfo, metadata: Metadata }` with `new` / `packed` / `from_rgb8` / `from_rgba8` (all `Result`), `width()` / `height()` / `format()` / `stride()`, `as_bytes()` / `into_raw()`, `to_rgb8()` / `to_rgba8()` (+ `try_*`) — no `palette`: DDS has no palette layout this crate decodes |
+| `PixelFormat` | `= DdsPixelFormat`: `Gray8`, `Ya8`, `Gray16Le`, `Rgb24`, `Bgr24`, `Rgba`, `Bgra`, `Rgba64Le`, `GrayF32Le`, `RgbF32Le`, `RgbaF32Le` (names mirror `oxideav_core::PixelFormat`) |
+| `Error` | `= DdsError`: `InvalidData`, `Unsupported`, `LimitExceeded`, `Io(std::io::Error)` |
+
+`to_rgba8` is an exact integer kernel per layout: grey replicated, BGR
+orders swizzled, 16-bit samples reduced to their high byte, `f32`
+samples clamped to `[0, 1]` and scaled by 255 (round half up), alpha
+`0xFF` where the layout has none. No gamma or colour management is
+applied.
+
+The stored layout (`SurfaceFormat`, ~70 `D3DFMT` / `DXGI_FORMAT`
+variants) and the whole mip / face / slice / depth tree stay available
+as the depth API: `parse_dds(&bytes) -> DdsFile` (`DdsFile::surfaces`,
+`DdsFile::to_image(&surface)`), `write_dds_file(&DdsFile, force_dx10)`,
+the `encode_dds_*` writers, and the per-layout codecs (`decode_bc1` …
+`decode_bc7`, `decode_bc6h`, `decode_astc_ldr*`, `encode_bc*`,
+`encode_bc6h*`, `encode_astc_ldr*`, the `decode_*_surface` helpers).
+The pre-contract `DdsPlane` remains for one release as a `#[deprecated]`
+alias of `Plane`; `DdsImage` and `DdsPixelFormat` changed meaning (the
+old records are `DdsFile` and `SurfaceFormat`) — see the CHANGELOG.
+
+## Framework use
+
+With the default-on `registry` feature the crate plugs into the
+`oxideav-core` registry:
+
+```rust
+let mut ctx = oxideav_core::RuntimeContext::new();
+oxideav_dds::register(&mut ctx);                       // codec "dds" + the .dds container (probe / demuxer / muxer)
+let dec = oxideav_dds::make_decoder(&params)?;         // / make_encoder (options: surface_format, mip_levels, dx10_header)
+let frame: oxideav_core::VideoFrame = img.into();      // From<DdsImage>: one packed plane + colour signal when sRGB
+let back = oxideav_dds::DdsImage::from_video_frame(&frame, &params)?;
+```
+
+The trait-side `Decoder` / `Encoder` are thin adapters over the
+standalone functions (one implementation). The framework `Decoder`
+emits the **native contract layout** of the top-level surface (`Bgra`
+for a `B8G8R8A8` file, `Rgba` for a decoded BC7, `RgbaF32Le` for a
+float surface, …), never a pre-converted `Rgba`; the container demuxer
+declares that layout on the stream from the header alone. A colour
+signal is stamped on the frame only when the file carries one (an
+`_UNORM_SRGB` `DXGI_FORMAT`).
+
+## Supported layouts
+
+Decode — stored `SurfaceFormat` → native `PixelFormat` (every
+expansion is a byte copy or a lossless bit-replication widening; float
+layouts widen `half` / packed floats to `f32`):
+
+| Stored layout | `PixelFormat` | Expansion |
+|---|---|---|
+| `A8R8G8B8`, `X8R8G8B8` (`B8G8R8A8/X8_UNORM`) | `Bgra` | byte copy; the unused `X` byte reads as `0xFF` |
+| `A8B8G8R8`, `X8B8G8R8` (`R8G8B8A8_UNORM`) | `Rgba` | byte copy; `X` → `0xFF` |
+| `R8G8B8` | `Bgr24` | byte copy |
+| `R5G6B5`, `A1R5G5B5`, `X1R5G5B5`, `A4R4G4B4`, `X4R4G4B4`, `A8R3G3B2`, `A4B4G4R4_UNORM` | `Rgba` | bit replication to 8 bits; 1-bit alpha → `0` / `0xFF` |
+| `A8` | `Rgba` | `[0, 0, 0, a]` |
+| `L8`, `R8_UNORM`; BC4 (unsigned) | `Gray8` | byte copy; block decode |
+| `A8L8`; `A4L4` | `Ya8` | byte copy; nibble replication |
+| `L16`, `R16_UNORM` | `Gray16Le` | byte copy |
+| `R16G16B16A16_UNORM`; `R16G16_UNORM` | `Rgba64Le` | byte copy; `B = 0`, `A = 0xFFFF` |
+| `R10G10B10A2_UNORM`, `A2R10G10B10` | `Rgba64Le` | 10 → 16 and 2 → 16 bits by bit replication |
+| `R8G8_B8G8_UNORM`, `G8R8_G8B8_UNORM` | `Rgba` | shared R / B duplicated across the pixel pair |
+| BC1, BC2, BC3, BC7 (`_UNORM` / `_UNORM_SRGB`), ASTC LDR (14 footprints) | `Rgba` | block decode |
+| BC5 (unsigned) | `Rgba` | `[r, g, 0, 0xFF]` |
+| `R16_FLOAT`, `R32_FLOAT` | `GrayF32Le` | `half` → `f32` |
+| `R11G11B10_FLOAT`, `R9G9B9E5_SHAREDEXP` | `RgbF32Le` | packed float → `f32` |
+| `R16G16B16A16_FLOAT`, `R32G32B32A32_FLOAT`; BC6H (UF16 / SF16) | `RgbaF32Le` | `half` → `f32`; block decode |
+| `R16G16_FLOAT`, `R32G32_FLOAT` | `RgbaF32Le` | `[r, g, 0.0, 1.0]` |
+| `R8_SNORM`, `R16_SNORM`; BC4 (signed) | `GrayF32Le` | DXGI SNORM rule `v / (2^(n-1) - 1)`, clamped to `-1` |
+| `R8G8_SNORM`, `R16G16_SNORM`; BC5 (signed) | `RgbaF32Le` | as above, `[r, g, 0.0, 1.0]` |
+| `R8G8B8A8_SNORM`, `R16G16B16A16_SNORM` | `RgbaF32Le` | as above |
+
+Missing colour channels read as `0` and a missing alpha channel as
+opaque. The plain-integer `_UINT` / `_SINT` layouts, the depth-stencil
+surfaces and their typeless views, and the eleven YUV layouts have no
+contract layout: `info` / `decode` return `Error::Unsupported` for them
+and `parse_dds` + the matching `decode_*_surface` helper is the way in.
+
+Encode — `EncodeOptions::surface_format` `None` picks the natural
+layout of the image:
+
+| `PixelFormat` | Stored layout | Header |
+|---|---|---|
+| `Gray8` | `L8` | legacy |
+| `Ya8` | `A8L8` | legacy |
+| `Gray16Le` | `L16` | legacy |
+| `Rgb24` (swizzled), `Bgr24` | `R8G8B8` | legacy |
+| `Rgba` | `A8B8G8R8` (`R8G8B8A8_UNORM`) | legacy |
+| `Bgra` | `A8R8G8B8` (`B8G8R8A8_UNORM`) | legacy |
+| `Rgba64Le` | `R16G16B16A16_UNORM` | DX10 |
+| `GrayF32Le` | `R32_FLOAT` | DX10 |
+| `RgbF32Le` (alpha 1.0 added), `RgbaF32Le` | `R32G32B32A32_FLOAT` | DX10 |
+
+`decode(encode(img)) == img` for every native layout except `Rgb24`
+(stored as `R8G8B8`, read back as `Bgr24`) and `RgbF32Le` (read back as
+`RgbaF32Le`). With an explicit `surface_format` the image is converted:
+every 8-bit colour layout and the BC1 / BC2 / BC3 / BC4 / BC5 / BC7 and
+ASTC block encoders take any image through `to_rgba8()`; the 16-bit
+layouts take `Gray16Le` / `Rgba64Le` exactly and 8-bit sources by
+`× 257`; the float, SNORM and BC6H layouts take float sources exactly and
+integer sources normalised to `[0, 1]`; the luminance layouts (`L8`,
+`A8L8`, `A4L4`, `L16`, `R8/R16_UNORM`) need a grey image and `A8` an
+alpha-carrying one. `Error::Unsupported` is returned for those
+mismatches, for `R11G11B10_FLOAT` / `R9G9B9E5_SHAREDEXP` (decode only, no
+packer) and for the plain-integer / depth / YUV / typeless layouts;
+nothing is converted silently. Re-encoding a decoded image in its own
+stored layout is byte-stable for every integer layout.
+
+## Options
+
+`DecodeOptions` (`Default` + `with_*`): `max_width`, `max_height`,
+`max_pixels` (top-level geometry), `max_bytes` (stored bytes of every
+surface plus the expanded top-level plane; default 1 GiB, `None` lifts
+it) — all checked against the header before any surface is copied
+(`Error::LimitExceeded`) — and `strict` (default `false`): lenient mode
+ignores trailing bytes after the last surface and the
+`dwPitchOrLinearSize` field; strict mode rejects trailing bytes and a
+non-zero pitch / linear size that disagrees with the computed value.
+Zero dimensions, a mip count beyond the geometry, a volume that is also
+a cubemap or array, truncated surfaces, and unknown `DXGI_FORMAT` codes
+are rejected in both modes.
+
+`EncodeOptions` (`Default` + `with_*`): `surface_format:
+Option<SurfaceFormat>` (`None` = natural layout), `mip_levels` (`1` =
+none, `0` = full chain to 1×1, `n` = `n` levels; generated by a 2×2 box
+filter in the contract layout, per channel in the sample's own domain,
+before conversion), `dx10_header` (force the `DDS_HEADER_DXT10`
+extension; it is written automatically for layouts and shapes without
+a legacy encoding — DX10-only formats, texture arrays, BC6H / BC7 /
+ASTC). `encode_all` reads the texture shape off the frames: any
+`face` makes a cubemap (all six faces required), `array_slice` values
+make a DX10 array, `depth_slice` values at mip 0 make a volume, and
+`mip_level` values supply an explicit chain (otherwise `mip_levels`
+generates one per face / slice; volume mips halve the depth too).
+
+## Metadata and colour
+
+DDS carries no ICC profile, Exif or XMP, and no gamma: `metadata` is
+always empty and `has_icc` / `has_exif` / `has_xmp` are always
+`false`. The only colour information in the format is the DX10
+`DXGI_FORMAT`: an `_UNORM_SRGB` code (`R8G8B8A8`, `B8G8R8A8/X8`,
+BC1 / BC2 / BC3 / BC7, ASTC) decodes to `ColorInfo::srgb()` (full
+range, BT.709 primaries, sRGB transfer 13, identity matrix) and is the
+only case the registry frame carries a colour signal. Every other file
+decodes to `ColorInfo::dds_default()` — full-range RGB, primaries and
+transfer unspecified — which is this crate's convention, not a format
+rule, and is not stamped on frames. On encode, `color` has no DDS
+encoding except through an `_SRGB` `surface_format`.
+
+## Limits
+
+Header geometry is validated before any allocation: `width × height`
+and the per-surface byte counts are computed in checked `u64`
+arithmetic, mip counts beyond `1 + log2(max dimension)` (depth included
+for volumes), more than 2²⁰ surfaces, and a volume combined with a
+cubemap / array are `Error::InvalidData`; a surface that does not fit
+the file is rejected at the geometry walk, so `info` fails on a
+truncated file without reading it. Geometry whose expanded plane
+overflows the platform's `usize` is `Error::Unsupported`; a configured
+`DecodeOptions` limit is `Error::LimitExceeded`. Hostile input never
+panics (see *Robustness*).
+
+## Format specifics — the stored-surface depth API
 
 **Container.** `DDS_HEADER` (124 bytes) + optional `DDS_HEADER_DXT10`
 (20 bytes) parser and writer. Every on-disk surface is parsed into
-`DdsImage::surfaces` in the mandated order (array slice → face → mip),
+`DdsFile::surfaces` in the mandated order (array slice → face → mip),
 tagged with `mip_level` / `array_slice` / `face`; mipmap chains, cubemap
 faces, DX10 texture arrays, and 3D (volume) textures are all surfaced.
 A framework-side `ContainerRegistry` probe + demuxer + muxer is
@@ -108,7 +311,7 @@ encoding. Depth surfaces are decode-only.
 - `decode_bc6h` decodes all 14 BC6H modes to RGBA half-float, for both
   `BC6H_UF16` (unsigned) and `BC6H_SF16` (signed).
 - Raw BC1..BC7 block bytes are always available verbatim through
-  `DdsImage::surfaces[i].plane.data` for callers that want to keep the
+  `DdsFile::surfaces[i].plane.data` for callers that want to keep the
   texture compressed.
 
 **YUV (video) decode.** The eleven luma/chroma `DXGI_FORMAT` values
@@ -254,10 +457,13 @@ docs gap rather than a guessed decode.
   mutates one header field at a time and asserts `parse_dds` returns
   `Err` rather than panicking. Surface-size and block-grid arithmetic
   uses `checked_` / `saturating_` multiplication throughout.
-- Ten `cargo-fuzz` panic-free targets under `fuzz/` (`parse_dds`,
-  `decode_bcn`, `decode_bc6h`, `decode_bc7`, `decode_astc`,
+- Eleven `cargo-fuzz` panic-free targets under `fuzz/` (`contract`,
+  `parse_dds`, `decode_bcn`, `decode_bc6h`, `decode_bc7`, `decode_astc`,
   `decode_yuv`, `decode_depth`, `roundtrip`, `encode_astc`,
   `encode_round375`), driven daily by `.github/workflows/fuzz.yml`. The
+  `contract` target drives `probe` / `info` / `decode` / `decode_all`
+  under every limit profile (default, strict, tight limits) and asserts
+  the lossless re-encode round trip of whatever decodes; the
   `encode_astc` target round-trips arbitrary RGBA8 through the ASTC
   encoder and re-decodes the output; `encode_round375` feeds every
   parser-accepted image through whichever round-375 encoder its shape
@@ -270,49 +476,6 @@ docs gap rather than a guessed decode.
 - Criterion benchmarks under `benches/` (`decode`, `encode`,
   `roundtrip`); run with
   `cargo bench -p oxideav-dds --bench {decode,encode,roundtrip}`.
-
-## Quickstart
-
-```rust
-use oxideav_dds::{parse_dds, encode_dds_uncompressed, DdsImage, DdsPixelFormat, DdsPlane};
-
-// Parse a DDS file.
-let bytes: Vec<u8> = std::fs::read("input.dds").unwrap();
-let img = parse_dds(&bytes).unwrap();
-println!("{}x{} {}", img.width, img.height, img.pixel_format.name());
-
-// Build + write a 4x3 A8R8G8B8 surface.
-let data = vec![0u8; 4 * 3 * 4];
-let img = DdsImage {
-    width: 4,
-    height: 3,
-    pixel_format: DdsPixelFormat::A8R8G8B8,
-    planes: vec![DdsPlane { stride: 4 * 4, data }],
-    pts: None,
-    mip_map_count: 1,
-    has_dxt10_header: false,
-    dxgi_format: None,
-};
-let out: Vec<u8> = encode_dds_uncompressed(&img).unwrap();
-std::fs::write("output.dds", out).unwrap();
-```
-
-For block-compressed input, `parse_dds` returns an image whose
-`pixel_format` is a `Bc*` variant and whose `surfaces[i].plane.data`
-holds the raw 4x4-block bytes; call the matching `decode_bc*` helper to
-expand it. To encode an RGBA8 surface to BC1:
-
-```rust
-use oxideav_dds::encode_bc1;
-
-let rgba: Vec<u8> = vec![0xff; 16 * 16 * 4];
-let mut bc1 = vec![0u8; (16 / 4) * (16 / 4) * 8];
-encode_bc1(&rgba, 16, 16, /* punchthrough_alpha = */ false, &mut bc1).unwrap();
-```
-
-For mipmapped or cubemap textures iterate `img.surfaces` directly; each
-entry carries its own `mip_level`, `array_slice`, `face`, and `(width,
-height)`.
 
 ## Clean-room provenance
 
@@ -329,7 +492,7 @@ generating test fixtures, never as a source of constants or layout.
 
 | Feature    | Default | Effect                                                                                                       |
 |------------|---------|------------------------------------------------------------------------------------------------------------|
-| `registry` | yes     | Pulls in `oxideav-core`, exposes the `Decoder` / `Encoder` trait surface, registers the codec via `register`. Disable (`default-features = false`) to drop the `oxideav-core` dependency tree; the standalone `parse_dds` / `encode_*` / `decode_*` API plus crate-local types stay available on `std`. |
+| `registry` | yes     | Pulls in `oxideav-core`, exposes `register` / `make_decoder` / `make_encoder`, the `Decoder` / `Encoder` adapters, the `.dds` container and the `VideoFrame` bridge. Disable (`default-features = false`) to drop the `oxideav-core` dependency tree; the full contract API (`probe` / `info` / `decode*` / `encode*`) and the depth API stay available on `std`. |
 
 ## License
 
