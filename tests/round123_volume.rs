@@ -10,8 +10,8 @@
 //! D3DX, NVTT, or squish source consulted.
 
 use oxideav_dds::{
-    encode_dds_volume, encode_dds_volume_block_compressed, parse_dds, DdsImage, DdsPixelFormat,
-    DdsPlane, DdsSurface, DxgiFormat,
+    encode_dds_volume, encode_dds_volume_block_compressed, parse_dds, DdsFile, DdsSurface,
+    DxgiFormat, Plane, SurfaceFormat,
 };
 
 // Header field constants (kept local so the test asserts the on-disk
@@ -152,7 +152,7 @@ fn decode_legacy_volume_single_mip() {
     assert_eq!(img.mip_map_count, 1);
     assert_eq!(img.array_size, 1);
     assert!(!img.is_cubemap);
-    assert_eq!(img.pixel_format, DdsPixelFormat::A8B8G8R8);
+    assert_eq!(img.pixel_format, SurfaceFormat::A8B8G8R8);
     assert_eq!(img.surfaces.len(), 4);
 
     // Slice indices run 0..4 at mip 0, each filled with its own tag.
@@ -212,7 +212,7 @@ fn decode_dx10_volume() {
     assert_eq!(img.depth, 3);
     assert_eq!(img.dxgi_format, Some(DxgiFormat::R8G8B8A8Unorm));
     // R8G8B8A8_UNORM maps to crate-local A8B8G8R8.
-    assert_eq!(img.pixel_format, DdsPixelFormat::A8B8G8R8);
+    assert_eq!(img.pixel_format, SurfaceFormat::A8B8G8R8);
     assert_eq!(img.surfaces.len(), 3);
     for (z, s) in img.surfaces.iter().enumerate() {
         assert_eq!(s.depth_slice, z as u32);
@@ -237,7 +237,7 @@ fn make_volume_surfaces(
     height: u32,
     depth: u32,
     mip_count: u32,
-    pix: DdsPixelFormat,
+    pix: SurfaceFormat,
 ) -> Vec<DdsSurface> {
     let bpp = pix.bytes_per_pixel().unwrap();
     let mut surfaces = Vec::new();
@@ -248,18 +248,11 @@ fn make_volume_surfaces(
         let md = (depth >> m).max(1);
         for z in 0..md {
             let data = vec![tag; (mw * mh * bpp) as usize];
-            surfaces.push(DdsSurface {
-                width: mw,
-                height: mh,
-                mip_level: m,
-                array_slice: 0,
-                face: None,
-                depth_slice: z,
-                plane: DdsPlane {
-                    stride: (mw * bpp) as usize,
-                    data,
-                },
-            });
+            surfaces.push(
+                DdsSurface::new(mw, mh, Plane::new((mw * bpp) as usize, data))
+                    .with_mip_level(m)
+                    .with_depth_slice(z),
+            );
             tag = tag.wrapping_add(1);
         }
     }
@@ -268,22 +261,11 @@ fn make_volume_surfaces(
 
 #[test]
 fn roundtrip_volume_single_mip() {
-    let pix = DdsPixelFormat::A8B8G8R8;
+    let pix = SurfaceFormat::A8B8G8R8;
     let surfaces = make_volume_surfaces(4, 4, 4, 1, pix);
-    let img = DdsImage {
-        width: 4,
-        height: 4,
-        pixel_format: pix,
-        planes: vec![surfaces[0].plane.clone()],
-        surfaces: surfaces.clone(),
-        pts: None,
-        mip_map_count: 1,
-        has_dxt10_header: false,
-        dxgi_format: None,
-        is_cubemap: false,
-        array_size: 1,
-        depth: 4,
-    };
+    let img = DdsFile::new(4, 4, pix, surfaces.clone())
+        .unwrap()
+        .with_depth(4);
 
     let bytes = encode_dds_volume(&img).expect("encode volume");
     let decoded = parse_dds(&bytes).expect("re-parse volume");
@@ -304,25 +286,15 @@ fn roundtrip_volume_single_mip() {
 #[test]
 fn roundtrip_volume_with_mips() {
     // 8×8×8 with 4 mips: depths 8,4,2,1; dims 8,4,2,1.
-    let pix = DdsPixelFormat::A8B8G8R8;
+    let pix = SurfaceFormat::A8B8G8R8;
     let surfaces = make_volume_surfaces(8, 8, 8, 4, pix);
     // Sanity: total slices = 8 + 4 + 2 + 1 = 15.
     assert_eq!(surfaces.len(), 15);
 
-    let img = DdsImage {
-        width: 8,
-        height: 8,
-        pixel_format: pix,
-        planes: vec![surfaces[0].plane.clone()],
-        surfaces: surfaces.clone(),
-        pts: None,
-        mip_map_count: 4,
-        has_dxt10_header: false,
-        dxgi_format: None,
-        is_cubemap: false,
-        array_size: 1,
-        depth: 8,
-    };
+    let img = DdsFile::new(8, 8, pix, surfaces.clone())
+        .unwrap()
+        .with_mip_map_count(4)
+        .with_depth(8);
 
     let bytes = encode_dds_volume(&img).expect("encode mipped volume");
     let decoded = parse_dds(&bytes).expect("re-parse mipped volume");
@@ -341,22 +313,9 @@ fn roundtrip_volume_with_mips() {
 
 #[test]
 fn encode_volume_rejects_depth_one() {
-    let pix = DdsPixelFormat::A8B8G8R8;
+    let pix = SurfaceFormat::A8B8G8R8;
     let surfaces = make_volume_surfaces(4, 4, 1, 1, pix);
-    let img = DdsImage {
-        width: 4,
-        height: 4,
-        pixel_format: pix,
-        planes: vec![surfaces[0].plane.clone()],
-        surfaces,
-        pts: None,
-        mip_map_count: 1,
-        has_dxt10_header: false,
-        dxgi_format: None,
-        is_cubemap: false,
-        array_size: 1,
-        depth: 1,
-    };
+    let img = DdsFile::new(4, 4, pix, surfaces).unwrap();
     assert!(
         encode_dds_volume(&img).is_err(),
         "depth==1 should be rejected by encode_dds_volume"
@@ -372,7 +331,7 @@ fn make_bc_volume_surfaces(
     height: u32,
     depth: u32,
     mip_count: u32,
-    pix: DdsPixelFormat,
+    pix: SurfaceFormat,
 ) -> Vec<DdsSurface> {
     let bb = pix.block_bytes().unwrap();
     let mut surfaces = Vec::new();
@@ -385,18 +344,11 @@ fn make_bc_volume_surfaces(
         let bh = mh.div_ceil(4);
         for z in 0..md {
             let data = vec![tag; (bw * bh * bb) as usize];
-            surfaces.push(DdsSurface {
-                width: mw,
-                height: mh,
-                mip_level: m,
-                array_slice: 0,
-                face: None,
-                depth_slice: z,
-                plane: DdsPlane {
-                    stride: (bw * bb) as usize,
-                    data,
-                },
-            });
+            surfaces.push(
+                DdsSurface::new(mw, mh, Plane::new((bw * bb) as usize, data))
+                    .with_mip_level(m)
+                    .with_depth_slice(z),
+            );
             tag = tag.wrapping_add(1);
         }
     }
@@ -408,29 +360,20 @@ fn bc_volume_image(
     height: u32,
     depth: u32,
     mip_count: u32,
-    pix: DdsPixelFormat,
-) -> DdsImage {
+    pix: SurfaceFormat,
+) -> DdsFile {
     let surfaces = make_bc_volume_surfaces(width, height, depth, mip_count, pix);
-    DdsImage {
-        width,
-        height,
-        pixel_format: pix,
-        planes: vec![surfaces[0].plane.clone()],
-        surfaces,
-        pts: None,
-        mip_map_count: mip_count,
-        has_dxt10_header: true,
-        dxgi_format: None,
-        is_cubemap: false,
-        array_size: 1,
-        depth,
-    }
+    DdsFile::new(width, height, pix, surfaces)
+        .unwrap()
+        .with_mip_map_count(mip_count)
+        .with_dxt10_header(true)
+        .with_depth(depth)
 }
 
 #[test]
 fn roundtrip_bc1_volume_single_mip() {
     // 8×8×4 BC1 volume, no mips → 4 depth slices, each 2×2 blocks × 8B.
-    let pix = DdsPixelFormat::Bc1;
+    let pix = SurfaceFormat::Bc1;
     let img = bc_volume_image(8, 8, 4, 1, pix);
     let orig = img.surfaces.clone();
 
@@ -442,7 +385,7 @@ fn roundtrip_bc1_volume_single_mip() {
     assert_eq!(decoded.depth, 4);
     assert!(decoded.has_dxt10_header);
     assert_eq!(decoded.dxgi_format, Some(DxgiFormat::Bc1Unorm));
-    assert_eq!(decoded.pixel_format, DdsPixelFormat::Bc1);
+    assert_eq!(decoded.pixel_format, SurfaceFormat::Bc1);
     assert_eq!(decoded.surfaces.len(), 4);
     for (o, g) in orig.iter().zip(&decoded.surfaces) {
         assert_eq!(o.depth_slice, g.depth_slice);
@@ -455,7 +398,7 @@ fn roundtrip_bc1_volume_single_mip() {
 fn roundtrip_bc3_volume_with_mips_depth_halving() {
     // 8×8×8 BC3 with 4 mips: depths 8,4,2,1; dims 8,4,2,1.
     // total slices = 8 + 4 + 2 + 1 = 15.
-    let pix = DdsPixelFormat::Bc3;
+    let pix = SurfaceFormat::Bc3;
     let img = bc_volume_image(8, 8, 8, 4, pix);
     let orig = img.surfaces.clone();
     assert_eq!(orig.len(), 15);
@@ -465,7 +408,7 @@ fn roundtrip_bc3_volume_with_mips_depth_halving() {
 
     assert_eq!(decoded.mip_map_count, 4);
     assert_eq!(decoded.depth, 8);
-    assert_eq!(decoded.pixel_format, DdsPixelFormat::Bc3);
+    assert_eq!(decoded.pixel_format, SurfaceFormat::Bc3);
     assert_eq!(decoded.surfaces.len(), 15);
     for (o, g) in orig.iter().zip(&decoded.surfaces) {
         assert_eq!(
@@ -479,7 +422,7 @@ fn roundtrip_bc3_volume_with_mips_depth_halving() {
 #[test]
 fn roundtrip_bc7_volume_npot() {
     // Non-power-of-two width/height: 7×5×3 BC7.
-    let pix = DdsPixelFormat::Bc7Unorm;
+    let pix = SurfaceFormat::Bc7Unorm;
     let img = bc_volume_image(7, 5, 3, 1, pix);
     let orig = img.surfaces.clone();
 
@@ -499,7 +442,7 @@ fn roundtrip_bc7_volume_npot() {
 
 #[test]
 fn encode_bc_volume_rejects_uncompressed() {
-    let pix = DdsPixelFormat::A8B8G8R8;
+    let pix = SurfaceFormat::A8B8G8R8;
     let img = bc_volume_image_uncompressed_shim(pix);
     assert!(
         encode_dds_volume_block_compressed(&img).is_err(),
@@ -507,27 +450,14 @@ fn encode_bc_volume_rejects_uncompressed() {
     );
 }
 
-fn bc_volume_image_uncompressed_shim(pix: DdsPixelFormat) -> DdsImage {
+fn bc_volume_image_uncompressed_shim(pix: SurfaceFormat) -> DdsFile {
     let surfaces = make_volume_surfaces(4, 4, 2, 1, pix);
-    DdsImage {
-        width: 4,
-        height: 4,
-        pixel_format: pix,
-        planes: vec![surfaces[0].plane.clone()],
-        surfaces,
-        pts: None,
-        mip_map_count: 1,
-        has_dxt10_header: false,
-        dxgi_format: None,
-        is_cubemap: false,
-        array_size: 1,
-        depth: 2,
-    }
+    DdsFile::new(4, 4, pix, surfaces).unwrap().with_depth(2)
 }
 
 #[test]
 fn encode_bc_volume_rejects_depth_one() {
-    let pix = DdsPixelFormat::Bc1;
+    let pix = SurfaceFormat::Bc1;
     let img = bc_volume_image(8, 8, 2, 1, {
         // depth==1 path: reuse builder then override below.
         pix

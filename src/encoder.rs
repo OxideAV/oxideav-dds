@@ -5,7 +5,7 @@
 //! be wrapped on disk by callers that already have the encoded block
 //! bytes, but the reader-side pass-through path is the round-1
 //! contract; the round-1 encoder explicitly rejects block-compressed
-//! [`DdsPixelFormat`] inputs to keep the contract symmetric.
+//! [`SurfaceFormat`] inputs to keep the contract symmetric.
 //!
 //! Round-3 / round-5 lift: when `image.mip_map_count > 1`, the encoder
 //! emits a full mipmap chain. If `image.surfaces` already contains the
@@ -17,8 +17,8 @@
 //! floored to 1) and the chain ends at the 1×1 surface.
 //!
 //! Round-4 lift: BC*-format mip chains can now be emitted via
-//! [`encode_dds_block_compressed`]. The caller supplies a [`DdsImage`]
-//! with a block-compressed [`DdsPixelFormat`] and `image.surfaces`
+//! [`encode_dds_block_compressed`]. The caller supplies a [`DdsFile`]
+//! with a block-compressed [`SurfaceFormat`] and `image.surfaces`
 //! holding the per-mip pre-encoded block bytes (one entry per mip level
 //! in declaration order). The encoder writes a DX10-extension header
 //! (or a legacy FourCC header for BC1/2/3/4/5) and concatenates the
@@ -27,8 +27,9 @@
 //! Reference: Microsoft's public "DDS file layout for textures" page on
 //! learn.microsoft.com.
 
+use crate::decoder::{for_each_surface, Layout};
 use crate::error::{DdsError, Result};
-use crate::image::{DdsImage, DdsPixelFormat, DdsPlane, DdsSurface};
+use crate::surface::{CubemapFace, DdsFile, DdsSurface, Plane, SurfaceFormat};
 use crate::types::*;
 
 /// Append a `u32` to `out` in little-endian byte order.
@@ -38,9 +39,9 @@ fn push_u32(out: &mut Vec<u8>, v: u32) {
 
 /// Build the 32-byte `DDS_PIXELFORMAT` block for a legacy uncompressed
 /// surface. Returns the eight `u32` field values in declaration order.
-fn legacy_pixel_format_fields(pix: DdsPixelFormat) -> Result<DdsPixelFormatHeader> {
+fn legacy_pixel_format_fields(pix: SurfaceFormat) -> Result<DdsPixelFormatHeader> {
     Ok(match pix {
-        DdsPixelFormat::A8R8G8B8 => DdsPixelFormatHeader {
+        SurfaceFormat::A8R8G8B8 => DdsPixelFormatHeader {
             size: DDS_PIXELFORMAT_SIZE as u32,
             flags: DDPF_RGB | DDPF_ALPHAPIXELS,
             four_cc: 0,
@@ -50,7 +51,7 @@ fn legacy_pixel_format_fields(pix: DdsPixelFormat) -> Result<DdsPixelFormatHeade
             b_bit_mask: 0x0000_00ff,
             a_bit_mask: 0xff00_0000,
         },
-        DdsPixelFormat::X8R8G8B8 => DdsPixelFormatHeader {
+        SurfaceFormat::X8R8G8B8 => DdsPixelFormatHeader {
             size: DDS_PIXELFORMAT_SIZE as u32,
             flags: DDPF_RGB,
             four_cc: 0,
@@ -60,7 +61,7 @@ fn legacy_pixel_format_fields(pix: DdsPixelFormat) -> Result<DdsPixelFormatHeade
             b_bit_mask: 0x0000_00ff,
             a_bit_mask: 0,
         },
-        DdsPixelFormat::A8B8G8R8 => DdsPixelFormatHeader {
+        SurfaceFormat::A8B8G8R8 => DdsPixelFormatHeader {
             size: DDS_PIXELFORMAT_SIZE as u32,
             flags: DDPF_RGB | DDPF_ALPHAPIXELS,
             four_cc: 0,
@@ -70,7 +71,7 @@ fn legacy_pixel_format_fields(pix: DdsPixelFormat) -> Result<DdsPixelFormatHeade
             b_bit_mask: 0x00ff_0000,
             a_bit_mask: 0xff00_0000,
         },
-        DdsPixelFormat::X8B8G8R8 => DdsPixelFormatHeader {
+        SurfaceFormat::X8B8G8R8 => DdsPixelFormatHeader {
             size: DDS_PIXELFORMAT_SIZE as u32,
             flags: DDPF_RGB,
             four_cc: 0,
@@ -80,7 +81,7 @@ fn legacy_pixel_format_fields(pix: DdsPixelFormat) -> Result<DdsPixelFormatHeade
             b_bit_mask: 0x00ff_0000,
             a_bit_mask: 0,
         },
-        DdsPixelFormat::R8G8B8 => DdsPixelFormatHeader {
+        SurfaceFormat::R8G8B8 => DdsPixelFormatHeader {
             size: DDS_PIXELFORMAT_SIZE as u32,
             flags: DDPF_RGB,
             four_cc: 0,
@@ -90,7 +91,7 @@ fn legacy_pixel_format_fields(pix: DdsPixelFormat) -> Result<DdsPixelFormatHeade
             b_bit_mask: 0x0000_00ff,
             a_bit_mask: 0,
         },
-        DdsPixelFormat::R5G6B5 => DdsPixelFormatHeader {
+        SurfaceFormat::R5G6B5 => DdsPixelFormatHeader {
             size: DDS_PIXELFORMAT_SIZE as u32,
             flags: DDPF_RGB,
             four_cc: 0,
@@ -100,7 +101,7 @@ fn legacy_pixel_format_fields(pix: DdsPixelFormat) -> Result<DdsPixelFormatHeade
             b_bit_mask: 0x001f,
             a_bit_mask: 0,
         },
-        DdsPixelFormat::A1R5G5B5 => DdsPixelFormatHeader {
+        SurfaceFormat::A1R5G5B5 => DdsPixelFormatHeader {
             size: DDS_PIXELFORMAT_SIZE as u32,
             flags: DDPF_RGB | DDPF_ALPHAPIXELS,
             four_cc: 0,
@@ -110,7 +111,7 @@ fn legacy_pixel_format_fields(pix: DdsPixelFormat) -> Result<DdsPixelFormatHeade
             b_bit_mask: 0x001f,
             a_bit_mask: 0x8000,
         },
-        DdsPixelFormat::X1R5G5B5 => DdsPixelFormatHeader {
+        SurfaceFormat::X1R5G5B5 => DdsPixelFormatHeader {
             size: DDS_PIXELFORMAT_SIZE as u32,
             flags: DDPF_RGB,
             four_cc: 0,
@@ -120,7 +121,7 @@ fn legacy_pixel_format_fields(pix: DdsPixelFormat) -> Result<DdsPixelFormatHeade
             b_bit_mask: 0x001f,
             a_bit_mask: 0,
         },
-        DdsPixelFormat::A4R4G4B4 => DdsPixelFormatHeader {
+        SurfaceFormat::A4R4G4B4 => DdsPixelFormatHeader {
             size: DDS_PIXELFORMAT_SIZE as u32,
             flags: DDPF_RGB | DDPF_ALPHAPIXELS,
             four_cc: 0,
@@ -130,7 +131,7 @@ fn legacy_pixel_format_fields(pix: DdsPixelFormat) -> Result<DdsPixelFormatHeade
             b_bit_mask: 0x000f,
             a_bit_mask: 0xf000,
         },
-        DdsPixelFormat::X4R4G4B4 => DdsPixelFormatHeader {
+        SurfaceFormat::X4R4G4B4 => DdsPixelFormatHeader {
             size: DDS_PIXELFORMAT_SIZE as u32,
             flags: DDPF_RGB,
             four_cc: 0,
@@ -140,7 +141,7 @@ fn legacy_pixel_format_fields(pix: DdsPixelFormat) -> Result<DdsPixelFormatHeade
             b_bit_mask: 0x000f,
             a_bit_mask: 0,
         },
-        DdsPixelFormat::L16 => DdsPixelFormatHeader {
+        SurfaceFormat::L16 => DdsPixelFormatHeader {
             size: DDS_PIXELFORMAT_SIZE as u32,
             flags: DDPF_LUMINANCE,
             four_cc: 0,
@@ -150,7 +151,7 @@ fn legacy_pixel_format_fields(pix: DdsPixelFormat) -> Result<DdsPixelFormatHeade
             b_bit_mask: 0,
             a_bit_mask: 0,
         },
-        DdsPixelFormat::A4L4 => DdsPixelFormatHeader {
+        SurfaceFormat::A4L4 => DdsPixelFormatHeader {
             size: DDS_PIXELFORMAT_SIZE as u32,
             flags: DDPF_LUMINANCE | DDPF_ALPHAPIXELS,
             four_cc: 0,
@@ -160,7 +161,7 @@ fn legacy_pixel_format_fields(pix: DdsPixelFormat) -> Result<DdsPixelFormatHeade
             b_bit_mask: 0,
             a_bit_mask: 0xf0,
         },
-        DdsPixelFormat::A8L8 => DdsPixelFormatHeader {
+        SurfaceFormat::A8L8 => DdsPixelFormatHeader {
             size: DDS_PIXELFORMAT_SIZE as u32,
             flags: DDPF_LUMINANCE | DDPF_ALPHAPIXELS,
             four_cc: 0,
@@ -170,7 +171,7 @@ fn legacy_pixel_format_fields(pix: DdsPixelFormat) -> Result<DdsPixelFormatHeade
             b_bit_mask: 0,
             a_bit_mask: 0xff00,
         },
-        DdsPixelFormat::L8 => DdsPixelFormatHeader {
+        SurfaceFormat::L8 => DdsPixelFormatHeader {
             size: DDS_PIXELFORMAT_SIZE as u32,
             flags: DDPF_LUMINANCE,
             four_cc: 0,
@@ -180,7 +181,7 @@ fn legacy_pixel_format_fields(pix: DdsPixelFormat) -> Result<DdsPixelFormatHeade
             b_bit_mask: 0,
             a_bit_mask: 0,
         },
-        DdsPixelFormat::A8 => DdsPixelFormatHeader {
+        SurfaceFormat::A8 => DdsPixelFormatHeader {
             size: DDS_PIXELFORMAT_SIZE as u32,
             flags: DDPF_ALPHA,
             four_cc: 0,
@@ -193,7 +194,7 @@ fn legacy_pixel_format_fields(pix: DdsPixelFormat) -> Result<DdsPixelFormatHeade
         // Packed 3:3:2 RGB + 8-bit alpha (`D3DFMT_A8R3G3B2`). Colour in
         // the low byte (R=0x00e0, G=0x001c, B=0x0003), alpha in the high
         // byte (A=0xff00).
-        DdsPixelFormat::A8R3G3B2 => DdsPixelFormatHeader {
+        SurfaceFormat::A8R3G3B2 => DdsPixelFormatHeader {
             size: DDS_PIXELFORMAT_SIZE as u32,
             flags: DDPF_RGB | DDPF_ALPHAPIXELS,
             four_cc: 0,
@@ -207,7 +208,7 @@ fn legacy_pixel_format_fields(pix: DdsPixelFormat) -> Result<DdsPixelFormatHeade
         // the "Common DDS File Resource Formats" table: red in the most
         // significant 10 colour bits, blue in the least, alpha in the top
         // two bits.
-        DdsPixelFormat::A2R10G10B10 => DdsPixelFormatHeader {
+        SurfaceFormat::A2R10G10B10 => DdsPixelFormatHeader {
             size: DDS_PIXELFORMAT_SIZE as u32,
             flags: DDPF_RGB | DDPF_ALPHAPIXELS,
             four_cc: 0,
@@ -282,7 +283,7 @@ fn mip_dimensions(width: u32, height: u32, mip_count: u32) -> Vec<(u32, u32)> {
     out
 }
 
-/// Encode a [`DdsImage`] as an uncompressed DDS file.
+/// Encode a [`DdsFile`] as an uncompressed DDS file.
 ///
 /// `image.pixel_format` must be one of the round-1 uncompressed
 /// formats (A8R8G8B8, X8R8G8B8, A8B8G8R8, R5G6B5, A1R5G5B5, A4R4G4B4,
@@ -300,7 +301,7 @@ fn mip_dimensions(width: u32, height: u32, mip_count: u32) -> Vec<(u32, u32)> {
 /// number of mip levels (in declaration order, mip 0 first) those are
 /// copied verbatim; otherwise the encoder fabricates every level
 /// beyond mip 0 by a box-filter downsample of the previous level.
-pub fn encode_dds_uncompressed(image: &DdsImage) -> Result<Vec<u8>> {
+pub fn encode_dds_uncompressed(image: &DdsFile) -> Result<Vec<u8>> {
     if image.pixel_format.astc_footprint().is_some() {
         return Err(DdsError::unsupported(format!(
             "encode_dds_uncompressed cannot serialise ASTC {} — ASTC is decode-only",
@@ -315,7 +316,7 @@ pub fn encode_dds_uncompressed(image: &DdsImage) -> Result<Vec<u8>> {
     }
     if image.planes.len() != 1 {
         return Err(DdsError::invalid(format!(
-            "DdsImage must carry exactly one plane (got {})",
+            "DdsFile must carry exactly one plane (got {})",
             image.planes.len()
         )));
     }
@@ -478,15 +479,15 @@ fn volume_mip_depths(base_depth: u32, mip_count: u32) -> Vec<u32> {
     (0..mip_count).map(|m| (base_depth >> m).max(1)).collect()
 }
 
-/// Map an uncompressed [`DdsPixelFormat`] to the canonical
+/// Map an uncompressed [`SurfaceFormat`] to the canonical
 /// `DXGI_FORMAT` integer code that [`crate::decoder::parse_dds`] routes
 /// back to the same variant. Returns `None` for the legacy-only mask
 /// layouts (those go through [`encode_dds_uncompressed`]) and for any
 /// format that has no flat byte layout. Per Microsoft's public
 /// `DXGI_FORMAT` reference; the chosen code is the one whose
 /// `pixel_format_from_dxgi` mapping is the identity for this variant.
-fn uncompressed_dxgi_code(pix: DdsPixelFormat) -> Option<u32> {
-    use DdsPixelFormat::*;
+fn uncompressed_dxgi_code(pix: SurfaceFormat) -> Option<u32> {
+    use SurfaceFormat::*;
     Some(match pix {
         // High-bit-depth / floating-point uncompressed layouts.
         R16G16B16A16Unorm => DxgiFormat::R16G16B16A16Unorm.to_u32(),
@@ -502,6 +503,8 @@ fn uncompressed_dxgi_code(pix: DdsPixelFormat) -> Option<u32> {
         // Packed 10:10:10:2.
         R10G10B10A2Unorm => DxgiFormat::R10G10B10A2Unorm.to_u32(),
         R10G10B10A2Uint => DxgiFormat::R10G10B10A2Uint.to_u32(),
+        R11G11B10Float => DxgiFormat::R11G11B10Float.to_u32(),
+        R9G9B9E5SharedExp => DxgiFormat::R9G9B9E5Sharedexp.to_u32(),
         // Horizontally sub-sampled packed RGB.
         R8G8B8G8Unorm => DxgiFormat::R8G8B8G8Unorm.to_u32(),
         G8R8G8B8Unorm => DxgiFormat::G8R8G8B8Unorm.to_u32(),
@@ -548,17 +551,17 @@ fn uncompressed_dxgi_code(pix: DdsPixelFormat) -> Option<u32> {
     })
 }
 
-/// Map any uncompressed [`DdsPixelFormat`] that has a `DXGI_FORMAT`
+/// Map any uncompressed [`SurfaceFormat`] that has a `DXGI_FORMAT`
 /// counterpart to its code — including the legacy-mask 32-bit RGBA
 /// families, which only need a DX10 code when carried as a texture array
 /// or cube array (a shape the legacy header cannot describe). Per
 /// Microsoft's `DXGI_FORMAT` reference; the chosen code is the one whose
 /// `pixel_format_from_dxgi` mapping is the identity for this variant.
-fn any_uncompressed_dxgi_code(pix: DdsPixelFormat) -> Option<u32> {
+fn any_uncompressed_dxgi_code(pix: SurfaceFormat) -> Option<u32> {
     if let Some(code) = uncompressed_dxgi_code(pix) {
         return Some(code);
     }
-    use DdsPixelFormat::*;
+    use SurfaceFormat::*;
     Some(match pix {
         // R8G8B8A8 (RGBA on disk) ← crate-local A8B8G8R8.
         A8B8G8R8 => DxgiFormat::R8G8B8A8Unorm.to_u32(),
@@ -579,7 +582,7 @@ fn any_uncompressed_dxgi_code(pix: DdsPixelFormat) -> Option<u32> {
     })
 }
 
-/// Encode a [`DdsImage`] carrying a DX10-only uncompressed pixel format
+/// Encode a [`DdsFile`] carrying a DX10-only uncompressed pixel format
 /// (high-bit-depth, floating-point, packed-HDR, plain-integer,
 /// normalised single/dual-channel, or depth/depth-stencil) as a DDS
 /// file with a `DDS_HEADER_DXT10` extension.
@@ -591,7 +594,7 @@ fn any_uncompressed_dxgi_code(pix: DdsPixelFormat) -> Option<u32> {
 /// stored little-endian channels ARE the on-disk payload (the
 /// `decode_*_surface` helpers widen them on read; this encoder does not
 /// pack or normalise). The file round-trips through
-/// [`crate::parse_dds`] back to the same [`DdsPixelFormat`].
+/// [`crate::parse_dds`] back to the same [`SurfaceFormat`].
 ///
 /// `image.planes[0]` must hold at least `width × height ×
 /// bytes_per_pixel` bytes with `stride == width × bytes_per_pixel`. When
@@ -605,7 +608,7 @@ fn any_uncompressed_dxgi_code(pix: DdsPixelFormat) -> Option<u32> {
 /// Use [`encode_dds_uncompressed`] for the legacy mask formats and
 /// [`encode_dds_volume`] / [`encode_dds_volume_block_compressed`] for 3D
 /// textures.
-pub fn encode_dds_uncompressed_dx10(image: &DdsImage) -> Result<Vec<u8>> {
+pub fn encode_dds_uncompressed_dx10(image: &DdsFile) -> Result<Vec<u8>> {
     let pix = image.pixel_format;
     let dxgi = match uncompressed_dxgi_code(pix) {
         Some(code) => code,
@@ -618,7 +621,7 @@ pub fn encode_dds_uncompressed_dx10(image: &DdsImage) -> Result<Vec<u8>> {
     };
     if image.planes.len() != 1 {
         return Err(DdsError::invalid(format!(
-            "DdsImage must carry exactly one plane (got {})",
+            "DdsFile must carry exactly one plane (got {})",
             image.planes.len()
         )));
     }
@@ -762,7 +765,7 @@ pub fn encode_dds_uncompressed_dx10(image: &DdsImage) -> Result<Vec<u8>> {
 }
 
 /// Encode an uncompressed cubemap or DX10 texture-array DDS file from a
-/// pre-populated [`DdsImage::surfaces`] list.
+/// pre-populated [`DdsFile::surfaces`] list.
 ///
 /// `image.surfaces` must carry every `(array_slice, face, mip_level)`
 /// surface in Microsoft's mandated on-disk order (outer loop over array
@@ -783,7 +786,7 @@ pub fn encode_dds_uncompressed_dx10(image: &DdsImage) -> Result<Vec<u8>> {
 ///
 /// Volume (3D) textures are not a cubemap/array shape — use
 /// [`encode_dds_volume`].
-pub fn encode_dds_uncompressed_cubemap_array(image: &DdsImage) -> Result<Vec<u8>> {
+pub fn encode_dds_uncompressed_cubemap_array(image: &DdsFile) -> Result<Vec<u8>> {
     let pix = image.pixel_format;
     if pix.is_block_compressed() || pix.astc_footprint().is_some() {
         return Err(DdsError::unsupported(format!(
@@ -967,7 +970,7 @@ pub fn encode_dds_uncompressed_cubemap_array(image: &DdsImage) -> Result<Vec<u8>
 /// `DDSD_DEPTH` set in `flags`, `header.depth` carrying the slice
 /// count, and `DDSCAPS2_VOLUME` set in `caps2` (plus
 /// `DDSCAPS_COMPLEX` so DirectX recognises the child surfaces).
-pub fn encode_dds_volume(image: &DdsImage) -> Result<Vec<u8>> {
+pub fn encode_dds_volume(image: &DdsFile) -> Result<Vec<u8>> {
     if image.pixel_format.astc_footprint().is_some() {
         return Err(DdsError::unsupported(format!(
             "encode_dds_volume cannot serialise ASTC {} — ASTC is decode-only",
@@ -1116,7 +1119,7 @@ pub fn encode_dds_volume(image: &DdsImage) -> Result<Vec<u8>> {
 /// (Microsoft requires `arraySize == 1` for a 3D texture), plus the
 /// legacy `DDSD_DEPTH` flag, `header.depth` slice count, and
 /// `DDSCAPS2_VOLUME` so a legacy reader still recognises the shape.
-pub fn encode_dds_volume_block_compressed(image: &DdsImage) -> Result<Vec<u8>> {
+pub fn encode_dds_volume_block_compressed(image: &DdsFile) -> Result<Vec<u8>> {
     let pix = image.pixel_format;
     if !pix.is_block_compressed() {
         return Err(DdsError::unsupported(format!(
@@ -1233,58 +1236,58 @@ pub fn encode_dds_volume_block_compressed(image: &DdsImage) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-/// Map a block-compressed [`DdsPixelFormat`] to its on-disk
+/// Map a block-compressed [`SurfaceFormat`] to its on-disk
 /// `DDS_PIXELFORMAT.four_cc`. Returns `None` for formats that have no
 /// FourCC equivalent (BC6H, BC7) — those must use the DX10 extension
 /// header. Per Microsoft's "DDS pixel format" page.
-fn block_compressed_fourcc(pix: DdsPixelFormat) -> Option<u32> {
+fn block_compressed_fourcc(pix: SurfaceFormat) -> Option<u32> {
     match pix {
-        DdsPixelFormat::Bc1 => Some(FOURCC_DXT1),
-        DdsPixelFormat::Bc2 => Some(FOURCC_DXT3),
-        DdsPixelFormat::Bc3 => Some(FOURCC_DXT5),
-        DdsPixelFormat::Bc4Unorm => Some(FOURCC_BC4U),
-        DdsPixelFormat::Bc4Snorm => Some(FOURCC_BC4S),
-        DdsPixelFormat::Bc5Unorm => Some(FOURCC_BC5U),
-        DdsPixelFormat::Bc5Snorm => Some(FOURCC_BC5S),
+        SurfaceFormat::Bc1 => Some(FOURCC_DXT1),
+        SurfaceFormat::Bc2 => Some(FOURCC_DXT3),
+        SurfaceFormat::Bc3 => Some(FOURCC_DXT5),
+        SurfaceFormat::Bc4Unorm => Some(FOURCC_BC4U),
+        SurfaceFormat::Bc4Snorm => Some(FOURCC_BC4S),
+        SurfaceFormat::Bc5Unorm => Some(FOURCC_BC5U),
+        SurfaceFormat::Bc5Snorm => Some(FOURCC_BC5S),
         // BC6H / BC7 require the DX10 extension header.
-        DdsPixelFormat::Bc6hUf16
-        | DdsPixelFormat::Bc6hSf16
-        | DdsPixelFormat::Bc7Unorm
-        | DdsPixelFormat::Bc7UnormSrgb => None,
+        SurfaceFormat::Bc6hUf16
+        | SurfaceFormat::Bc6hSf16
+        | SurfaceFormat::Bc7Unorm
+        | SurfaceFormat::Bc7UnormSrgb => None,
         _ => None,
     }
 }
 
-/// Map a block-compressed [`DdsPixelFormat`] to its DX10 `DXGI_FORMAT`
+/// Map a block-compressed [`SurfaceFormat`] to its DX10 `DXGI_FORMAT`
 /// integer code (per Microsoft's `DXGI_FORMAT` reference). Used when
 /// emitting the DX10 extension header.
-fn block_compressed_dxgi_code(pix: DdsPixelFormat) -> u32 {
+fn block_compressed_dxgi_code(pix: SurfaceFormat) -> u32 {
     match pix {
-        DdsPixelFormat::Bc1 => 71,          // BC1_UNORM
-        DdsPixelFormat::Bc2 => 74,          // BC2_UNORM
-        DdsPixelFormat::Bc3 => 77,          // BC3_UNORM
-        DdsPixelFormat::Bc4Unorm => 80,     // BC4_UNORM
-        DdsPixelFormat::Bc4Snorm => 81,     // BC4_SNORM
-        DdsPixelFormat::Bc5Unorm => 83,     // BC5_UNORM
-        DdsPixelFormat::Bc5Snorm => 84,     // BC5_SNORM
-        DdsPixelFormat::Bc6hUf16 => 95,     // BC6H_UF16
-        DdsPixelFormat::Bc6hSf16 => 96,     // BC6H_SF16
-        DdsPixelFormat::Bc7Unorm => 98,     // BC7_UNORM
-        DdsPixelFormat::Bc7UnormSrgb => 99, // BC7_UNORM_SRGB
+        SurfaceFormat::Bc1 => 71,          // BC1_UNORM
+        SurfaceFormat::Bc2 => 74,          // BC2_UNORM
+        SurfaceFormat::Bc3 => 77,          // BC3_UNORM
+        SurfaceFormat::Bc4Unorm => 80,     // BC4_UNORM
+        SurfaceFormat::Bc4Snorm => 81,     // BC4_SNORM
+        SurfaceFormat::Bc5Unorm => 83,     // BC5_UNORM
+        SurfaceFormat::Bc5Snorm => 84,     // BC5_SNORM
+        SurfaceFormat::Bc6hUf16 => 95,     // BC6H_UF16
+        SurfaceFormat::Bc6hSf16 => 96,     // BC6H_SF16
+        SurfaceFormat::Bc7Unorm => 98,     // BC7_UNORM
+        SurfaceFormat::Bc7UnormSrgb => 99, // BC7_UNORM_SRGB
         _ => 0,
     }
 }
 
 /// Compute the byte size of one block-compressed mip-level surface for
 /// width × height.
-fn block_compressed_surface_bytes(pix: DdsPixelFormat, width: u32, height: u32) -> usize {
+fn block_compressed_surface_bytes(pix: SurfaceFormat, width: u32, height: u32) -> usize {
     let bb = pix.block_bytes().expect("block-compressed format") as usize;
     let bw = width.max(1).div_ceil(4) as usize;
     let bh = height.max(1).div_ceil(4) as usize;
     bw * bh * bb
 }
 
-/// Encode a block-compressed [`DdsImage`] (BC1..BC7) as a DDS file.
+/// Encode a block-compressed [`DdsFile`] (BC1..BC7) as a DDS file.
 ///
 /// The caller supplies pre-encoded block bytes via `image.surfaces`
 /// (one entry per mip level in declaration order, mip 0 first). Each
@@ -1300,7 +1303,7 @@ fn block_compressed_surface_bytes(pix: DdsPixelFormat, width: u32, height: u32) 
 ///
 /// `image.is_cubemap` and `image.array_size > 1` are not yet supported;
 /// the encoder rejects those inputs.
-pub fn encode_dds_block_compressed(image: &DdsImage) -> Result<Vec<u8>> {
+pub fn encode_dds_block_compressed(image: &DdsFile) -> Result<Vec<u8>> {
     if !image.pixel_format.is_block_compressed() {
         return Err(DdsError::unsupported(format!(
             "encode_dds_block_compressed requires a block-compressed pixel_format (got {})",
@@ -1479,7 +1482,7 @@ pub fn encode_dds_block_compressed_from_rgba8(
     rgba8: &[u8],
     width: u32,
     height: u32,
-    pixel_format: DdsPixelFormat,
+    pixel_format: SurfaceFormat,
     mip_map_count: u32,
     is_cubemap: bool,
     array_size: u32,
@@ -1493,7 +1496,7 @@ pub fn encode_dds_block_compressed_from_rgba8(
     }
     if matches!(
         pixel_format,
-        DdsPixelFormat::Bc6hUf16 | DdsPixelFormat::Bc6hSf16
+        SurfaceFormat::Bc6hUf16 | SurfaceFormat::Bc6hSf16
     ) {
         return Err(DdsError::unsupported(
             "BC6H encode-from-RGBA8 is not supported (BC6H is HDR — use encode_bc6h_from_f32 + encode_dds_block_compressed)"
@@ -1535,7 +1538,7 @@ pub fn encode_dds_block_compressed_from_rgba8(
     for slice in 0..array_n {
         for face_idx in 0..face_count {
             let face = if is_cubemap {
-                Some(crate::image::CubemapFace::ALL[face_idx as usize])
+                Some(crate::surface::CubemapFace::ALL[face_idx as usize])
             } else {
                 None
             };
@@ -1574,7 +1577,7 @@ pub fn encode_dds_block_compressed_from_rgba8(
                     array_slice: slice,
                     face,
                     depth_slice: 0,
-                    plane: DdsPlane {
+                    plane: Plane {
                         stride: bw * bb,
                         data: bc,
                     },
@@ -1583,18 +1586,17 @@ pub fn encode_dds_block_compressed_from_rgba8(
         }
     }
 
-    // ---- Compose the DdsImage and delegate to the existing emitter.
+    // ---- Compose the DdsFile and delegate to the existing emitter.
     //      The existing emitter rejects cubemap / array_size > 1, so we
     //      handle the multi-surface composition inline below for those
     //      shapes.
     if !is_cubemap && array_n == 1 {
-        let img = DdsImage {
+        let img = DdsFile {
             width,
             height,
             pixel_format,
             planes: vec![surfaces[0].plane.clone()],
             surfaces,
-            pts: None,
             mip_map_count: mip,
             has_dxt10_header,
             dxgi_format: None,
@@ -1626,7 +1628,7 @@ fn astc_surface_bytes(bw: u32, bh: u32, w: u32, h: u32) -> usize {
 
 /// Encode an RGBA8 surface to a complete ASTC LDR `.dds` file.
 ///
-/// `pixel_format` must be a [`DdsPixelFormat::Astc`] value carrying the
+/// `pixel_format` must be a [`SurfaceFormat::Astc`] value carrying the
 /// footprint and the sRGB flag; `rgba8` holds `width × height × 4`
 /// bytes. The file always uses the `DX10` extension header (ASTC has no
 /// legacy FourCC) with the matching `DXGI_FORMAT_ASTC_*` value. When
@@ -1641,11 +1643,11 @@ pub fn encode_dds_astc(
     rgba8: &[u8],
     width: u32,
     height: u32,
-    pixel_format: DdsPixelFormat,
+    pixel_format: SurfaceFormat,
     mip_map_count: u32,
 ) -> Result<Vec<u8>> {
     let (bw, bh, srgb) = match pixel_format {
-        DdsPixelFormat::Astc {
+        SurfaceFormat::Astc {
             block_w,
             block_h,
             srgb,
@@ -1754,23 +1756,23 @@ pub fn encode_dds_astc(
 }
 
 /// Encode a single RGBA8 mip level into the destination BC* format.
-fn encode_rgba8_to_bc_level(
+pub(crate) fn encode_rgba8_to_bc_level(
     rgba: &[u8],
     width: u32,
     height: u32,
-    pixel_format: DdsPixelFormat,
+    pixel_format: SurfaceFormat,
     output: &mut [u8],
 ) -> Result<()> {
     match pixel_format {
-        DdsPixelFormat::Bc1 => crate::bcn_enc::encode_bc1(rgba, width, height, false, output),
-        DdsPixelFormat::Bc2 => crate::bcn_enc::encode_bc2(rgba, width, height, output),
-        DdsPixelFormat::Bc3 => crate::bcn_enc::encode_bc3(rgba, width, height, output),
-        DdsPixelFormat::Bc4Unorm => {
+        SurfaceFormat::Bc1 => crate::bcn_enc::encode_bc1(rgba, width, height, false, output),
+        SurfaceFormat::Bc2 => crate::bcn_enc::encode_bc2(rgba, width, height, output),
+        SurfaceFormat::Bc3 => crate::bcn_enc::encode_bc3(rgba, width, height, output),
+        SurfaceFormat::Bc4Unorm => {
             // BC4 takes a single channel. Extract R from RGBA.
             let r_only: Vec<u8> = rgba.chunks_exact(4).map(|p| p[0]).collect();
             crate::bcn_enc::encode_bc4_unorm(&r_only, width, height, output)
         }
-        DdsPixelFormat::Bc5Unorm => {
+        SurfaceFormat::Bc5Unorm => {
             // BC5 takes two channels. Extract RG from RGBA.
             let mut rg = Vec::with_capacity(rgba.len() / 2);
             for p in rgba.chunks_exact(4) {
@@ -1779,7 +1781,7 @@ fn encode_rgba8_to_bc_level(
             }
             crate::bcn_enc::encode_bc5_unorm(&rg, width, height, output)
         }
-        DdsPixelFormat::Bc7Unorm | DdsPixelFormat::Bc7UnormSrgb => {
+        SurfaceFormat::Bc7Unorm | SurfaceFormat::Bc7UnormSrgb => {
             crate::bc7_enc::encode_bc7(rgba, width, height, output)
         }
         _ => Err(DdsError::unsupported(format!(
@@ -1798,7 +1800,7 @@ fn encode_rgba8_to_bc_level(
 fn encode_dds_block_compressed_multi_surface(
     width: u32,
     height: u32,
-    pixel_format: DdsPixelFormat,
+    pixel_format: SurfaceFormat,
     mip: u32,
     is_cubemap: bool,
     array_size: u32,
@@ -1909,10 +1911,247 @@ fn encode_dds_block_compressed_multi_surface(
     Ok(out)
 }
 
-#[cfg(feature = "registry")]
-pub(crate) fn make_encoder(
-    params: &oxideav_core::CodecParameters,
-) -> oxideav_core::Result<Box<dyn oxideav_core::Encoder>> {
-    use crate::registry::DdsEncoder;
-    Ok(Box::new(DdsEncoder::from_params(params)?))
+// ---- General writer -----------------------------------------------------
+
+/// Serialise a fully populated [`DdsFile`] — any stored layout the crate
+/// can name, any texture shape (2D, mip chain, cubemap, DX10 array,
+/// cube array, volume) — into a complete DDS file.
+///
+/// The surfaces are written verbatim in their given order, which must be
+/// Microsoft's on-disk order and complete: the writer walks the shape
+/// declared by `width` / `height` / `mip_map_count` / `is_cubemap` /
+/// `array_size` / `depth` and rejects a surface list whose length,
+/// per-surface geometry or byte count disagrees with it
+/// ([`DdsError::InvalidData`]), so every file this function writes parses
+/// back into an equal tree with [`crate::parse_dds`].
+///
+/// Header choice: the legacy `DDS_HEADER` alone whenever the layout has a
+/// legacy `DDS_PIXELFORMAT` encoding (mask layouts, `DXT1`..`DXT5`,
+/// `BC4U/S`, `BC5U/S`) and the shape allows it (no texture array);
+/// otherwise — or when `force_dx10` / `file.has_dxt10_header` asks — the
+/// `DX10` FourCC plus a `DDS_HEADER_DXT10` carrying `file.dxgi_format`
+/// or the layout's canonical `DXGI_FORMAT` code. `Unsupported` for a
+/// layout with neither (the YUV family).
+pub fn write_dds_file(file: &DdsFile, force_dx10: bool) -> Result<Vec<u8>> {
+    let pix = file.pixel_format;
+    let width = file.width;
+    let height = file.height;
+    if width == 0 || height == 0 {
+        return Err(DdsError::invalid(format!(
+            "zero-sized surface: {width}x{height}"
+        )));
+    }
+    let mip = file.mip_map_count.max(1);
+    let array_n = file.array_size.max(1);
+    let depth = file.depth.max(1);
+    let is_volume = depth > 1;
+    if is_volume && (file.is_cubemap || array_n > 1) {
+        return Err(DdsError::invalid(
+            "volume (3D) texture cannot also be a cubemap or texture array",
+        ));
+    }
+    if mip > crate::convert::full_mip_chain(width.max(if is_volume { depth } else { 1 }), height) {
+        return Err(DdsError::invalid(format!(
+            "mip_map_count {mip} exceeds the chain a {width}x{height} surface can hold"
+        )));
+    }
+
+    // Legacy encodings.
+    let legacy_pf = legacy_pixel_format_fields(pix).ok().or_else(|| {
+        block_compressed_fourcc(pix).map(|four_cc| DdsPixelFormatHeader {
+            size: DDS_PIXELFORMAT_SIZE as u32,
+            flags: DDPF_FOURCC,
+            four_cc,
+            rgb_bit_count: 0,
+            r_bit_mask: 0,
+            g_bit_mask: 0,
+            b_bit_mask: 0,
+            a_bit_mask: 0,
+        })
+    });
+    // DX10 code.
+    let dxgi_code: Option<u32> = file.dxgi_format.map(|f| f.to_u32()).or_else(|| {
+        if let SurfaceFormat::Astc {
+            block_w,
+            block_h,
+            srgb,
+        } = pix
+        {
+            return DxgiFormat::astc_unorm(block_w, block_h, srgb).map(|f| f.to_u32());
+        }
+        if pix.is_block_compressed() {
+            return Some(block_compressed_dxgi_code(pix));
+        }
+        any_uncompressed_dxgi_code(pix)
+    });
+
+    let use_dx10 = force_dx10 || file.has_dxt10_header || legacy_pf.is_none() || array_n > 1;
+    let pf = if use_dx10 {
+        if dxgi_code.is_none() {
+            return Err(DdsError::unsupported(format!(
+                "{} has no DXGI_FORMAT code and no legacy pixel-format encoding",
+                pix.name()
+            )));
+        }
+        DdsPixelFormatHeader {
+            size: DDS_PIXELFORMAT_SIZE as u32,
+            flags: DDPF_FOURCC,
+            four_cc: FOURCC_DX10,
+            rgb_bit_count: 0,
+            r_bit_mask: 0,
+            g_bit_mask: 0,
+            b_bit_mask: 0,
+            a_bit_mask: 0,
+        }
+    } else {
+        legacy_pf.expect("checked by use_dx10")
+    };
+
+    // Validate the surface list against the declared shape.
+    let layout = Layout {
+        width,
+        height,
+        pix,
+        dxgi: file.dxgi_format,
+        has_dxt10: use_dx10,
+        mip_count: mip,
+        is_cubemap: file.is_cubemap,
+        faces: if file.is_cubemap {
+            CubemapFace::ALL.to_vec()
+        } else {
+            Vec::new()
+        },
+        is_volume,
+        base_depth: depth,
+        array_size: array_n,
+        pixel_data_off: 0,
+        surface_count: 0,
+        stored_bytes: 0,
+    };
+    let mut idx = 0usize;
+    let mut payload: usize = 0;
+    for_each_surface(&layout, &mut |d| {
+        let Some(s) = file.surfaces.get(idx) else {
+            return Err(DdsError::invalid(format!(
+                "DdsFile declares more surfaces than it carries ({} given)",
+                file.surfaces.len()
+            )));
+        };
+        if s.width != d.width
+            || s.height != d.height
+            || s.mip_level != d.mip_level
+            || s.array_slice != d.array_slice
+            || s.face != d.face
+            || s.depth_slice != d.depth_slice
+        {
+            return Err(DdsError::invalid(format!(
+                "surface {idx} is ({}x{} mip {} slice {} face {} z {}), expected ({}x{} mip {} slice {} face {} z {}) in on-disk order",
+                s.width, s.height, s.mip_level, s.array_slice,
+                s.face.map(|f| f.short_name()).unwrap_or("-"), s.depth_slice,
+                d.width, d.height, d.mip_level, d.array_slice,
+                d.face.map(|f| f.short_name()).unwrap_or("-"), d.depth_slice,
+            )));
+        }
+        if s.plane.data.len() != d.bytes {
+            return Err(DdsError::invalid(format!(
+                "surface {idx} ({}x{} {}) holds {} bytes, expected {}",
+                s.width,
+                s.height,
+                pix.name(),
+                s.plane.data.len(),
+                d.bytes
+            )));
+        }
+        payload += d.bytes;
+        idx += 1;
+        Ok(())
+    })?;
+    if idx != file.surfaces.len() {
+        return Err(DdsError::invalid(format!(
+            "DdsFile carries {} surfaces, the declared shape has {idx}",
+            file.surfaces.len()
+        )));
+    }
+
+    // Header fields.
+    let with_mips = mip > 1;
+    let blocky = pix.is_block_compressed() || pix.astc_footprint().is_some();
+    let mut flags = DDSD_REQUIRED | if blocky { DDSD_LINEARSIZE } else { DDSD_PITCH };
+    if with_mips {
+        flags |= DDSD_MIPMAPCOUNT;
+    }
+    if is_volume {
+        flags |= DDSD_DEPTH;
+    }
+    let pitch_or_linear = if blocky {
+        file.surfaces[0].plane.data.len() as u32
+    } else {
+        file.surfaces[0].plane.stride as u32
+    };
+    let mut caps = DDSCAPS_TEXTURE;
+    if with_mips {
+        caps |= DDSCAPS_MIPMAP;
+    }
+    if with_mips || file.is_cubemap || is_volume {
+        caps |= DDSCAPS_COMPLEX;
+    }
+    let caps2 = if file.is_cubemap {
+        DDSCAPS2_CUBEMAP | DDSCAPS2_CUBEMAP_ALL_FACES
+    } else if is_volume {
+        DDSCAPS2_VOLUME
+    } else {
+        0
+    };
+
+    let header_bytes = 4 + DDS_HEADER_SIZE + if use_dx10 { DDS_HEADER_DXT10_SIZE } else { 0 };
+    let mut out = Vec::with_capacity(header_bytes + payload);
+    push_u32(&mut out, DDS_MAGIC);
+    push_u32(&mut out, DDS_HEADER_SIZE as u32);
+    push_u32(&mut out, flags);
+    push_u32(&mut out, height);
+    push_u32(&mut out, width);
+    push_u32(&mut out, pitch_or_linear);
+    push_u32(&mut out, if is_volume { depth } else { 0 });
+    push_u32(&mut out, mip);
+    for _ in 0..11 {
+        push_u32(&mut out, 0); // reserved1
+    }
+    push_u32(&mut out, pf.size);
+    push_u32(&mut out, pf.flags);
+    push_u32(&mut out, pf.four_cc);
+    push_u32(&mut out, pf.rgb_bit_count);
+    push_u32(&mut out, pf.r_bit_mask);
+    push_u32(&mut out, pf.g_bit_mask);
+    push_u32(&mut out, pf.b_bit_mask);
+    push_u32(&mut out, pf.a_bit_mask);
+    push_u32(&mut out, caps);
+    push_u32(&mut out, caps2);
+    push_u32(&mut out, 0); // caps3
+    push_u32(&mut out, 0); // caps4
+    push_u32(&mut out, 0); // reserved2
+    if use_dx10 {
+        push_u32(&mut out, dxgi_code.expect("checked above"));
+        push_u32(
+            &mut out,
+            if is_volume {
+                DDS_DIMENSION_TEXTURE3D
+            } else {
+                DDS_DIMENSION_TEXTURE2D
+            },
+        );
+        push_u32(
+            &mut out,
+            if file.is_cubemap {
+                DDS_RESOURCE_MISC_TEXTURECUBE
+            } else {
+                0
+            },
+        );
+        push_u32(&mut out, array_n);
+        push_u32(&mut out, 0); // misc_flags2
+    }
+    for s in &file.surfaces {
+        out.extend_from_slice(&s.plane.data);
+    }
+    Ok(out)
 }

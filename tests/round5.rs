@@ -7,14 +7,14 @@
 //! * [`oxideav_dds::encode_bc7`] — BC7 mode-6 encoder. Validated via
 //!   roundtrip through [`oxideav_dds::decode_bc7`].
 //! * [`oxideav_dds::encode_dds_uncompressed`] mipmap-chain emission
-//!   when `DdsImage::mip_map_count > 1`. Each subsequent level is
+//!   when `DdsFile::mip_map_count > 1`. Each subsequent level is
 //!   either copied from `image.surfaces` (caller pre-supplied) or
 //!   fabricated by box-filter downsampling mip 0.
 
 use oxideav_dds::{
     decode_bc1, decode_bc6h, decode_bc7, encode_bc1, encode_bc6h, encode_bc6h_from_f32, encode_bc7,
     encode_dds_block_compressed, encode_dds_block_compressed_from_rgba8, encode_dds_uncompressed,
-    parse_dds, CubemapFace, DdsImage, DdsPixelFormat, DdsPlane, DdsSurface,
+    parse_dds, CubemapFace, DdsFile, DdsSurface, Plane, SurfaceFormat,
 };
 
 /// BC7 encoder + decoder roundtrip on a 4×4 solid-white opaque block.
@@ -161,23 +161,14 @@ fn encode_mipmap_chain_8x8() {
     for (i, b) in data.iter_mut().enumerate() {
         *b = (i & 0xff) as u8;
     }
-    let img = DdsImage {
-        width: w,
-        height: h,
-        pixel_format: DdsPixelFormat::A8R8G8B8,
-        planes: vec![DdsPlane {
-            stride: w as usize * 4,
-            data: data.clone(),
-        }],
-        surfaces: Vec::new(),
-        pts: None,
-        mip_map_count: mip,
-        has_dxt10_header: false,
-        dxgi_format: None,
-        is_cubemap: false,
-        array_size: 1,
-        depth: 1,
-    };
+    let img = DdsFile::single(
+        w,
+        h,
+        SurfaceFormat::A8R8G8B8,
+        Plane::new(w as usize * 4, data.clone()),
+    )
+    .unwrap()
+    .with_mip_map_count(mip);
     let bytes = encode_dds_uncompressed(&img).expect("encode mipmap chain");
     let parsed = parse_dds(&bytes).expect("parse mipmap chain");
     assert_eq!(parsed.mip_map_count, mip);
@@ -206,23 +197,14 @@ fn encode_mipmap_chain_odd_dimensions() {
     for (i, b) in data.iter_mut().enumerate() {
         *b = (i & 0xff) as u8;
     }
-    let img = DdsImage {
-        width: w,
-        height: h,
-        pixel_format: DdsPixelFormat::A8R8G8B8,
-        planes: vec![DdsPlane {
-            stride: w as usize * 4,
-            data,
-        }],
-        surfaces: Vec::new(),
-        pts: None,
-        mip_map_count: mip,
-        has_dxt10_header: false,
-        dxgi_format: None,
-        is_cubemap: false,
-        array_size: 1,
-        depth: 1,
-    };
+    let img = DdsFile::single(
+        w,
+        h,
+        SurfaceFormat::A8R8G8B8,
+        Plane::new(w as usize * 4, data),
+    )
+    .unwrap()
+    .with_mip_map_count(mip);
     let bytes = encode_dds_uncompressed(&img).expect("encode 5x5 mipmaps");
     let parsed = parse_dds(&bytes).expect("parse 5x5 mipmaps");
     assert_eq!(parsed.mip_map_count, 3);
@@ -272,38 +254,16 @@ fn encode_bc1_mipmap_chain_via_block_compressed() {
         let bh = mh.max(1).div_ceil(4) as usize;
         let mut bc = vec![0u8; bw * bh * 8];
         encode_bc1(&rgba, mw, mh, false, &mut bc).expect("encode_bc1");
-        surfaces.push(DdsSurface {
-            width: mw,
-            height: mh,
-            mip_level: level as u32,
-            array_slice: 0,
-            face: None,
-            depth_slice: 0,
-            plane: DdsPlane {
-                stride: bw * 8,
-                data: bc,
-            },
-        });
+        surfaces.push(DdsSurface::new(mw, mh, Plane::new(bw * 8, bc)).with_mip_level(level as u32));
     }
 
-    let img = DdsImage {
-        width: w,
-        height: h,
-        pixel_format: DdsPixelFormat::Bc1,
-        planes: vec![surfaces[0].plane.clone()],
-        surfaces: surfaces.clone(),
-        pts: None,
-        mip_map_count: mip,
-        has_dxt10_header: false,
-        dxgi_format: None,
-        is_cubemap: false,
-        array_size: 1,
-        depth: 1,
-    };
+    let img = DdsFile::new(w, h, SurfaceFormat::Bc1, surfaces.clone())
+        .unwrap()
+        .with_mip_map_count(mip);
 
     let bytes = encode_dds_block_compressed(&img).expect("encode BC1 mip chain");
     let parsed = parse_dds(&bytes).expect("parse BC1 mip chain");
-    assert_eq!(parsed.pixel_format, DdsPixelFormat::Bc1);
+    assert_eq!(parsed.pixel_format, SurfaceFormat::Bc1);
     assert_eq!(parsed.mip_map_count, mip);
     assert_eq!(parsed.surfaces.len(), mip as usize);
     for level in 0..mip as usize {
@@ -351,38 +311,18 @@ fn encode_bc7_mipmap_chain_via_block_compressed() {
         let bh = mh.max(1).div_ceil(4) as usize;
         let mut bc = vec![0u8; bw * bh * 16];
         encode_bc7(&rgba, mw, mh, &mut bc).expect("encode_bc7");
-        surfaces.push(DdsSurface {
-            width: mw,
-            height: mh,
-            mip_level: level as u32,
-            array_slice: 0,
-            face: None,
-            depth_slice: 0,
-            plane: DdsPlane {
-                stride: bw * 16,
-                data: bc,
-            },
-        });
+        surfaces
+            .push(DdsSurface::new(mw, mh, Plane::new(bw * 16, bc)).with_mip_level(level as u32));
     }
 
-    let img = DdsImage {
-        width: w,
-        height: h,
-        pixel_format: DdsPixelFormat::Bc7Unorm,
-        planes: vec![surfaces[0].plane.clone()],
-        surfaces: surfaces.clone(),
-        pts: None,
-        mip_map_count: mip,
-        has_dxt10_header: true,
-        dxgi_format: None,
-        is_cubemap: false,
-        array_size: 1,
-        depth: 1,
-    };
+    let img = DdsFile::new(w, h, SurfaceFormat::Bc7Unorm, surfaces.clone())
+        .unwrap()
+        .with_mip_map_count(mip)
+        .with_dxt10_header(true);
 
     let bytes = encode_dds_block_compressed(&img).expect("encode BC7 mip chain");
     let parsed = parse_dds(&bytes).expect("parse BC7 mip chain");
-    assert_eq!(parsed.pixel_format, DdsPixelFormat::Bc7Unorm);
+    assert_eq!(parsed.pixel_format, SurfaceFormat::Bc7Unorm);
     assert_eq!(parsed.mip_map_count, mip);
     assert_eq!(parsed.surfaces.len(), mip as usize);
     for level in 0..mip as usize {
@@ -409,57 +349,21 @@ fn encode_block_compressed_rejects_mismatched_dims() {
     let bw = 1usize;
     let bh = 1usize;
     let bc = vec![0u8; bw * bh * 8];
-    let img = DdsImage {
-        width: 8,
-        height: 8,
-        pixel_format: DdsPixelFormat::Bc1,
-        planes: vec![DdsPlane {
-            stride: bw * 8,
-            data: bc.clone(),
-        }],
-        surfaces: vec![DdsSurface {
-            width: 4, // wrong — should be 8 for mip 0 of an 8x8 image
-            height: 4,
-            mip_level: 0,
-            array_slice: 0,
-            face: None,
-            depth_slice: 0,
-            plane: DdsPlane {
-                stride: bw * 8,
-                data: bc,
-            },
-        }],
-        pts: None,
-        mip_map_count: 1,
-        has_dxt10_header: false,
-        dxgi_format: None,
-        is_cubemap: false,
-        array_size: 1,
-        depth: 1,
-    };
+    let img = DdsFile::new(
+        8,
+        8,
+        SurfaceFormat::Bc1,
+        vec![DdsSurface::new(4, 4, Plane::new(bw * 8, bc))],
+    )
+    .unwrap();
     assert!(encode_dds_block_compressed(&img).is_err());
 }
 
 /// Block-compressed encoder rejects uncompressed pixel formats.
 #[test]
 fn encode_block_compressed_rejects_uncompressed() {
-    let img = DdsImage {
-        width: 4,
-        height: 4,
-        pixel_format: DdsPixelFormat::A8R8G8B8,
-        planes: vec![DdsPlane {
-            stride: 16,
-            data: vec![0u8; 64],
-        }],
-        surfaces: Vec::new(),
-        pts: None,
-        mip_map_count: 1,
-        has_dxt10_header: false,
-        dxgi_format: None,
-        is_cubemap: false,
-        array_size: 1,
-        depth: 1,
-    };
+    let img =
+        DdsFile::single(4, 4, SurfaceFormat::A8R8G8B8, Plane::new(16, vec![0u8; 64])).unwrap();
     assert!(encode_dds_block_compressed(&img).is_err());
 }
 
@@ -476,7 +380,7 @@ fn encode_bc1_mipmap_chain_from_rgba8() {
         &rgba,
         w,
         h,
-        DdsPixelFormat::Bc1,
+        SurfaceFormat::Bc1,
         mip,
         false,
         1,
@@ -484,7 +388,7 @@ fn encode_bc1_mipmap_chain_from_rgba8() {
     )
     .expect("encode BC1 from RGBA8");
     let parsed = parse_dds(&bytes).expect("parse BC1 mip chain");
-    assert_eq!(parsed.pixel_format, DdsPixelFormat::Bc1);
+    assert_eq!(parsed.pixel_format, SurfaceFormat::Bc1);
     assert_eq!(parsed.mip_map_count, mip);
     assert_eq!(parsed.surfaces.len(), mip as usize);
     let dims = [(8u32, 8u32), (4, 4), (2, 2), (1, 1)];
@@ -521,7 +425,7 @@ fn encode_bc7_mipmap_chain_from_rgba8() {
         &rgba,
         w,
         h,
-        DdsPixelFormat::Bc7Unorm,
+        SurfaceFormat::Bc7Unorm,
         mip,
         false,
         1,
@@ -529,7 +433,7 @@ fn encode_bc7_mipmap_chain_from_rgba8() {
     )
     .expect("encode BC7 from RGBA8");
     let parsed = parse_dds(&bytes).expect("parse BC7 mip chain");
-    assert_eq!(parsed.pixel_format, DdsPixelFormat::Bc7Unorm);
+    assert_eq!(parsed.pixel_format, SurfaceFormat::Bc7Unorm);
     assert_eq!(parsed.mip_map_count, mip);
     assert_eq!(parsed.surfaces.len(), mip as usize);
     assert!(parsed.has_dxt10_header);
@@ -578,7 +482,7 @@ fn encode_bc1_cubemap_from_rgba8() {
         &rgba,
         w,
         h,
-        DdsPixelFormat::Bc1,
+        SurfaceFormat::Bc1,
         mip,
         true,
         1,
@@ -610,7 +514,7 @@ fn encode_block_compressed_from_rgba8_rejects_bc6h() {
         &rgba,
         4,
         4,
-        DdsPixelFormat::Bc6hUf16,
+        SurfaceFormat::Bc6hUf16,
         1,
         false,
         1,
@@ -628,7 +532,7 @@ fn encode_block_compressed_from_rgba8_rejects_uncompressed() {
         &rgba,
         4,
         4,
-        DdsPixelFormat::A8R8G8B8,
+        SurfaceFormat::A8R8G8B8,
         1,
         false,
         1,
@@ -663,7 +567,7 @@ fn encode_bc7_dx10_array_from_rgba8() {
         &rgba,
         w,
         h,
-        DdsPixelFormat::Bc7Unorm,
+        SurfaceFormat::Bc7Unorm,
         mip,
         false,
         array_size,
@@ -671,7 +575,7 @@ fn encode_bc7_dx10_array_from_rgba8() {
     )
     .expect("encode array BC7 from RGBA8");
     let parsed = parse_dds(&bytes).expect("parse array BC7");
-    assert_eq!(parsed.pixel_format, DdsPixelFormat::Bc7Unorm);
+    assert_eq!(parsed.pixel_format, SurfaceFormat::Bc7Unorm);
     assert_eq!(parsed.array_size, array_size);
     assert_eq!(parsed.surfaces.len(), array_size as usize);
     assert!(parsed.has_dxt10_header);
@@ -775,23 +679,13 @@ fn encode_no_mipmaps_round_trip_unchanged() {
     let w = 4u32;
     let h = 3u32;
     let data = vec![0xa5u8; (w * h * 4) as usize];
-    let img = DdsImage {
-        width: w,
-        height: h,
-        pixel_format: DdsPixelFormat::A8R8G8B8,
-        planes: vec![DdsPlane {
-            stride: w as usize * 4,
-            data: data.clone(),
-        }],
-        surfaces: Vec::new(),
-        pts: None,
-        mip_map_count: 1,
-        has_dxt10_header: false,
-        dxgi_format: None,
-        is_cubemap: false,
-        array_size: 1,
-        depth: 1,
-    };
+    let img = DdsFile::single(
+        w,
+        h,
+        SurfaceFormat::A8R8G8B8,
+        Plane::new(w as usize * 4, data.clone()),
+    )
+    .unwrap();
     let bytes = encode_dds_uncompressed(&img).unwrap();
     let parsed = parse_dds(&bytes).unwrap();
     assert_eq!(parsed.mip_map_count, 1);

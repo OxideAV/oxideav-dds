@@ -25,7 +25,7 @@
 //! The 14 modes are encoded in a compact way: for each mode Microsoft
 //! mandates a specific bit-interleave that maps each block-bit
 //! position to a symbolic field (`gy[4]`, `bz[3]`, ...). The
-//! [`MODES`] table here is a compact transcription: each entry lists
+//! `MODES` table here is a compact transcription: each entry lists
 //! `(field, dest_bit_position)` pairs in the order Microsoft writes
 //! them, plus the per-channel endpoint widths after sign / zero
 //! extension and the index width.

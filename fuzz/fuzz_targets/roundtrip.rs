@@ -1,7 +1,7 @@
 #![no_main]
 
 //! For any `parse_dds`-able input that lands on an *uncompressed*
-//! pixel format, `encode_dds_uncompressed` of the resulting `DdsImage`
+//! pixel format, `encode_dds_uncompressed` of the resulting `DdsFile`
 //! must yield bytes that re-parse into a structurally-equal image.
 //! This proves the encoder is a left inverse of the parser on the
 //! parser's image of uncompressed inputs.
@@ -14,7 +14,7 @@
 //! crate's integration tests.
 
 use libfuzzer_sys::fuzz_target;
-use oxideav_dds::{encode_dds_uncompressed, parse_dds, DdsPixelFormat};
+use oxideav_dds::{encode_dds_uncompressed, parse_dds, SurfaceFormat};
 
 fuzz_target!(|data: &[u8]| {
     let Ok(img) = parse_dds(data) else {
@@ -64,7 +64,7 @@ fuzz_target!(|data: &[u8]| {
     };
 
     // Structural equality: format, dimensions, mip layout, payload
-    // bytes. We don't compare every `DdsImage` field because the
+    // bytes. We don't compare every `DdsFile` field because the
     // parser fills in some derived fields (e.g. `surfaces[0]`
     // dimensions) from the on-disk header that the encoder may have
     // canonicalised on the way out.
@@ -89,8 +89,8 @@ fuzz_target!(|data: &[u8]| {
 
     // Sanity-touch the variants so the harness covers the format
     // table; the variant name only matters for the parser, but
-    // referencing it here means a future `DdsPixelFormat` enum
+    // referencing it here means a future `SurfaceFormat` enum
     // rename or variant deletion fails to compile rather than
     // silently slipping through.
-    let _: DdsPixelFormat = img.pixel_format;
+    let _: SurfaceFormat = img.pixel_format;
 });

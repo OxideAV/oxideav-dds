@@ -273,7 +273,7 @@ pub struct DdsHeaderDxt10 {
 /// value mirrored verbatim from
 /// `learn.microsoft.com/.../dxgi_format`). Anything not enumerated
 /// below is preserved as a raw `u32` in
-/// [`crate::image::DdsImage::dxgi_format`] and reported as an
+/// [`crate::surface::DdsFile::dxgi_format`] and reported as an
 /// `Unknown(u32)` value via [`DxgiFormat::from_u32`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
@@ -814,6 +814,36 @@ impl DxgiFormat {
             Self::Astc12x12Unorm => 186,
             Self::Astc12x12UnormSrgb => 187,
         }
+    }
+
+    /// `true` for every `*_UNORM_SRGB` code — the DXGI way of saying the
+    /// stored samples are sRGB-encoded, and the only colour information
+    /// a DDS file carries.
+    pub fn is_srgb(self) -> bool {
+        matches!(
+            self,
+            Self::R8G8B8A8UnormSrgb
+                | Self::Bc1UnormSrgb
+                | Self::Bc2UnormSrgb
+                | Self::Bc3UnormSrgb
+                | Self::B8G8R8A8UnormSrgb
+                | Self::B8G8R8X8UnormSrgb
+                | Self::Bc7UnormSrgb
+                | Self::Astc4x4UnormSrgb
+                | Self::Astc5x4UnormSrgb
+                | Self::Astc5x5UnormSrgb
+                | Self::Astc6x5UnormSrgb
+                | Self::Astc6x6UnormSrgb
+                | Self::Astc8x5UnormSrgb
+                | Self::Astc8x6UnormSrgb
+                | Self::Astc8x8UnormSrgb
+                | Self::Astc10x5UnormSrgb
+                | Self::Astc10x6UnormSrgb
+                | Self::Astc10x8UnormSrgb
+                | Self::Astc10x10UnormSrgb
+                | Self::Astc12x10UnormSrgb
+                | Self::Astc12x12UnormSrgb
+        )
     }
 
     /// For an ASTC `DXGI_FORMAT_ASTC_*` value, the `(block_w, block_h)`

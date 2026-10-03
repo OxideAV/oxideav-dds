@@ -3,7 +3,7 @@
 //! Each test builds a minimal DX10 DDS byte stream carrying one of the
 //! eleven YUV `DXGI_FORMAT` values, parses it with
 //! [`oxideav_dds::parse_dds`], asserts the resolved
-//! [`oxideav_dds::DdsPixelFormat::Yuv`] variant and the carried surface
+//! [`oxideav_dds::SurfaceFormat::Yuv`] variant and the carried surface
 //! byte length, then expands the raw bytes with the matching
 //! `decode_*_surface` helper and checks the interleaved `[Y, U, V, A]`
 //! output.
@@ -20,7 +20,7 @@ use oxideav_dds::yuv::YuvFormat;
 use oxideav_dds::{
     decode_420_opaque_surface, decode_ayuv_surface, decode_nv11_surface, decode_nv12_surface,
     decode_p010_surface, decode_p016_surface, decode_y210_surface, decode_y216_surface,
-    decode_y410_surface, decode_y416_surface, decode_yuy2_surface, parse_dds, DdsPixelFormat,
+    decode_y410_surface, decode_y416_surface, decode_yuy2_surface, parse_dds, SurfaceFormat,
 };
 
 const CAPS_TEXTURE: u32 = 0x0000_1000;
@@ -78,7 +78,7 @@ fn dx10_ayuv_end_to_end() {
     // DXGI_FORMAT_AYUV = 100. One pixel: on-disk [V, U, Y, A].
     let dds = build_dx10_dds(100, 1, 1, &[5u8, 6, 7, 8]);
     let img = parse_dds(&dds).unwrap();
-    assert_eq!(img.pixel_format, DdsPixelFormat::Yuv(YuvFormat::Ayuv));
+    assert_eq!(img.pixel_format, SurfaceFormat::Yuv(YuvFormat::Ayuv));
     assert_eq!(img.pixel_format.name(), "AYUV");
     assert_eq!(img.surfaces[0].plane.data.len(), 4);
     let out = decode_ayuv_surface(1, 1, &img.surfaces[0].plane.data).unwrap();
@@ -91,7 +91,7 @@ fn dx10_y410_end_to_end() {
     let word: u32 = 3 | (5 << 10) | (7 << 20) | (2 << 30);
     let dds = build_dx10_dds(101, 2, 1, &word.to_le_bytes().repeat(2));
     let img = parse_dds(&dds).unwrap();
-    assert_eq!(img.pixel_format, DdsPixelFormat::Yuv(YuvFormat::Y410));
+    assert_eq!(img.pixel_format, SurfaceFormat::Yuv(YuvFormat::Y410));
     assert_eq!(img.surfaces[0].plane.data.len(), 8); // 2px × 4 bytes
     let out = decode_y410_surface(2, 1, &img.surfaces[0].plane.data).unwrap();
     assert_eq!(out, vec![5, 3, 7, 2, 5, 3, 7, 2]);
@@ -103,7 +103,7 @@ fn dx10_y416_end_to_end() {
     let px = le16(&[100, 200, 300, 400]);
     let dds = build_dx10_dds(102, 1, 1, &px);
     let img = parse_dds(&dds).unwrap();
-    assert_eq!(img.pixel_format, DdsPixelFormat::Yuv(YuvFormat::Y416));
+    assert_eq!(img.pixel_format, SurfaceFormat::Yuv(YuvFormat::Y416));
     assert_eq!(img.surfaces[0].plane.data.len(), 8);
     let out = decode_y416_surface(1, 1, &img.surfaces[0].plane.data).unwrap();
     assert_eq!(out, vec![200, 100, 300, 400]);
@@ -116,7 +116,7 @@ fn dx10_yuy2_end_to_end() {
     // DXGI_FORMAT_YUY2 = 107. Pixel pair [Y0, U, Y1, V].
     let dds = build_dx10_dds(107, 2, 1, &[10u8, 20, 30, 40]);
     let img = parse_dds(&dds).unwrap();
-    assert_eq!(img.pixel_format, DdsPixelFormat::Yuv(YuvFormat::Yuy2));
+    assert_eq!(img.pixel_format, SurfaceFormat::Yuv(YuvFormat::Yuy2));
     assert_eq!(img.surfaces[0].plane.data.len(), 4); // 2px → 4 bytes
     let out = decode_yuy2_surface(2, 1, &img.surfaces[0].plane.data).unwrap();
     assert_eq!(out, vec![10, 20, 40, 0xff, 30, 20, 40, 0xff]);
@@ -128,7 +128,7 @@ fn dx10_y210_end_to_end() {
     let px = le16(&[1000, 2000, 3000, 4000]);
     let dds = build_dx10_dds(108, 2, 1, &px);
     let img = parse_dds(&dds).unwrap();
-    assert_eq!(img.pixel_format, DdsPixelFormat::Yuv(YuvFormat::Y210));
+    assert_eq!(img.pixel_format, SurfaceFormat::Yuv(YuvFormat::Y210));
     assert_eq!(img.surfaces[0].plane.data.len(), 8); // 2px → 8 bytes
     let out = decode_y210_surface(2, 1, &img.surfaces[0].plane.data).unwrap();
     assert_eq!(
@@ -142,7 +142,7 @@ fn dx10_y216_end_to_end() {
     let px = le16(&[1, 2, 3, 4]);
     let dds = build_dx10_dds(109, 2, 1, &px);
     let img = parse_dds(&dds).unwrap();
-    assert_eq!(img.pixel_format, DdsPixelFormat::Yuv(YuvFormat::Y216));
+    assert_eq!(img.pixel_format, SurfaceFormat::Yuv(YuvFormat::Y216));
     let out = decode_y216_surface(2, 1, &img.surfaces[0].plane.data).unwrap();
     assert_eq!(out, vec![1, 2, 4, 0xffff, 3, 2, 4, 0xffff]);
 }
@@ -154,7 +154,7 @@ fn dx10_nv12_end_to_end() {
     // DXGI_FORMAT_NV12 = 103. 2x2: Y plane [1,2,3,4] + UV [200,201].
     let dds = build_dx10_dds(103, 2, 2, &[1u8, 2, 3, 4, 200, 201]);
     let img = parse_dds(&dds).unwrap();
-    assert_eq!(img.pixel_format, DdsPixelFormat::Yuv(YuvFormat::Nv12));
+    assert_eq!(img.pixel_format, SurfaceFormat::Yuv(YuvFormat::Nv12));
     // 2x2 4:2:0: Y(4) + UV(2) = 6 bytes.
     assert_eq!(img.surfaces[0].plane.data.len(), 6);
     let out = decode_nv12_surface(2, 2, &img.surfaces[0].plane.data).unwrap();
@@ -168,7 +168,7 @@ fn dx10_nv12_end_to_end() {
 fn dx10_420_opaque_end_to_end() {
     let dds = build_dx10_dds(106, 2, 2, &[1u8, 2, 3, 4, 200, 201]);
     let img = parse_dds(&dds).unwrap();
-    assert_eq!(img.pixel_format, DdsPixelFormat::Yuv(YuvFormat::Opaque420));
+    assert_eq!(img.pixel_format, SurfaceFormat::Yuv(YuvFormat::Opaque420));
     assert_eq!(img.pixel_format.name(), "420_OPAQUE");
     let out = decode_420_opaque_surface(2, 2, &img.surfaces[0].plane.data).unwrap();
     let nv12 = decode_nv12_surface(2, 2, &img.surfaces[0].plane.data).unwrap();
@@ -181,7 +181,7 @@ fn dx10_p010_end_to_end() {
     let px = le16(&[1, 2, 3, 4, 500, 600]);
     let dds = build_dx10_dds(104, 2, 2, &px);
     let img = parse_dds(&dds).unwrap();
-    assert_eq!(img.pixel_format, DdsPixelFormat::Yuv(YuvFormat::P010));
+    assert_eq!(img.pixel_format, SurfaceFormat::Yuv(YuvFormat::P010));
     // 2x2 u16 4:2:0: Y(8) + UV(4) = 12 bytes.
     assert_eq!(img.surfaces[0].plane.data.len(), 12);
     let out = decode_p010_surface(2, 2, &img.surfaces[0].plane.data).unwrap();
@@ -196,7 +196,7 @@ fn dx10_p016_end_to_end() {
     let px = le16(&[1, 2, 3, 4, 5, 6]);
     let dds = build_dx10_dds(105, 2, 2, &px);
     let img = parse_dds(&dds).unwrap();
-    assert_eq!(img.pixel_format, DdsPixelFormat::Yuv(YuvFormat::P016));
+    assert_eq!(img.pixel_format, SurfaceFormat::Yuv(YuvFormat::P016));
     let out = decode_p016_surface(2, 2, &img.surfaces[0].plane.data).unwrap();
     let p010 = decode_p010_surface(2, 2, &img.surfaces[0].plane.data).unwrap();
     assert_eq!(out, p010);
@@ -209,7 +209,7 @@ fn dx10_nv11_end_to_end() {
     // DXGI_FORMAT_NV11 = 110. 4x1: Y [1,2,3,4] + UV [50,51], padded to 8.
     let dds = build_dx10_dds(110, 4, 1, &[1u8, 2, 3, 4, 50, 51, 0, 0]);
     let img = parse_dds(&dds).unwrap();
-    assert_eq!(img.pixel_format, DdsPixelFormat::Yuv(YuvFormat::Nv11));
+    assert_eq!(img.pixel_format, SurfaceFormat::Yuv(YuvFormat::Nv11));
     // Staging size is padded to 2*w*h = 8 bytes.
     assert_eq!(img.surfaces[0].plane.data.len(), 8);
     let out = decode_nv11_surface(4, 1, &img.surfaces[0].plane.data).unwrap();

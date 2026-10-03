@@ -50,7 +50,7 @@ use crate::error::{DdsError, Result};
 /// Convert a positive `f32` to a finite IEEE-754 binary16 value (unsigned
 /// half — we treat negative inputs as 0 and clamp NaN / infinity to the
 /// max finite half).
-fn f32_to_half(value: f32) -> u16 {
+pub(crate) fn f32_to_half(value: f32) -> u16 {
     let bits = value.to_bits();
     let sign = (bits >> 31) & 1;
     let exp = ((bits >> 23) & 0xff) as i32;

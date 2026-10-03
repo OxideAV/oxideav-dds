@@ -26,7 +26,7 @@
 //!
 //! The contract under test is purely that `parse_dds` *returns*: a
 //! malformed stream yields `Err(DdsError::…)`, a well-formed one yields
-//! `Ok(DdsImage)`, and neither path may panic / abort / OOM. The
+//! `Ok(DdsFile)`, and neither path may panic / abort / OOM. The
 //! `Result` is intentionally discarded.
 
 use libfuzzer_sys::fuzz_target;

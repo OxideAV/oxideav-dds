@@ -7,7 +7,7 @@
 //! tooling is consulted.
 
 use oxideav_dds::{
-    decode_astc_ldr_surface, parse_dds, DdsPixelFormat, DxgiFormat, DDS_HEADER_SIZE, DDS_MAGIC,
+    decode_astc_ldr_surface, parse_dds, DxgiFormat, SurfaceFormat, DDS_HEADER_SIZE, DDS_MAGIC,
 };
 
 /// Build a minimal DX10 DDS file: magic + DDS_HEADER + DDS_HEADER_DXT10
@@ -86,7 +86,7 @@ fn parse_astc_4x4_surface_sizing() {
     assert_eq!(img.pixel_format.astc_footprint(), Some((4, 4)));
     assert!(matches!(
         img.pixel_format,
-        DdsPixelFormat::Astc {
+        SurfaceFormat::Astc {
             block_w: 4,
             block_h: 4,
             srgb: false
@@ -115,7 +115,7 @@ fn parse_astc_srgb_flag_set() {
     let img = parse_dds(&dds).expect("parse ASTC 4x4 srgb");
     assert!(matches!(
         img.pixel_format,
-        DdsPixelFormat::Astc { srgb: true, .. }
+        SurfaceFormat::Astc { srgb: true, .. }
     ));
 }
 
@@ -140,7 +140,7 @@ fn decode_astc_surface_through_format() {
     block[0..8].copy_from_slice(&lo.to_le_bytes());
     block[8..16].copy_from_slice(&hi.to_le_bytes());
 
-    let pix = DdsPixelFormat::Astc {
+    let pix = SurfaceFormat::Astc {
         block_w: 4,
         block_h: 4,
         srgb: false,
@@ -151,5 +151,5 @@ fn decode_astc_surface_through_format() {
         assert_eq!(px, [0x12, 0x34, 0x56, 0xFF]);
     }
     // A non-ASTC format returns None.
-    assert!(decode_astc_ldr_surface(DdsPixelFormat::Bc1, &block, 4, 4).is_none());
+    assert!(decode_astc_ldr_surface(SurfaceFormat::Bc1, &block, 4, 4).is_none());
 }

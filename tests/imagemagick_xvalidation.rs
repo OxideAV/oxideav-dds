@@ -14,7 +14,7 @@
 //! offline. Workspace policy bars in-tree DXTC reference library
 //! code, so we call out to a binary fixture instead.
 
-use oxideav_dds::{decode_bc1, parse_dds, DdsPixelFormat};
+use oxideav_dds::{decode_bc1, parse_dds, SurfaceFormat};
 
 const RED16: &[u8] = include_bytes!("fixtures/red16.dds");
 const GRAD8: &[u8] = include_bytes!("fixtures/grad8.dds");
@@ -24,7 +24,7 @@ fn imagemagick_bc1_solid_red_16x16() {
     let img = parse_dds(RED16).expect("parse ImageMagick BC1 red fixture");
     assert_eq!(img.width, 16);
     assert_eq!(img.height, 16);
-    assert_eq!(img.pixel_format, DdsPixelFormat::Bc1);
+    assert_eq!(img.pixel_format, SurfaceFormat::Bc1);
     assert_eq!(img.surfaces.len(), 1);
 
     let mut rgba = vec![0u8; 16 * 16 * 4];

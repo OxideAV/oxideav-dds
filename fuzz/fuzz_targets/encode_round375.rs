@@ -7,7 +7,7 @@
 //!   * `encode_dds_uncompressed_cubemap_array` — uncompressed cubemap /
 //!     texture-array writer.
 //!
-//! Strategy: parse the fuzz bytes; for any parser-accepted `DdsImage`,
+//! Strategy: parse the fuzz bytes; for any parser-accepted `DdsFile`,
 //! feed it to whichever new encoder its shape matches. Every encoder
 //! returns `Result`, so the contract under test is simply "never panic"
 //! — a `usize` overflow, slice out-of-bounds, or unchecked arithmetic in

@@ -3,7 +3,7 @@
 //! Each test builds a minimal DX10 DDS byte stream carrying one of the
 //! four documented depth `DXGI_FORMAT` values, parses it with
 //! [`oxideav_dds::parse_dds`], asserts the resolved
-//! [`oxideav_dds::DdsPixelFormat`] variant and the carried surface byte
+//! [`oxideav_dds::SurfaceFormat`] variant and the carried surface byte
 //! length, then expands the raw bytes with the matching
 //! `decode_depth_*_surface` helper and checks the decoded depth /
 //! stencil values.
@@ -20,7 +20,7 @@ use oxideav_dds::{
     decode_depth_d16_surface, decode_depth_d24s8_surface, decode_depth_d32_surface,
     decode_depth_d32s8_surface, decode_depth_r24_unorm_x8_surface,
     decode_depth_r32_float_x8x24_surface, decode_depth_x24_g8_uint_surface,
-    decode_depth_x32_g8x24_uint_surface, parse_dds, DdsPixelFormat,
+    decode_depth_x32_g8x24_uint_surface, parse_dds, SurfaceFormat,
 };
 
 const CAPS_TEXTURE: u32 = 0x0000_1000;
@@ -73,7 +73,7 @@ fn dx10_d16_unorm_end_to_end() {
     px.extend_from_slice(&0xffffu16.to_le_bytes());
     let dds = build_dx10_dds(55, 2, 1, &px);
     let img = parse_dds(&dds).unwrap();
-    assert_eq!(img.pixel_format, DdsPixelFormat::D16Unorm);
+    assert_eq!(img.pixel_format, SurfaceFormat::D16Unorm);
     assert_eq!(img.pixel_format.name(), "D16_UNORM");
     assert_eq!(img.surfaces[0].plane.data.len(), 4); // 2px × 2 bytes
     let out = decode_depth_d16_surface(2, 1, &img.surfaces[0].plane.data).unwrap();
@@ -89,7 +89,7 @@ fn dx10_d32_float_end_to_end() {
     px.extend_from_slice(&0.625f32.to_le_bytes());
     let dds = build_dx10_dds(40, 2, 1, &px);
     let img = parse_dds(&dds).unwrap();
-    assert_eq!(img.pixel_format, DdsPixelFormat::D32Float);
+    assert_eq!(img.pixel_format, SurfaceFormat::D32Float);
     assert_eq!(img.pixel_format.name(), "D32_FLOAT");
     assert_eq!(img.surfaces[0].plane.data.len(), 8); // 2px × 4 bytes
     let out = decode_depth_d32_surface(2, 1, &img.surfaces[0].plane.data).unwrap();
@@ -104,7 +104,7 @@ fn dx10_d24s8_end_to_end() {
     let word: u32 = (0x42u32 << 24) | 0x00ff_ffff;
     let dds = build_dx10_dds(45, 1, 1, &word.to_le_bytes());
     let img = parse_dds(&dds).unwrap();
-    assert_eq!(img.pixel_format, DdsPixelFormat::D24UnormS8Uint);
+    assert_eq!(img.pixel_format, SurfaceFormat::D24UnormS8Uint);
     assert_eq!(img.pixel_format.name(), "D24_UNORM_S8_UINT");
     assert_eq!(img.surfaces[0].plane.data.len(), 4);
     let out = decode_depth_d24s8_surface(1, 1, &img.surfaces[0].plane.data).unwrap();
@@ -119,7 +119,7 @@ fn dx10_r24g8_typeless_routes_to_d24s8() {
     let word: u32 = 0x10u32 << 24; // stencil 0x10, depth 0.
     let dds = build_dx10_dds(44, 1, 1, &word.to_le_bytes());
     let img = parse_dds(&dds).unwrap();
-    assert_eq!(img.pixel_format, DdsPixelFormat::D24UnormS8Uint);
+    assert_eq!(img.pixel_format, SurfaceFormat::D24UnormS8Uint);
     let out = decode_depth_d24s8_surface(1, 1, &img.surfaces[0].plane.data).unwrap();
     assert_eq!(out[0].depth, 0.0);
     assert_eq!(out[0].stencil, 0x10);
@@ -136,7 +136,7 @@ fn dx10_d32s8_end_to_end() {
     px.extend_from_slice(&0x00ab_cd09u32.to_le_bytes());
     let dds = build_dx10_dds(20, 1, 1, &px);
     let img = parse_dds(&dds).unwrap();
-    assert_eq!(img.pixel_format, DdsPixelFormat::D32FloatS8X24Uint);
+    assert_eq!(img.pixel_format, SurfaceFormat::D32FloatS8X24Uint);
     assert_eq!(img.pixel_format.name(), "D32_FLOAT_S8X24_UINT");
     assert_eq!(img.surfaces[0].plane.data.len(), 8); // 1px × 8 bytes
     let out = decode_depth_d32s8_surface(1, 1, &img.surfaces[0].plane.data).unwrap();
@@ -151,7 +151,7 @@ fn dx10_r32g8x24_typeless_routes_to_d32s8() {
     px.extend_from_slice(&0x0000_0080u32.to_le_bytes());
     let dds = build_dx10_dds(19, 1, 1, &px);
     let img = parse_dds(&dds).unwrap();
-    assert_eq!(img.pixel_format, DdsPixelFormat::D32FloatS8X24Uint);
+    assert_eq!(img.pixel_format, SurfaceFormat::D32FloatS8X24Uint);
     let out = decode_depth_d32s8_surface(1, 1, &img.surfaces[0].plane.data).unwrap();
     assert_eq!(out[0].depth, 0.125);
     assert_eq!(out[0].stencil, 0x80);
@@ -192,7 +192,7 @@ fn dx10_r24_unorm_x8_depth_view_end_to_end() {
     px.extend_from_slice(&w1.to_le_bytes());
     let dds = build_dx10_dds(46, 2, 1, &px);
     let img = parse_dds(&dds).unwrap();
-    assert_eq!(img.pixel_format, DdsPixelFormat::R24UnormX8Typeless);
+    assert_eq!(img.pixel_format, SurfaceFormat::R24UnormX8Typeless);
     assert_eq!(img.pixel_format.name(), "R24_UNORM_X8_TYPELESS");
     assert_eq!(img.surfaces[0].plane.data.len(), 8); // 2px × 4 bytes
     assert_eq!(img.surfaces[0].plane.stride, 2 * 4);
@@ -211,7 +211,7 @@ fn dx10_x24_g8_stencil_view_end_to_end() {
     px.extend_from_slice(&w1.to_le_bytes());
     let dds = build_dx10_dds(47, 2, 1, &px);
     let img = parse_dds(&dds).unwrap();
-    assert_eq!(img.pixel_format, DdsPixelFormat::X24TypelessG8Uint);
+    assert_eq!(img.pixel_format, SurfaceFormat::X24TypelessG8Uint);
     assert_eq!(img.pixel_format.name(), "X24_TYPELESS_G8_UINT");
     assert_eq!(img.surfaces[0].plane.data.len(), 8);
     let out = decode_depth_x24_g8_uint_surface(2, 1, &img.surfaces[0].plane.data).unwrap();
@@ -230,7 +230,7 @@ fn dx10_r32_float_x8x24_depth_view_end_to_end() {
     px.extend_from_slice(&0xffff_ff42u32.to_le_bytes());
     let dds = build_dx10_dds(21, 2, 1, &px);
     let img = parse_dds(&dds).unwrap();
-    assert_eq!(img.pixel_format, DdsPixelFormat::R32FloatX8X24Typeless);
+    assert_eq!(img.pixel_format, SurfaceFormat::R32FloatX8X24Typeless);
     assert_eq!(img.pixel_format.name(), "R32_FLOAT_X8X24_TYPELESS");
     assert_eq!(img.surfaces[0].plane.data.len(), 16); // 2px × 8 bytes
     assert_eq!(img.surfaces[0].plane.stride, 2 * 8);
@@ -250,7 +250,7 @@ fn dx10_x32_g8x24_stencil_view_end_to_end() {
     px.extend_from_slice(&0xffff_ff00u32.to_le_bytes());
     let dds = build_dx10_dds(22, 2, 1, &px);
     let img = parse_dds(&dds).unwrap();
-    assert_eq!(img.pixel_format, DdsPixelFormat::X32TypelessG8X24Uint);
+    assert_eq!(img.pixel_format, SurfaceFormat::X32TypelessG8X24Uint);
     assert_eq!(img.pixel_format.name(), "X32_TYPELESS_G8X24_UINT");
     assert_eq!(img.surfaces[0].plane.data.len(), 16);
     let out = decode_depth_x32_g8x24_uint_surface(2, 1, &img.surfaces[0].plane.data).unwrap();

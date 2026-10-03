@@ -11,7 +11,7 @@
 //! external ASTC tooling is consulted.
 
 use oxideav_dds::{
-    decode_astc_ldr, decode_astc_ldr_block, decode_astc_ldr_surface, DdsPixelFormat,
+    decode_astc_ldr, decode_astc_ldr_block, decode_astc_ldr_surface, SurfaceFormat,
     ASTC_ERROR_COLOR, LDR_BLOCK_FOOTPRINTS,
 };
 
@@ -103,9 +103,9 @@ fn missing_blocks_decode_to_error_colour() {
 #[test]
 fn format_wrapper_rejects_non_astc() {
     let data = [0u8; 16];
-    assert!(decode_astc_ldr_surface(DdsPixelFormat::Bc7Unorm, &data, 4, 4).is_none());
-    assert!(decode_astc_ldr_surface(DdsPixelFormat::A8R8G8B8, &data, 4, 4).is_none());
-    let pix = DdsPixelFormat::Astc {
+    assert!(decode_astc_ldr_surface(SurfaceFormat::Bc7Unorm, &data, 4, 4).is_none());
+    assert!(decode_astc_ldr_surface(SurfaceFormat::A8R8G8B8, &data, 4, 4).is_none());
+    let pix = SurfaceFormat::Astc {
         block_w: 6,
         block_h: 6,
         srgb: false,

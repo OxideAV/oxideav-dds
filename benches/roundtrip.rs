@@ -29,7 +29,7 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 
 use oxideav_dds::{
-    encode_dds_uncompressed, parse_dds, types::DxgiFormat, DdsImage, DdsPixelFormat, DdsPlane,
+    encode_dds_uncompressed, parse_dds, types::DxgiFormat, DdsFile, Plane, SurfaceFormat,
 };
 
 fn xorshift32(state: &mut u32) -> u32 {
@@ -39,10 +39,9 @@ fn xorshift32(state: &mut u32) -> u32 {
     *state
 }
 
-fn build_a8r8g8b8(width: u32, height: u32, mip_levels: u32) -> DdsImage {
+fn build_a8r8g8b8(width: u32, height: u32, mip_levels: u32) -> DdsFile {
     let mut state: u32 = 0xCAFE_F00D;
     let bpp = 4u32;
-    let mut planes: Vec<DdsPlane> = Vec::new();
     // Encoder fabricates the mipmap chain on its own when
     // `mip_map_count > 1` and the surface list contains only mip 0,
     // so we just emit one plane here.
@@ -51,24 +50,17 @@ fn build_a8r8g8b8(width: u32, height: u32, mip_levels: u32) -> DdsImage {
     for v in data.iter_mut() {
         *v = (xorshift32(&mut state) >> 24) as u8;
     }
-    planes.push(DdsPlane { stride, data });
-    DdsImage {
+    DdsFile::single(
         width,
         height,
-        pixel_format: DdsPixelFormat::A8R8G8B8,
-        planes,
-        pts: None,
-        mip_map_count: mip_levels,
-        has_dxt10_header: false,
-        dxgi_format: None,
-        is_cubemap: false,
-        array_size: 1,
-        depth: 1,
-        surfaces: Vec::new(),
-    }
+        SurfaceFormat::A8R8G8B8,
+        Plane::new(stride, data),
+    )
+    .unwrap()
+    .with_mip_map_count(mip_levels)
 }
 
-fn build_a8b8g8r8_dxt10(width: u32, height: u32) -> DdsImage {
+fn build_a8b8g8r8_dxt10(width: u32, height: u32) -> DdsFile {
     let mut state: u32 = 0xDEAD_BEEF;
     let bpp = 4u32;
     let stride = (width * bpp) as usize;
@@ -76,43 +68,25 @@ fn build_a8b8g8r8_dxt10(width: u32, height: u32) -> DdsImage {
     for v in data.iter_mut() {
         *v = (xorshift32(&mut state) >> 24) as u8;
     }
-    DdsImage {
+    DdsFile::single(
         width,
         height,
-        pixel_format: DdsPixelFormat::A8B8G8R8,
-        planes: vec![DdsPlane { stride, data }],
-        pts: None,
-        mip_map_count: 1,
-        has_dxt10_header: true,
-        dxgi_format: Some(DxgiFormat::R8G8B8A8Unorm),
-        is_cubemap: false,
-        array_size: 1,
-        depth: 1,
-        surfaces: Vec::new(),
-    }
+        SurfaceFormat::A8B8G8R8,
+        Plane::new(stride, data),
+    )
+    .unwrap()
+    .with_dxt10_header(true)
+    .with_dxgi_format(Some(DxgiFormat::R8G8B8A8Unorm))
 }
 
-fn build_l8(width: u32, height: u32) -> DdsImage {
+fn build_l8(width: u32, height: u32) -> DdsFile {
     let mut state: u32 = 0xABAD_1DEA;
     let stride = width as usize;
     let mut data = vec![0u8; stride * height as usize];
     for v in data.iter_mut() {
         *v = (xorshift32(&mut state) >> 24) as u8;
     }
-    DdsImage {
-        width,
-        height,
-        pixel_format: DdsPixelFormat::L8,
-        planes: vec![DdsPlane { stride, data }],
-        pts: None,
-        mip_map_count: 1,
-        has_dxt10_header: false,
-        dxgi_format: None,
-        is_cubemap: false,
-        array_size: 1,
-        depth: 1,
-        surfaces: Vec::new(),
-    }
+    DdsFile::single(width, height, SurfaceFormat::L8, Plane::new(stride, data)).unwrap()
 }
 
 fn bench_rt_a8r8g8b8_512(c: &mut Criterion) {

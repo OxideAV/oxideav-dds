@@ -9,11 +9,11 @@
 
 use oxideav_dds::{
     decode_astc_ldr_block, decode_astc_ldr_surface, encode_astc_ldr_block, encode_dds_astc,
-    parse_dds, DdsPixelFormat, DxgiFormat,
+    parse_dds, DxgiFormat, SurfaceFormat,
 };
 
-fn astc_fmt(bw: u32, bh: u32) -> DdsPixelFormat {
-    DdsPixelFormat::Astc {
+fn astc_fmt(bw: u32, bh: u32) -> SurfaceFormat {
+    SurfaceFormat::Astc {
         block_w: bw,
         block_h: bh,
         srgb: false,
@@ -119,7 +119,7 @@ fn dx10_header_and_mip_chain() {
 fn srgb_format_roundtrips() {
     let (w, h) = (8u32, 8u32);
     let rgba = vec![128u8; (w * h * 4) as usize];
-    let fmt = DdsPixelFormat::Astc {
+    let fmt = SurfaceFormat::Astc {
         block_w: 4,
         block_h: 4,
         srgb: true,
@@ -132,7 +132,7 @@ fn srgb_format_roundtrips() {
     );
     assert!(matches!(
         img.pixel_format,
-        DdsPixelFormat::Astc { srgb: true, .. }
+        SurfaceFormat::Astc { srgb: true, .. }
     ));
 }
 
@@ -140,7 +140,7 @@ fn srgb_format_roundtrips() {
 #[test]
 fn rejects_bad_inputs() {
     // Non-ASTC format.
-    assert!(encode_dds_astc(&[0u8; 16], 2, 2, DdsPixelFormat::A8R8G8B8, 1).is_err());
+    assert!(encode_dds_astc(&[0u8; 16], 2, 2, SurfaceFormat::A8R8G8B8, 1).is_err());
     // Zero size.
     assert!(encode_dds_astc(&[], 0, 0, astc_fmt(4, 4), 1).is_err());
     // Short input.

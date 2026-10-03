@@ -110,3 +110,9 @@ name = "encode_round375"
 path = "fuzz_targets/encode_round375.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "contract"
+path = "fuzz_targets/contract.rs"
+test = false
+doc = false

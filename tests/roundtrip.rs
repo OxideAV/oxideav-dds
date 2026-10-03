@@ -1,5 +1,5 @@
 //! Hard-asserted self-roundtrip tests for every uncompressed
-//! [`oxideav_dds::DdsPixelFormat`] the round-1 encoder accepts.
+//! [`oxideav_dds::SurfaceFormat`] the round-1 encoder accepts.
 //!
 //! Each test builds a tiny synthetic plane (a 4×3 checkerboard with
 //! per-channel deterministic byte values), encodes it with
@@ -12,11 +12,9 @@ use oxideav_dds::types::{
     DDS_HEADER_SIZE, DDS_MAGIC, DDS_PIXELFORMAT_SIZE, FOURCC_BC4U, FOURCC_BC5U, FOURCC_DX10,
     FOURCC_DXT1, FOURCC_DXT3, FOURCC_DXT5,
 };
-use oxideav_dds::{
-    encode_dds_uncompressed, parse_dds, DdsImage, DdsPixelFormat, DdsPlane, DxgiFormat,
-};
+use oxideav_dds::{encode_dds_uncompressed, parse_dds, DdsFile, DxgiFormat, Plane, SurfaceFormat};
 
-fn make_plane(pix: DdsPixelFormat, w: u32, h: u32) -> DdsPlane {
+fn make_plane(pix: SurfaceFormat, w: u32, h: u32) -> Plane {
     let bpp = pix.bytes_per_pixel().expect("uncompressed only") as usize;
     let stride = w as usize * bpp;
     let mut data = vec![0u8; stride * h as usize];
@@ -30,33 +28,18 @@ fn make_plane(pix: DdsPixelFormat, w: u32, h: u32) -> DdsPlane {
             }
         }
     }
-    DdsPlane { stride, data }
+    Plane::new(stride, data)
 }
 
-fn roundtrip_format(pix: DdsPixelFormat, w: u32, h: u32) {
+fn roundtrip_format(pix: SurfaceFormat, w: u32, h: u32) {
     let plane = make_plane(pix, w, h);
-    let src = DdsImage {
-        width: w,
-        height: h,
-        pixel_format: pix,
-        planes: vec![plane.clone()],
-        surfaces: vec![oxideav_dds::DdsSurface {
-            width: w,
-            height: h,
-            mip_level: 0,
-            array_slice: 0,
-            face: None,
-            depth_slice: 0,
-            plane: plane.clone(),
-        }],
-        pts: None,
-        mip_map_count: 1,
-        has_dxt10_header: false,
-        dxgi_format: None,
-        is_cubemap: false,
-        array_size: 1,
-        depth: 1,
-    };
+    let src = DdsFile::new(
+        w,
+        h,
+        pix,
+        vec![oxideav_dds::DdsSurface::new(w, h, plane.clone())],
+    )
+    .unwrap();
     let bytes = encode_dds_uncompressed(&src)
         .unwrap_or_else(|e| panic!("encode failed for {}: {e}", pix.name()));
     // Magic + header sanity.
@@ -108,88 +91,88 @@ fn roundtrip_format(pix: DdsPixelFormat, w: u32, h: u32) {
 
 #[test]
 fn roundtrip_a8r8g8b8() {
-    roundtrip_format(DdsPixelFormat::A8R8G8B8, 4, 3);
+    roundtrip_format(SurfaceFormat::A8R8G8B8, 4, 3);
 }
 
 #[test]
 fn roundtrip_x8r8g8b8() {
-    roundtrip_format(DdsPixelFormat::X8R8G8B8, 4, 3);
+    roundtrip_format(SurfaceFormat::X8R8G8B8, 4, 3);
 }
 
 #[test]
 fn roundtrip_a8b8g8r8() {
-    roundtrip_format(DdsPixelFormat::A8B8G8R8, 5, 7);
+    roundtrip_format(SurfaceFormat::A8B8G8R8, 5, 7);
 }
 
 #[test]
 fn roundtrip_r5g6b5() {
-    roundtrip_format(DdsPixelFormat::R5G6B5, 8, 8);
+    roundtrip_format(SurfaceFormat::R5G6B5, 8, 8);
 }
 
 #[test]
 fn roundtrip_a1r5g5b5() {
-    roundtrip_format(DdsPixelFormat::A1R5G5B5, 6, 4);
+    roundtrip_format(SurfaceFormat::A1R5G5B5, 6, 4);
 }
 
 #[test]
 fn roundtrip_a4r4g4b4() {
-    roundtrip_format(DdsPixelFormat::A4R4G4B4, 6, 4);
+    roundtrip_format(SurfaceFormat::A4R4G4B4, 6, 4);
 }
 
 #[test]
 fn roundtrip_r8g8b8() {
-    roundtrip_format(DdsPixelFormat::R8G8B8, 4, 4);
+    roundtrip_format(SurfaceFormat::R8G8B8, 4, 4);
 }
 
 #[test]
 fn roundtrip_a8l8() {
-    roundtrip_format(DdsPixelFormat::A8L8, 4, 4);
+    roundtrip_format(SurfaceFormat::A8L8, 4, 4);
 }
 
 #[test]
 fn roundtrip_l8() {
-    roundtrip_format(DdsPixelFormat::L8, 8, 4);
+    roundtrip_format(SurfaceFormat::L8, 8, 4);
 }
 
 #[test]
 fn roundtrip_a8() {
-    roundtrip_format(DdsPixelFormat::A8, 8, 4);
+    roundtrip_format(SurfaceFormat::A8, 8, 4);
 }
 
 #[test]
 fn roundtrip_x8b8g8r8() {
     // RGB sibling of A8B8G8R8 (no alpha); R at the lowest byte.
-    roundtrip_format(DdsPixelFormat::X8B8G8R8, 5, 7);
+    roundtrip_format(SurfaceFormat::X8B8G8R8, 5, 7);
 }
 
 #[test]
 fn roundtrip_x1r5g5b5() {
     // RGB sibling of A1R5G5B5 (top bit unused).
-    roundtrip_format(DdsPixelFormat::X1R5G5B5, 6, 4);
+    roundtrip_format(SurfaceFormat::X1R5G5B5, 6, 4);
 }
 
 #[test]
 fn roundtrip_x4r4g4b4() {
     // RGB sibling of A4R4G4B4 (top nibble unused).
-    roundtrip_format(DdsPixelFormat::X4R4G4B4, 6, 4);
+    roundtrip_format(SurfaceFormat::X4R4G4B4, 6, 4);
 }
 
 #[test]
 fn roundtrip_l16() {
     // 16-bit single-channel luminance (D3DFMT_L16).
-    roundtrip_format(DdsPixelFormat::L16, 8, 4);
+    roundtrip_format(SurfaceFormat::L16, 8, 4);
 }
 
 #[test]
 fn roundtrip_a4l4() {
     // Packed 4:4 luminance + alpha in one byte (D3DFMT_A4L4).
-    roundtrip_format(DdsPixelFormat::A4L4, 8, 4);
+    roundtrip_format(SurfaceFormat::A4L4, 8, 4);
 }
 
 #[test]
 fn roundtrip_one_pixel() {
     // Smallest legal surface — width = height = 1.
-    roundtrip_format(DdsPixelFormat::A8R8G8B8, 1, 1);
+    roundtrip_format(SurfaceFormat::A8R8G8B8, 1, 1);
 }
 
 // --- Block-compressed pass-through tests ---------------------------------
@@ -238,7 +221,7 @@ fn build_fourcc_dds(four_cc: u32, w: u32, h: u32, block_bytes: u32) -> Vec<u8> {
 fn passthrough_dxt1() {
     let bytes = build_fourcc_dds(FOURCC_DXT1, 8, 8, 8);
     let img = parse_dds(&bytes).unwrap();
-    assert_eq!(img.pixel_format, DdsPixelFormat::Bc1);
+    assert_eq!(img.pixel_format, SurfaceFormat::Bc1);
     assert_eq!(img.planes.len(), 1);
     // 2×2 blocks × 8 bytes/block = 32 bytes.
     assert_eq!(img.planes[0].data.len(), 32);
@@ -251,7 +234,7 @@ fn passthrough_dxt1() {
 fn passthrough_dxt3() {
     let bytes = build_fourcc_dds(FOURCC_DXT3, 4, 4, 16);
     let img = parse_dds(&bytes).unwrap();
-    assert_eq!(img.pixel_format, DdsPixelFormat::Bc2);
+    assert_eq!(img.pixel_format, SurfaceFormat::Bc2);
     assert_eq!(img.planes[0].data.len(), 16);
 }
 
@@ -259,7 +242,7 @@ fn passthrough_dxt3() {
 fn passthrough_dxt5() {
     let bytes = build_fourcc_dds(FOURCC_DXT5, 4, 4, 16);
     let img = parse_dds(&bytes).unwrap();
-    assert_eq!(img.pixel_format, DdsPixelFormat::Bc3);
+    assert_eq!(img.pixel_format, SurfaceFormat::Bc3);
     assert_eq!(img.planes[0].data.len(), 16);
 }
 
@@ -267,7 +250,7 @@ fn passthrough_dxt5() {
 fn passthrough_bc4u() {
     let bytes = build_fourcc_dds(FOURCC_BC4U, 8, 4, 8);
     let img = parse_dds(&bytes).unwrap();
-    assert_eq!(img.pixel_format, DdsPixelFormat::Bc4Unorm);
+    assert_eq!(img.pixel_format, SurfaceFormat::Bc4Unorm);
     // 2×1 blocks × 8 bytes/block = 16 bytes.
     assert_eq!(img.planes[0].data.len(), 16);
 }
@@ -276,7 +259,7 @@ fn passthrough_bc4u() {
 fn passthrough_bc5u() {
     let bytes = build_fourcc_dds(FOURCC_BC5U, 4, 4, 16);
     let img = parse_dds(&bytes).unwrap();
-    assert_eq!(img.pixel_format, DdsPixelFormat::Bc5Unorm);
+    assert_eq!(img.pixel_format, SurfaceFormat::Bc5Unorm);
     assert_eq!(img.planes[0].data.len(), 16);
 }
 
@@ -334,7 +317,7 @@ fn build_dx10_dds(dxgi_format: u32, w: u32, h: u32, surface_bytes: usize) -> Vec
 fn dx10_bc7_unorm_passthrough() {
     let bytes = build_dx10_dds(98 /* BC7_UNORM */, 4, 4, 16);
     let img = parse_dds(&bytes).unwrap();
-    assert_eq!(img.pixel_format, DdsPixelFormat::Bc7Unorm);
+    assert_eq!(img.pixel_format, SurfaceFormat::Bc7Unorm);
     assert!(img.has_dxt10_header);
     assert_eq!(img.dxgi_format, Some(DxgiFormat::Bc7Unorm));
     assert_eq!(img.planes[0].data.len(), 16);
@@ -344,7 +327,7 @@ fn dx10_bc7_unorm_passthrough() {
 fn dx10_bc6h_uf16_passthrough() {
     let bytes = build_dx10_dds(95 /* BC6H_UF16 */, 4, 4, 16);
     let img = parse_dds(&bytes).unwrap();
-    assert_eq!(img.pixel_format, DdsPixelFormat::Bc6hUf16);
+    assert_eq!(img.pixel_format, SurfaceFormat::Bc6hUf16);
     assert_eq!(img.dxgi_format, Some(DxgiFormat::Bc6hUf16));
 }
 
@@ -352,7 +335,7 @@ fn dx10_bc6h_uf16_passthrough() {
 fn dx10_r8g8b8a8_unorm_uncompressed() {
     let bytes = build_dx10_dds(28 /* R8G8B8A8_UNORM */, 2, 2, 16);
     let img = parse_dds(&bytes).unwrap();
-    assert_eq!(img.pixel_format, DdsPixelFormat::A8B8G8R8);
+    assert_eq!(img.pixel_format, SurfaceFormat::A8B8G8R8);
     assert_eq!(img.dxgi_format, Some(DxgiFormat::R8G8B8A8Unorm));
     assert_eq!(img.planes[0].data.len(), 16);
     assert_eq!(img.planes[0].stride, 8);
@@ -382,44 +365,26 @@ fn rejects_unknown_dxgi_format() {
 
 #[test]
 fn rejects_block_compressed_in_uncompressed_encoder() {
-    let plane = DdsPlane {
-        stride: 8,
-        data: vec![0u8; 8],
-    };
-    let img = DdsImage {
-        width: 4,
-        height: 4,
-        pixel_format: DdsPixelFormat::Bc1,
-        planes: vec![plane.clone()],
-        surfaces: vec![oxideav_dds::DdsSurface {
-            width: 4,
-            height: 4,
-            mip_level: 0,
-            array_slice: 0,
-            face: None,
-            depth_slice: 0,
-            plane,
-        }],
-        pts: None,
-        mip_map_count: 1,
-        has_dxt10_header: false,
-        dxgi_format: None,
-        is_cubemap: false,
-        array_size: 1,
-        depth: 1,
-    };
+    let plane = Plane::new(8, vec![0u8; 8]);
+    let img = DdsFile::new(
+        4,
+        4,
+        SurfaceFormat::Bc1,
+        vec![oxideav_dds::DdsSurface::new(4, 4, plane)],
+    )
+    .unwrap();
     assert!(encode_dds_uncompressed(&img).is_err());
 }
 
 #[test]
 fn pixel_format_helpers() {
-    assert_eq!(DdsPixelFormat::A8R8G8B8.bits_per_pixel(), 32);
-    assert_eq!(DdsPixelFormat::A8R8G8B8.bytes_per_pixel(), Some(4));
-    assert!(DdsPixelFormat::A8R8G8B8.block_bytes().is_none());
-    assert_eq!(DdsPixelFormat::Bc1.block_bytes(), Some(8));
-    assert_eq!(DdsPixelFormat::Bc7Unorm.block_bytes(), Some(16));
-    assert!(DdsPixelFormat::Bc1.is_block_compressed());
-    assert!(!DdsPixelFormat::A8R8G8B8.is_block_compressed());
+    assert_eq!(SurfaceFormat::A8R8G8B8.bits_per_pixel(), 32);
+    assert_eq!(SurfaceFormat::A8R8G8B8.bytes_per_pixel(), Some(4));
+    assert!(SurfaceFormat::A8R8G8B8.block_bytes().is_none());
+    assert_eq!(SurfaceFormat::Bc1.block_bytes(), Some(8));
+    assert_eq!(SurfaceFormat::Bc7Unorm.block_bytes(), Some(16));
+    assert!(SurfaceFormat::Bc1.is_block_compressed());
+    assert!(!SurfaceFormat::A8R8G8B8.is_block_compressed());
 }
 
 #[test]
@@ -457,33 +422,12 @@ fn encode_uncompressed_rejects_yuv_without_panic() {
     // `bytes_per_pixel()` lookup. (Regression for the roundtrip fuzz
     // crash at encoder.rs `bytes_per_pixel().expect(...)`.)
     use oxideav_dds::yuv::YuvFormat;
-    let pix = DdsPixelFormat::Yuv(YuvFormat::Nv12);
-    let plane = DdsPlane {
-        stride: 4,
-        data: vec![0u8; 4 * 4 * 2],
-    };
-    let src = DdsImage {
-        width: 4,
-        height: 4,
-        pixel_format: pix,
-        planes: vec![plane.clone()],
-        surfaces: vec![oxideav_dds::DdsSurface {
-            width: 4,
-            height: 4,
-            mip_level: 0,
-            array_slice: 0,
-            face: None,
-            depth_slice: 0,
-            plane,
-        }],
-        pts: None,
-        mip_map_count: 1,
-        has_dxt10_header: true,
-        dxgi_format: Some(DxgiFormat::Nv12),
-        is_cubemap: false,
-        array_size: 1,
-        depth: 1,
-    };
+    let pix = SurfaceFormat::Yuv(YuvFormat::Nv12);
+    let plane = Plane::new(4, vec![0u8; 4 * 4 * 2]);
+    let src = DdsFile::new(4, 4, pix, vec![oxideav_dds::DdsSurface::new(4, 4, plane)])
+        .unwrap()
+        .with_dxt10_header(true)
+        .with_dxgi_format(Some(DxgiFormat::Nv12));
     let err = encode_dds_uncompressed(&src).expect_err("YUV must not serialise as uncompressed");
     assert!(format!("{err}").to_lowercase().contains("bytes-per-pixel"));
 }
@@ -492,33 +436,12 @@ fn encode_uncompressed_rejects_yuv_without_panic() {
 fn encode_uncompressed_rejects_depth_without_panic() {
     // Depth surfaces likewise report no flat bytes-per-pixel for the
     // combined depth-stencil layouts; encoding must Err gracefully.
-    let pix = DdsPixelFormat::D24UnormS8Uint;
-    let plane = DdsPlane {
-        stride: 4 * 4,
-        data: vec![0u8; 4 * 4 * 4],
-    };
-    let src = DdsImage {
-        width: 4,
-        height: 4,
-        pixel_format: pix,
-        planes: vec![plane.clone()],
-        surfaces: vec![oxideav_dds::DdsSurface {
-            width: 4,
-            height: 4,
-            mip_level: 0,
-            array_slice: 0,
-            face: None,
-            depth_slice: 0,
-            plane,
-        }],
-        pts: None,
-        mip_map_count: 1,
-        has_dxt10_header: true,
-        dxgi_format: Some(DxgiFormat::D24UnormS8Uint),
-        is_cubemap: false,
-        array_size: 1,
-        depth: 1,
-    };
+    let pix = SurfaceFormat::D24UnormS8Uint;
+    let plane = Plane::new(4 * 4, vec![0u8; 4 * 4 * 4]);
+    let src = DdsFile::new(4, 4, pix, vec![oxideav_dds::DdsSurface::new(4, 4, plane)])
+        .unwrap()
+        .with_dxt10_header(true)
+        .with_dxgi_format(Some(DxgiFormat::D24UnormS8Uint));
     // D24S8 *does* report bytes_per_pixel (4), so this one actually
     // serialises fine — it exercises the depth path through the encoder
     // without panicking. The combined-format guard is covered by the

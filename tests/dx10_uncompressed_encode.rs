@@ -12,38 +12,25 @@
 //! library source consulted.
 
 use oxideav_dds::{
-    decode_a4b4g4r4_unorm_surface, encode_dds_uncompressed_dx10, parse_dds, DdsImage,
-    DdsPixelFormat, DdsPlane, DdsSurface, DxgiFormat,
+    decode_a4b4g4r4_unorm_surface, encode_dds_uncompressed_dx10, parse_dds, DdsFile, DdsSurface,
+    DxgiFormat, Plane, SurfaceFormat,
 };
 
 /// Build a single-plane DX10 image with a pseudo-random byte payload.
-fn make_image(width: u32, height: u32, pix: DdsPixelFormat, mip_map_count: u32) -> DdsImage {
+fn make_image(width: u32, height: u32, pix: SurfaceFormat, mip_map_count: u32) -> DdsFile {
     let bpp = pix.bytes_per_pixel().unwrap();
     let n = (width * height * bpp) as usize;
     // Deterministic non-trivial byte fill (every byte distinct mod 251).
     let data: Vec<u8> = (0..n).map(|i| ((i * 37 + 11) % 251) as u8).collect();
-    DdsImage {
-        width,
-        height,
-        pixel_format: pix,
-        planes: vec![DdsPlane {
-            stride: (width * bpp) as usize,
-            data,
-        }],
-        surfaces: Vec::new(),
-        pts: None,
-        mip_map_count,
-        has_dxt10_header: true,
-        dxgi_format: None,
-        is_cubemap: false,
-        array_size: 1,
-        depth: 1,
-    }
+    DdsFile::single(width, height, pix, Plane::new((width * bpp) as usize, data))
+        .unwrap()
+        .with_mip_map_count(mip_map_count)
+        .with_dxt10_header(true)
 }
 
 /// Round-trip a single-mip DX10 uncompressed surface and assert the
 /// payload bytes survive verbatim and the format / DXGI code match.
-fn roundtrip_one(pix: DdsPixelFormat, expect_dxgi: DxgiFormat) {
+fn roundtrip_one(pix: SurfaceFormat, expect_dxgi: DxgiFormat) {
     let img = make_image(6, 4, pix, 1);
     let orig = img.planes[0].data.clone();
 
@@ -71,16 +58,16 @@ fn roundtrip_one(pix: DdsPixelFormat, expect_dxgi: DxgiFormat) {
 
 #[test]
 fn roundtrip_float_formats() {
-    roundtrip_one(DdsPixelFormat::R16Float, DxgiFormat::R16Float);
-    roundtrip_one(DdsPixelFormat::R16G16Float, DxgiFormat::R16G16Float);
+    roundtrip_one(SurfaceFormat::R16Float, DxgiFormat::R16Float);
+    roundtrip_one(SurfaceFormat::R16G16Float, DxgiFormat::R16G16Float);
     roundtrip_one(
-        DdsPixelFormat::R16G16B16A16Float,
+        SurfaceFormat::R16G16B16A16Float,
         DxgiFormat::R16G16B16A16Float,
     );
-    roundtrip_one(DdsPixelFormat::R32Float, DxgiFormat::R32Float);
-    roundtrip_one(DdsPixelFormat::R32G32Float, DxgiFormat::R32G32Float);
+    roundtrip_one(SurfaceFormat::R32Float, DxgiFormat::R32Float);
+    roundtrip_one(SurfaceFormat::R32G32Float, DxgiFormat::R32G32Float);
     roundtrip_one(
-        DdsPixelFormat::R32G32B32A32Float,
+        SurfaceFormat::R32G32B32A32Float,
         DxgiFormat::R32G32B32A32Float,
     );
 }
@@ -88,11 +75,11 @@ fn roundtrip_float_formats() {
 #[test]
 fn roundtrip_high_bit_depth_norm() {
     roundtrip_one(
-        DdsPixelFormat::R16G16B16A16Unorm,
+        SurfaceFormat::R16G16B16A16Unorm,
         DxgiFormat::R16G16B16A16Unorm,
     );
     roundtrip_one(
-        DdsPixelFormat::R16G16B16A16Snorm,
+        SurfaceFormat::R16G16B16A16Snorm,
         DxgiFormat::R16G16B16A16Snorm,
     );
 }
@@ -100,7 +87,7 @@ fn roundtrip_high_bit_depth_norm() {
 #[test]
 fn roundtrip_a4b4g4r4_unorm() {
     // Verbatim byte round-trip through the DX10 header.
-    roundtrip_one(DdsPixelFormat::A4B4G4R4Unorm, DxgiFormat::A4B4G4R4Unorm);
+    roundtrip_one(SurfaceFormat::A4B4G4R4Unorm, DxgiFormat::A4B4G4R4Unorm);
 }
 
 #[test]
@@ -111,26 +98,17 @@ fn a4b4g4r4_unorm_parse_then_decode() {
     let mut data = Vec::new();
     data.extend_from_slice(&0xF0A5u16.to_le_bytes());
     data.extend_from_slice(&0x1234u16.to_le_bytes());
-    let img = DdsImage {
-        width: 2,
-        height: 1,
-        pixel_format: DdsPixelFormat::A4B4G4R4Unorm,
-        planes: vec![DdsPlane {
-            stride: 4,
-            data: data.clone(),
-        }],
-        surfaces: Vec::new(),
-        pts: None,
-        mip_map_count: 1,
-        has_dxt10_header: true,
-        dxgi_format: None,
-        is_cubemap: false,
-        array_size: 1,
-        depth: 1,
-    };
+    let img = DdsFile::single(
+        2,
+        1,
+        SurfaceFormat::A4B4G4R4Unorm,
+        Plane::new(4, data.clone()),
+    )
+    .unwrap()
+    .with_dxt10_header(true);
     let bytes = encode_dds_uncompressed_dx10(&img).expect("encode a4b4g4r4");
     let decoded = parse_dds(&bytes).expect("parse a4b4g4r4");
-    assert_eq!(decoded.pixel_format, DdsPixelFormat::A4B4G4R4Unorm);
+    assert_eq!(decoded.pixel_format, SurfaceFormat::A4B4G4R4Unorm);
     assert_eq!(decoded.surfaces[0].plane.data, data);
     let rgba = decode_a4b4g4r4_unorm_surface(2, 1, &decoded.surfaces[0].plane.data)
         .expect("decode a4b4g4r4");
@@ -140,68 +118,68 @@ fn a4b4g4r4_unorm_parse_then_decode() {
 #[test]
 fn roundtrip_packed_hdr() {
     roundtrip_one(
-        DdsPixelFormat::R10G10B10A2Unorm,
+        SurfaceFormat::R10G10B10A2Unorm,
         DxgiFormat::R10G10B10A2Unorm,
     );
-    roundtrip_one(DdsPixelFormat::R10G10B10A2Uint, DxgiFormat::R10G10B10A2Uint);
-    roundtrip_one(DdsPixelFormat::R8G8B8G8Unorm, DxgiFormat::R8G8B8G8Unorm);
-    roundtrip_one(DdsPixelFormat::G8R8G8B8Unorm, DxgiFormat::G8R8G8B8Unorm);
+    roundtrip_one(SurfaceFormat::R10G10B10A2Uint, DxgiFormat::R10G10B10A2Uint);
+    roundtrip_one(SurfaceFormat::R8G8B8G8Unorm, DxgiFormat::R8G8B8G8Unorm);
+    roundtrip_one(SurfaceFormat::G8R8G8B8Unorm, DxgiFormat::G8R8G8B8Unorm);
 }
 
 #[test]
 fn roundtrip_integer_formats() {
-    roundtrip_one(DdsPixelFormat::R8Uint, DxgiFormat::R8Uint);
-    roundtrip_one(DdsPixelFormat::R8Sint, DxgiFormat::R8Sint);
-    roundtrip_one(DdsPixelFormat::R8G8Uint, DxgiFormat::R8G8Uint);
-    roundtrip_one(DdsPixelFormat::R8G8Sint, DxgiFormat::R8G8Sint);
-    roundtrip_one(DdsPixelFormat::R8G8B8A8Uint, DxgiFormat::R8G8B8A8Uint);
-    roundtrip_one(DdsPixelFormat::R8G8B8A8Sint, DxgiFormat::R8G8B8A8Sint);
-    roundtrip_one(DdsPixelFormat::R16Uint, DxgiFormat::R16Uint);
-    roundtrip_one(DdsPixelFormat::R16Sint, DxgiFormat::R16Sint);
-    roundtrip_one(DdsPixelFormat::R16G16Uint, DxgiFormat::R16G16Uint);
-    roundtrip_one(DdsPixelFormat::R16G16Sint, DxgiFormat::R16G16Sint);
+    roundtrip_one(SurfaceFormat::R8Uint, DxgiFormat::R8Uint);
+    roundtrip_one(SurfaceFormat::R8Sint, DxgiFormat::R8Sint);
+    roundtrip_one(SurfaceFormat::R8G8Uint, DxgiFormat::R8G8Uint);
+    roundtrip_one(SurfaceFormat::R8G8Sint, DxgiFormat::R8G8Sint);
+    roundtrip_one(SurfaceFormat::R8G8B8A8Uint, DxgiFormat::R8G8B8A8Uint);
+    roundtrip_one(SurfaceFormat::R8G8B8A8Sint, DxgiFormat::R8G8B8A8Sint);
+    roundtrip_one(SurfaceFormat::R16Uint, DxgiFormat::R16Uint);
+    roundtrip_one(SurfaceFormat::R16Sint, DxgiFormat::R16Sint);
+    roundtrip_one(SurfaceFormat::R16G16Uint, DxgiFormat::R16G16Uint);
+    roundtrip_one(SurfaceFormat::R16G16Sint, DxgiFormat::R16G16Sint);
     roundtrip_one(
-        DdsPixelFormat::R16G16B16A16Uint,
+        SurfaceFormat::R16G16B16A16Uint,
         DxgiFormat::R16G16B16A16Uint,
     );
     roundtrip_one(
-        DdsPixelFormat::R16G16B16A16Sint,
+        SurfaceFormat::R16G16B16A16Sint,
         DxgiFormat::R16G16B16A16Sint,
     );
-    roundtrip_one(DdsPixelFormat::R32Uint, DxgiFormat::R32Uint);
-    roundtrip_one(DdsPixelFormat::R32Sint, DxgiFormat::R32Sint);
-    roundtrip_one(DdsPixelFormat::R32G32Uint, DxgiFormat::R32G32Uint);
-    roundtrip_one(DdsPixelFormat::R32G32Sint, DxgiFormat::R32G32Sint);
-    roundtrip_one(DdsPixelFormat::R32G32B32Uint, DxgiFormat::R32G32B32Uint);
-    roundtrip_one(DdsPixelFormat::R32G32B32Sint, DxgiFormat::R32G32B32Sint);
+    roundtrip_one(SurfaceFormat::R32Uint, DxgiFormat::R32Uint);
+    roundtrip_one(SurfaceFormat::R32Sint, DxgiFormat::R32Sint);
+    roundtrip_one(SurfaceFormat::R32G32Uint, DxgiFormat::R32G32Uint);
+    roundtrip_one(SurfaceFormat::R32G32Sint, DxgiFormat::R32G32Sint);
+    roundtrip_one(SurfaceFormat::R32G32B32Uint, DxgiFormat::R32G32B32Uint);
+    roundtrip_one(SurfaceFormat::R32G32B32Sint, DxgiFormat::R32G32B32Sint);
     roundtrip_one(
-        DdsPixelFormat::R32G32B32A32Uint,
+        SurfaceFormat::R32G32B32A32Uint,
         DxgiFormat::R32G32B32A32Uint,
     );
     roundtrip_one(
-        DdsPixelFormat::R32G32B32A32Sint,
+        SurfaceFormat::R32G32B32A32Sint,
         DxgiFormat::R32G32B32A32Sint,
     );
 }
 
 #[test]
 fn roundtrip_normalised_small_channel() {
-    roundtrip_one(DdsPixelFormat::R8Snorm, DxgiFormat::R8Snorm);
-    roundtrip_one(DdsPixelFormat::R8G8Snorm, DxgiFormat::R8G8Snorm);
-    roundtrip_one(DdsPixelFormat::R8G8B8A8Snorm, DxgiFormat::R8G8B8A8Snorm);
-    roundtrip_one(DdsPixelFormat::R16Unorm, DxgiFormat::R16Unorm);
-    roundtrip_one(DdsPixelFormat::R16Snorm, DxgiFormat::R16Snorm);
-    roundtrip_one(DdsPixelFormat::R16G16Unorm, DxgiFormat::R16G16Unorm);
-    roundtrip_one(DdsPixelFormat::R16G16Snorm, DxgiFormat::R16G16Snorm);
+    roundtrip_one(SurfaceFormat::R8Snorm, DxgiFormat::R8Snorm);
+    roundtrip_one(SurfaceFormat::R8G8Snorm, DxgiFormat::R8G8Snorm);
+    roundtrip_one(SurfaceFormat::R8G8B8A8Snorm, DxgiFormat::R8G8B8A8Snorm);
+    roundtrip_one(SurfaceFormat::R16Unorm, DxgiFormat::R16Unorm);
+    roundtrip_one(SurfaceFormat::R16Snorm, DxgiFormat::R16Snorm);
+    roundtrip_one(SurfaceFormat::R16G16Unorm, DxgiFormat::R16G16Unorm);
+    roundtrip_one(SurfaceFormat::R16G16Snorm, DxgiFormat::R16G16Snorm);
 }
 
 #[test]
 fn roundtrip_depth_formats() {
-    roundtrip_one(DdsPixelFormat::D16Unorm, DxgiFormat::D16Unorm);
-    roundtrip_one(DdsPixelFormat::D32Float, DxgiFormat::D32Float);
-    roundtrip_one(DdsPixelFormat::D24UnormS8Uint, DxgiFormat::D24UnormS8Uint);
+    roundtrip_one(SurfaceFormat::D16Unorm, DxgiFormat::D16Unorm);
+    roundtrip_one(SurfaceFormat::D32Float, DxgiFormat::D32Float);
+    roundtrip_one(SurfaceFormat::D24UnormS8Uint, DxgiFormat::D24UnormS8Uint);
     roundtrip_one(
-        DdsPixelFormat::D32FloatS8X24Uint,
+        SurfaceFormat::D32FloatS8X24Uint,
         DxgiFormat::D32FloatS8X24Uint,
     );
 }
@@ -211,41 +189,23 @@ fn roundtrip_with_supplied_mip_chain() {
     // 8x8 R16G16B16A16_FLOAT (8 bpp) with 4 mips: 8,4,2,1. Supply each
     // level explicitly so the byte-domain box filter is not invoked
     // (these are >8-bit channels).
-    let pix = DdsPixelFormat::R16G16B16A16Float;
+    let pix = SurfaceFormat::R16G16B16A16Float;
     let bpp = pix.bytes_per_pixel().unwrap();
     let dims = [(8u32, 8u32), (4, 4), (2, 2), (1, 1)];
     let mut surfaces = Vec::new();
     let mut tag: u8 = 1;
     for (level, &(w, h)) in dims.iter().enumerate() {
         let data = vec![tag; (w * h * bpp) as usize];
-        surfaces.push(DdsSurface {
-            width: w,
-            height: h,
-            mip_level: level as u32,
-            array_slice: 0,
-            face: None,
-            depth_slice: 0,
-            plane: DdsPlane {
-                stride: (w * bpp) as usize,
-                data,
-            },
-        });
+        surfaces.push(
+            DdsSurface::new(w, h, Plane::new((w * bpp) as usize, data))
+                .with_mip_level(level as u32),
+        );
         tag = tag.wrapping_add(1);
     }
-    let img = DdsImage {
-        width: 8,
-        height: 8,
-        pixel_format: pix,
-        planes: vec![surfaces[0].plane.clone()],
-        surfaces: surfaces.clone(),
-        pts: None,
-        mip_map_count: 4,
-        has_dxt10_header: true,
-        dxgi_format: None,
-        is_cubemap: false,
-        array_size: 1,
-        depth: 1,
-    };
+    let img = DdsFile::new(8, 8, pix, surfaces.clone())
+        .unwrap()
+        .with_mip_map_count(4)
+        .with_dxt10_header(true);
 
     let bytes = encode_dds_uncompressed_dx10(&img).expect("encode mipped dx10");
     let decoded = parse_dds(&bytes).expect("re-parse mipped dx10");
@@ -261,7 +221,7 @@ fn roundtrip_with_supplied_mip_chain() {
 #[test]
 fn rejects_legacy_mask_format() {
     // A8R8G8B8 has a legacy mask layout; the DX10 encoder must defer.
-    let img = make_image(4, 4, DdsPixelFormat::A8R8G8B8, 1);
+    let img = make_image(4, 4, SurfaceFormat::A8R8G8B8, 1);
     assert!(
         encode_dds_uncompressed_dx10(&img).is_err(),
         "legacy mask format must be rejected by the DX10 encoder"
@@ -270,23 +230,9 @@ fn rejects_legacy_mask_format() {
 
 #[test]
 fn rejects_block_compressed() {
-    let img = DdsImage {
-        width: 4,
-        height: 4,
-        pixel_format: DdsPixelFormat::Bc1,
-        planes: vec![DdsPlane {
-            stride: 8,
-            data: vec![0u8; 8],
-        }],
-        surfaces: Vec::new(),
-        pts: None,
-        mip_map_count: 1,
-        has_dxt10_header: true,
-        dxgi_format: None,
-        is_cubemap: false,
-        array_size: 1,
-        depth: 1,
-    };
+    let img = DdsFile::single(4, 4, SurfaceFormat::Bc1, Plane::new(8, vec![0u8; 8]))
+        .unwrap()
+        .with_dxt10_header(true);
     assert!(
         encode_dds_uncompressed_dx10(&img).is_err(),
         "BC format must be rejected by the DX10 uncompressed encoder"
@@ -297,7 +243,7 @@ fn rejects_block_compressed() {
 fn dxgi_format_override_is_honoured() {
     // Setting image.dxgi_format overrides the canonical code (used to
     // preserve a specific typeless / srgb variant on round-trip).
-    let mut img = make_image(4, 4, DdsPixelFormat::R8G8B8A8Uint, 1);
+    let mut img = make_image(4, 4, SurfaceFormat::R8G8B8A8Uint, 1);
     img.dxgi_format = Some(DxgiFormat::R8G8B8A8Uint);
     let bytes = encode_dds_uncompressed_dx10(&img).expect("encode");
     let decoded = parse_dds(&bytes).expect("parse");
@@ -310,7 +256,7 @@ fn xr_bias_a2_routes_to_stored_integers() {
     // R10G10B10A2_UINT; the layout resolver routes it to the UINT
     // decoder (stored fixed-point codes recovered verbatim) while the
     // dxgi_format field preserves the exact code 89 for round-trip.
-    let mut img = make_image(4, 4, DdsPixelFormat::R10G10B10A2Uint, 1);
+    let mut img = make_image(4, 4, SurfaceFormat::R10G10B10A2Uint, 1);
     let orig = img.planes[0].data.clone();
     img.dxgi_format = Some(DxgiFormat::R10G10B10XrBiasA2Unorm);
     let bytes = encode_dds_uncompressed_dx10(&img).expect("encode xr-bias");
@@ -319,7 +265,7 @@ fn xr_bias_a2_routes_to_stored_integers() {
         decoded.dxgi_format,
         Some(DxgiFormat::R10G10B10XrBiasA2Unorm)
     );
-    assert_eq!(decoded.pixel_format, DdsPixelFormat::R10G10B10A2Uint);
+    assert_eq!(decoded.pixel_format, SurfaceFormat::R10G10B10A2Uint);
     assert_eq!(decoded.surfaces[0].plane.data, orig);
     // The stored 10:10:10:2 fixed-point codes are recoverable.
     let ints = oxideav_dds::decode_r10g10b10a2_uint_surface(4, 4, &decoded.surfaces[0].plane.data)

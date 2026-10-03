@@ -14,7 +14,7 @@
 //!   of `YUY2`, which has no DX10 `DXGI_FORMAT`.
 //!
 //! All four store their data verbatim on disk; the FourCC routing simply
-//! resolves them to the correct `DdsPixelFormat`. Tags + byte layouts are
+//! resolves them to the correct `SurfaceFormat`. Tags + byte layouts are
 //! taken solely from Microsoft's public programming-guide table; no
 //! external library source was consulted.
 
@@ -22,7 +22,7 @@ use oxideav_dds::types::{
     DDPF_FOURCC, DDSCAPS_TEXTURE, DDSD_REQUIRED, DDS_HEADER_SIZE, DDS_MAGIC, DDS_PIXELFORMAT_SIZE,
     FOURCC_GRGB, FOURCC_RGBG, FOURCC_UYVY, FOURCC_YUY2,
 };
-use oxideav_dds::{decode_uyvy_surface, decode_yuy2_surface, parse_dds, DdsPixelFormat, YuvFormat};
+use oxideav_dds::{decode_uyvy_surface, decode_yuy2_surface, parse_dds, SurfaceFormat, YuvFormat};
 
 fn build_fourcc_dds(four_cc: u32, w: u32, h: u32, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(4 + DDS_HEADER_SIZE + payload.len());
@@ -59,7 +59,7 @@ fn rgbg_fourcc_resolves_to_r8g8_b8g8() {
         .collect();
     let dds = build_fourcc_dds(FOURCC_RGBG, 4, 2, &payload);
     let img = parse_dds(&dds).expect("parse RGBG");
-    assert_eq!(img.pixel_format, DdsPixelFormat::R8G8B8G8Unorm);
+    assert_eq!(img.pixel_format, SurfaceFormat::R8G8B8G8Unorm);
     assert_eq!(img.surfaces[0].plane.data, payload);
 }
 
@@ -68,7 +68,7 @@ fn grgb_fourcc_resolves_to_g8r8_g8b8() {
     let payload = vec![0x42u8; 4 * 2 * 2];
     let dds = build_fourcc_dds(FOURCC_GRGB, 4, 2, &payload);
     let img = parse_dds(&dds).expect("parse GRGB");
-    assert_eq!(img.pixel_format, DdsPixelFormat::G8R8G8B8Unorm);
+    assert_eq!(img.pixel_format, SurfaceFormat::G8R8G8B8Unorm);
 }
 
 #[test]
@@ -77,7 +77,7 @@ fn yuy2_fourcc_resolves_and_decodes() {
     let payload = vec![10u8, 20, 30, 40];
     let dds = build_fourcc_dds(FOURCC_YUY2, 2, 1, &payload);
     let img = parse_dds(&dds).expect("parse YUY2");
-    assert_eq!(img.pixel_format, DdsPixelFormat::Yuv(YuvFormat::Yuy2));
+    assert_eq!(img.pixel_format, SurfaceFormat::Yuv(YuvFormat::Yuy2));
     let out = decode_yuy2_surface(2, 1, &img.surfaces[0].plane.data).unwrap();
     // pixel 0 = [Y0, U, V, 0xff], pixel 1 = [Y1, U, V, 0xff]
     assert_eq!(out, vec![10, 20, 40, 0xff, 30, 20, 40, 0xff]);
@@ -89,7 +89,7 @@ fn uyvy_fourcc_resolves_and_decodes() {
     let payload = vec![20u8, 10, 40, 30];
     let dds = build_fourcc_dds(FOURCC_UYVY, 2, 1, &payload);
     let img = parse_dds(&dds).expect("parse UYVY");
-    assert_eq!(img.pixel_format, DdsPixelFormat::Yuv(YuvFormat::Uyvy));
+    assert_eq!(img.pixel_format, SurfaceFormat::Yuv(YuvFormat::Uyvy));
     let out = decode_uyvy_surface(2, 1, &img.surfaces[0].plane.data).unwrap();
     // Same reconstructed pixels as the YUY2 case above (only on-disk
     // byte order differs).

@@ -96,7 +96,7 @@
 
 use crate::bc6h::half_to_f32;
 use crate::error::{DdsError, Result};
-use crate::image::DdsPixelFormat;
+use crate::surface::SurfaceFormat;
 
 /// Read a little-endian `u16` at `off`.
 #[inline]
@@ -181,18 +181,18 @@ fn packed_float_to_f32(bits: u32, mantissa_bits: u32) -> f32 {
 /// floating-point layouts, and [`DdsError::InvalidData`] if `data` is
 /// shorter than the format requires.
 pub fn decode_float_surface(
-    pix: DdsPixelFormat,
+    pix: SurfaceFormat,
     width: u32,
     height: u32,
     data: &[u8],
 ) -> Result<Vec<f32>> {
     let (channels, half) = match pix {
-        DdsPixelFormat::R16Float => (1u32, true),
-        DdsPixelFormat::R16G16Float => (2, true),
-        DdsPixelFormat::R16G16B16A16Float => (4, true),
-        DdsPixelFormat::R32Float => (1, false),
-        DdsPixelFormat::R32G32Float => (2, false),
-        DdsPixelFormat::R32G32B32A32Float => (4, false),
+        SurfaceFormat::R16Float => (1u32, true),
+        SurfaceFormat::R16G16Float => (2, true),
+        SurfaceFormat::R16G16B16A16Float => (4, true),
+        SurfaceFormat::R32Float => (1, false),
+        SurfaceFormat::R32G32Float => (2, false),
+        SurfaceFormat::R32G32B32A32Float => (4, false),
         _ => {
             return Err(DdsError::unsupported(format!(
                 "decode_float_surface: {} is not a floating-point format",
@@ -241,7 +241,7 @@ pub fn decode_float_surface(
 /// crate does not scale them onto `[0, 1]` (see the crate-level docs
 /// for the documentation gap on the normalisation arithmetic).
 pub fn decode_rgba16_unorm_surface(width: u32, height: u32, data: &[u8]) -> Result<Vec<u16>> {
-    decode_rgba16_raw(DdsPixelFormat::R16G16B16A16Unorm, width, height, data)
+    decode_rgba16_raw(SurfaceFormat::R16G16B16A16Unorm, width, height, data)
 }
 
 /// Decode a tightly-packed `R16G16B16A16_SNORM` surface into a flat,
@@ -252,16 +252,11 @@ pub fn decode_rgba16_unorm_surface(width: u32, height: u32, data: &[u8]) -> Resu
 /// does not scale them onto `[-1, 1]` (see the crate-level docs for the
 /// documentation gap on the normalisation arithmetic).
 pub fn decode_rgba16_snorm_surface(width: u32, height: u32, data: &[u8]) -> Result<Vec<i16>> {
-    let raw = decode_rgba16_raw(DdsPixelFormat::R16G16B16A16Snorm, width, height, data)?;
+    let raw = decode_rgba16_raw(SurfaceFormat::R16G16B16A16Snorm, width, height, data)?;
     Ok(raw.into_iter().map(|u| u as i16).collect())
 }
 
-fn decode_rgba16_raw(
-    pix: DdsPixelFormat,
-    width: u32,
-    height: u32,
-    data: &[u8],
-) -> Result<Vec<u16>> {
+fn decode_rgba16_raw(pix: SurfaceFormat, width: u32, height: u32, data: &[u8]) -> Result<Vec<u16>> {
     let px = (width as usize)
         .checked_mul(height as usize)
         .ok_or_else(|| DdsError::invalid("decode_rgba16: dimension overflow"))?;
@@ -288,11 +283,11 @@ fn decode_rgba16_raw(
 }
 
 /// Channels carried by a 16-bit plain-integer format.
-fn uint16_channels(pix: DdsPixelFormat) -> Option<u32> {
+fn uint16_channels(pix: SurfaceFormat) -> Option<u32> {
     Some(match pix {
-        DdsPixelFormat::R16Uint | DdsPixelFormat::R16Sint => 1,
-        DdsPixelFormat::R16G16Uint | DdsPixelFormat::R16G16Sint => 2,
-        DdsPixelFormat::R16G16B16A16Uint | DdsPixelFormat::R16G16B16A16Sint => 4,
+        SurfaceFormat::R16Uint | SurfaceFormat::R16Sint => 1,
+        SurfaceFormat::R16G16Uint | SurfaceFormat::R16G16Sint => 2,
+        SurfaceFormat::R16G16B16A16Uint | SurfaceFormat::R16G16B16A16Sint => 4,
         _ => return None,
     })
 }
@@ -301,12 +296,7 @@ fn uint16_channels(pix: DdsPixelFormat) -> Option<u32> {
 /// integer surface (1, 2 or 4 channels per pixel) into a flat,
 /// interleaved, row-major buffer. Shared by the UINT and SINT paths;
 /// the SINT wrapper reinterprets the words as `i16`.
-fn decode_uint16_raw(
-    pix: DdsPixelFormat,
-    width: u32,
-    height: u32,
-    data: &[u8],
-) -> Result<Vec<u16>> {
+fn decode_uint16_raw(pix: SurfaceFormat, width: u32, height: u32, data: &[u8]) -> Result<Vec<u16>> {
     let channels = uint16_channels(pix).ok_or_else(|| {
         DdsError::unsupported(format!(
             "decode_uint16_surface: {} is not a 16-bit integer format",
@@ -349,13 +339,13 @@ fn decode_uint16_raw(
 /// [`DdsError::InvalidData`] when `data` is shorter than
 /// `width × height × channels × 2` bytes.
 pub fn decode_uint16_surface(
-    pix: DdsPixelFormat,
+    pix: SurfaceFormat,
     width: u32,
     height: u32,
     data: &[u8],
 ) -> Result<Vec<u16>> {
     match pix {
-        DdsPixelFormat::R16Uint | DdsPixelFormat::R16G16Uint | DdsPixelFormat::R16G16B16A16Uint => {
+        SurfaceFormat::R16Uint | SurfaceFormat::R16G16Uint | SurfaceFormat::R16G16B16A16Uint => {
             decode_uint16_raw(pix, width, height, data)
         }
         _ => Err(DdsError::unsupported(format!(
@@ -375,13 +365,13 @@ pub fn decode_uint16_surface(
 /// non-`_SINT` format and [`DdsError::InvalidData`] when `data` is
 /// shorter than `width × height × channels × 2` bytes.
 pub fn decode_sint16_surface(
-    pix: DdsPixelFormat,
+    pix: SurfaceFormat,
     width: u32,
     height: u32,
     data: &[u8],
 ) -> Result<Vec<i16>> {
     match pix {
-        DdsPixelFormat::R16Sint | DdsPixelFormat::R16G16Sint | DdsPixelFormat::R16G16B16A16Sint => {
+        SurfaceFormat::R16Sint | SurfaceFormat::R16G16Sint | SurfaceFormat::R16G16B16A16Sint => {
             let raw = decode_uint16_raw(pix, width, height, data)?;
             Ok(raw.into_iter().map(|u| u as i16).collect())
         }
@@ -393,11 +383,11 @@ pub fn decode_sint16_surface(
 }
 
 /// Channels carried by an 8-bit plain-integer format.
-fn uint8_channels(pix: DdsPixelFormat) -> Option<u32> {
+fn uint8_channels(pix: SurfaceFormat) -> Option<u32> {
     Some(match pix {
-        DdsPixelFormat::R8Uint | DdsPixelFormat::R8Sint => 1,
-        DdsPixelFormat::R8G8Uint | DdsPixelFormat::R8G8Sint => 2,
-        DdsPixelFormat::R8G8B8A8Uint | DdsPixelFormat::R8G8B8A8Sint => 4,
+        SurfaceFormat::R8Uint | SurfaceFormat::R8Sint => 1,
+        SurfaceFormat::R8G8Uint | SurfaceFormat::R8G8Sint => 2,
+        SurfaceFormat::R8G8B8A8Uint | SurfaceFormat::R8G8B8A8Sint => 4,
         _ => return None,
     })
 }
@@ -406,7 +396,7 @@ fn uint8_channels(pix: DdsPixelFormat) -> Option<u32> {
 /// (1, 2 or 4 channels per pixel) into a flat, interleaved, row-major
 /// buffer. Shared by the UINT and SINT paths; the SINT wrapper
 /// reinterprets the bytes as `i8`.
-fn decode_uint8_raw(pix: DdsPixelFormat, width: u32, height: u32, data: &[u8]) -> Result<Vec<u8>> {
+fn decode_uint8_raw(pix: SurfaceFormat, width: u32, height: u32, data: &[u8]) -> Result<Vec<u8>> {
     let channels = uint8_channels(pix).ok_or_else(|| {
         DdsError::unsupported(format!(
             "decode_uint8_surface: {} is not an 8-bit integer format",
@@ -441,13 +431,13 @@ fn decode_uint8_raw(pix: DdsPixelFormat, width: u32, height: u32, data: &[u8]) -
 /// non-`_UINT` format and [`DdsError::InvalidData`] when `data` is shorter
 /// than `width × height × channels` bytes.
 pub fn decode_uint8_surface(
-    pix: DdsPixelFormat,
+    pix: SurfaceFormat,
     width: u32,
     height: u32,
     data: &[u8],
 ) -> Result<Vec<u8>> {
     match pix {
-        DdsPixelFormat::R8Uint | DdsPixelFormat::R8G8Uint | DdsPixelFormat::R8G8B8A8Uint => {
+        SurfaceFormat::R8Uint | SurfaceFormat::R8G8Uint | SurfaceFormat::R8G8B8A8Uint => {
             decode_uint8_raw(pix, width, height, data)
         }
         _ => Err(DdsError::unsupported(format!(
@@ -467,13 +457,13 @@ pub fn decode_uint8_surface(
 /// non-`_SINT` format and [`DdsError::InvalidData`] when `data` is shorter
 /// than `width × height × channels` bytes.
 pub fn decode_sint8_surface(
-    pix: DdsPixelFormat,
+    pix: SurfaceFormat,
     width: u32,
     height: u32,
     data: &[u8],
 ) -> Result<Vec<i8>> {
     match pix {
-        DdsPixelFormat::R8Sint | DdsPixelFormat::R8G8Sint | DdsPixelFormat::R8G8B8A8Sint => {
+        SurfaceFormat::R8Sint | SurfaceFormat::R8G8Sint | SurfaceFormat::R8G8B8A8Sint => {
             let raw = decode_uint8_raw(pix, width, height, data)?;
             Ok(raw.into_iter().map(|u| u as i8).collect())
         }
@@ -485,12 +475,12 @@ pub fn decode_sint8_surface(
 }
 
 /// Channels carried by a 32-bit plain-integer format.
-fn uint32_channels(pix: DdsPixelFormat) -> Option<u32> {
+fn uint32_channels(pix: SurfaceFormat) -> Option<u32> {
     Some(match pix {
-        DdsPixelFormat::R32Uint | DdsPixelFormat::R32Sint => 1,
-        DdsPixelFormat::R32G32Uint | DdsPixelFormat::R32G32Sint => 2,
-        DdsPixelFormat::R32G32B32Uint | DdsPixelFormat::R32G32B32Sint => 3,
-        DdsPixelFormat::R32G32B32A32Uint | DdsPixelFormat::R32G32B32A32Sint => 4,
+        SurfaceFormat::R32Uint | SurfaceFormat::R32Sint => 1,
+        SurfaceFormat::R32G32Uint | SurfaceFormat::R32G32Sint => 2,
+        SurfaceFormat::R32G32B32Uint | SurfaceFormat::R32G32B32Sint => 3,
+        SurfaceFormat::R32G32B32A32Uint | SurfaceFormat::R32G32B32A32Sint => 4,
         _ => return None,
     })
 }
@@ -499,12 +489,7 @@ fn uint32_channels(pix: DdsPixelFormat) -> Option<u32> {
 /// integer surface (1, 2, 3 or 4 channels per pixel) into a flat,
 /// interleaved, row-major buffer. Shared by the UINT and SINT paths; the
 /// SINT wrapper reinterprets the words as `i32`.
-fn decode_uint32_raw(
-    pix: DdsPixelFormat,
-    width: u32,
-    height: u32,
-    data: &[u8],
-) -> Result<Vec<u32>> {
+fn decode_uint32_raw(pix: SurfaceFormat, width: u32, height: u32, data: &[u8]) -> Result<Vec<u32>> {
     let channels = uint32_channels(pix).ok_or_else(|| {
         DdsError::unsupported(format!(
             "decode_uint32_surface: {} is not a 32-bit integer format",
@@ -547,16 +532,16 @@ fn decode_uint32_raw(
 /// [`DdsError::InvalidData`] when `data` is shorter than
 /// `width × height × channels × 4` bytes.
 pub fn decode_uint32_surface(
-    pix: DdsPixelFormat,
+    pix: SurfaceFormat,
     width: u32,
     height: u32,
     data: &[u8],
 ) -> Result<Vec<u32>> {
     match pix {
-        DdsPixelFormat::R32Uint
-        | DdsPixelFormat::R32G32Uint
-        | DdsPixelFormat::R32G32B32Uint
-        | DdsPixelFormat::R32G32B32A32Uint => decode_uint32_raw(pix, width, height, data),
+        SurfaceFormat::R32Uint
+        | SurfaceFormat::R32G32Uint
+        | SurfaceFormat::R32G32B32Uint
+        | SurfaceFormat::R32G32B32A32Uint => decode_uint32_raw(pix, width, height, data),
         _ => Err(DdsError::unsupported(format!(
             "decode_uint32_surface: {} is not a 32-bit unsigned-integer format",
             pix.name()
@@ -574,16 +559,16 @@ pub fn decode_uint32_surface(
 /// non-`_SINT` format and [`DdsError::InvalidData`] when `data` is shorter
 /// than `width × height × channels × 4` bytes.
 pub fn decode_sint32_surface(
-    pix: DdsPixelFormat,
+    pix: SurfaceFormat,
     width: u32,
     height: u32,
     data: &[u8],
 ) -> Result<Vec<i32>> {
     match pix {
-        DdsPixelFormat::R32Sint
-        | DdsPixelFormat::R32G32Sint
-        | DdsPixelFormat::R32G32B32Sint
-        | DdsPixelFormat::R32G32B32A32Sint => {
+        SurfaceFormat::R32Sint
+        | SurfaceFormat::R32G32Sint
+        | SurfaceFormat::R32G32B32Sint
+        | SurfaceFormat::R32G32B32A32Sint => {
             let raw = decode_uint32_raw(pix, width, height, data)?;
             Ok(raw.into_iter().map(|u| u as i32).collect())
         }
@@ -596,14 +581,14 @@ pub fn decode_sint32_surface(
 
 /// Channels and per-channel bit width for a normalised single- / dual-
 /// channel layout. `None` for any other format.
-fn norm_layout(pix: DdsPixelFormat) -> Option<(usize, u32)> {
+fn norm_layout(pix: SurfaceFormat) -> Option<(usize, u32)> {
     Some(match pix {
         // (channels, bits-per-channel)
-        DdsPixelFormat::R8Unorm | DdsPixelFormat::L8 | DdsPixelFormat::R8Snorm => (1, 8),
-        DdsPixelFormat::R8G8Snorm => (2, 8),
-        DdsPixelFormat::R8G8B8A8Snorm => (4, 8),
-        DdsPixelFormat::R16Unorm | DdsPixelFormat::R16Snorm => (1, 16),
-        DdsPixelFormat::R16G16Unorm | DdsPixelFormat::R16G16Snorm => (2, 16),
+        SurfaceFormat::R8Unorm | SurfaceFormat::L8 | SurfaceFormat::R8Snorm => (1, 8),
+        SurfaceFormat::R8G8Snorm => (2, 8),
+        SurfaceFormat::R8G8B8A8Snorm => (4, 8),
+        SurfaceFormat::R16Unorm | SurfaceFormat::R16Snorm => (1, 16),
+        SurfaceFormat::R16G16Unorm | SurfaceFormat::R16G16Snorm => (2, 16),
         _ => return None,
     })
 }
@@ -625,7 +610,7 @@ fn read_norm_sample(data: &[u8], off: usize, bits: u32) -> u32 {
 /// clamped so both the minimum and second-minimum encodings map to
 /// `-1.0`, range `[-1, 1]`).
 fn decode_norm_raw(
-    pix: DdsPixelFormat,
+    pix: SurfaceFormat,
     width: u32,
     height: u32,
     data: &[u8],
@@ -684,20 +669,20 @@ fn decode_norm_raw(
 /// Each stored unsigned integer is mapped onto `[0, 1]` by dividing by
 /// `2^bits − 1` (all-zero → `0.0`, all-one → `1.0`), the DXGI UNORM rule.
 /// `R8_UNORM` shares its byte layout with the legacy `L8` luminance
-/// format, so [`DdsPixelFormat::L8`] is accepted here too. Returns
+/// format, so [`SurfaceFormat::L8`] is accepted here too. Returns
 /// [`DdsError::Unsupported`] for a non-UNORM format and
 /// [`DdsError::InvalidData`] when `data` is shorter than the surface needs.
 pub fn decode_unorm_surface(
-    pix: DdsPixelFormat,
+    pix: SurfaceFormat,
     width: u32,
     height: u32,
     data: &[u8],
 ) -> Result<Vec<f32>> {
     match pix {
-        DdsPixelFormat::R8Unorm
-        | DdsPixelFormat::L8
-        | DdsPixelFormat::R16Unorm
-        | DdsPixelFormat::R16G16Unorm => {
+        SurfaceFormat::R8Unorm
+        | SurfaceFormat::L8
+        | SurfaceFormat::R16Unorm
+        | SurfaceFormat::R16G16Unorm => {
             decode_norm_raw(pix, width, height, data, false, "decode_unorm_surface")
         }
         _ => Err(DdsError::unsupported(format!(
@@ -720,17 +705,17 @@ pub fn decode_unorm_surface(
 /// [`DdsError::Unsupported`] for a non-SNORM format and
 /// [`DdsError::InvalidData`] when `data` is shorter than the surface needs.
 pub fn decode_snorm_surface(
-    pix: DdsPixelFormat,
+    pix: SurfaceFormat,
     width: u32,
     height: u32,
     data: &[u8],
 ) -> Result<Vec<f32>> {
     match pix {
-        DdsPixelFormat::R8Snorm
-        | DdsPixelFormat::R8G8Snorm
-        | DdsPixelFormat::R8G8B8A8Snorm
-        | DdsPixelFormat::R16Snorm
-        | DdsPixelFormat::R16G16Snorm => {
+        SurfaceFormat::R8Snorm
+        | SurfaceFormat::R8G8Snorm
+        | SurfaceFormat::R8G8B8A8Snorm
+        | SurfaceFormat::R16Snorm
+        | SurfaceFormat::R16G16Snorm => {
             decode_norm_raw(pix, width, height, data, true, "decode_snorm_surface")
         }
         _ => Err(DdsError::unsupported(format!(
@@ -748,7 +733,7 @@ pub fn decode_snorm_surface(
 /// G bits 11..=21, and B bits 22..=31. Each channel is an unsigned
 /// partial-precision float (5-bit biased-by-15 exponent, no sign bit;
 /// 6-bit mantissa for R and G, 5-bit mantissa for B) widened to `f32`
-/// by [`packed_float_to_f32`].
+/// by the private `packed_float_to_f32` helper.
 ///
 /// `data` must be at least `width × height × 4` bytes. Returns
 /// [`DdsError::InvalidData`] if it is shorter.
@@ -1229,7 +1214,7 @@ mod tests {
         let mut data = Vec::new();
         data.extend_from_slice(&1.0f32.to_le_bytes());
         data.extend_from_slice(&(-2.5f32).to_le_bytes());
-        let out = decode_float_surface(DdsPixelFormat::R32Float, 1, 2, &data).unwrap();
+        let out = decode_float_surface(SurfaceFormat::R32Float, 1, 2, &data).unwrap();
         assert_eq!(out, vec![1.0, -2.5]);
     }
 
@@ -1240,7 +1225,7 @@ mod tests {
         for v in [1.0f32, 2.0, 3.0, 4.0] {
             data.extend_from_slice(&v.to_le_bytes());
         }
-        let out = decode_float_surface(DdsPixelFormat::R32G32B32A32Float, 1, 1, &data).unwrap();
+        let out = decode_float_surface(SurfaceFormat::R32G32B32A32Float, 1, 1, &data).unwrap();
         assert_eq!(out, vec![1.0, 2.0, 3.0, 4.0]);
     }
 
@@ -1251,7 +1236,7 @@ mod tests {
         for h in [0x3c00u16, 0x3800, 0x0000] {
             data.extend_from_slice(&h.to_le_bytes());
         }
-        let out = decode_float_surface(DdsPixelFormat::R16Float, 1, 3, &data).unwrap();
+        let out = decode_float_surface(SurfaceFormat::R16Float, 1, 3, &data).unwrap();
         assert_eq!(out, vec![1.0, 0.5, 0.0]);
     }
 
@@ -1262,7 +1247,7 @@ mod tests {
         for h in [0x3c00u16, 0x3800, 0x0000, 0x3c00] {
             data.extend_from_slice(&h.to_le_bytes());
         }
-        let out = decode_float_surface(DdsPixelFormat::R16G16B16A16Float, 1, 1, &data).unwrap();
+        let out = decode_float_surface(SurfaceFormat::R16G16B16A16Float, 1, 1, &data).unwrap();
         assert_eq!(out, vec![1.0, 0.5, 0.0, 1.0]);
     }
 
@@ -1290,7 +1275,7 @@ mod tests {
     #[test]
     fn truncated_input_is_invalid() {
         let data = [0u8; 3];
-        let err = decode_float_surface(DdsPixelFormat::R32Float, 1, 1, &data).unwrap_err();
+        let err = decode_float_surface(SurfaceFormat::R32Float, 1, 1, &data).unwrap_err();
         assert!(matches!(err, DdsError::InvalidData(_)));
     }
 
@@ -1376,7 +1361,7 @@ mod tests {
     #[test]
     fn non_float_format_is_unsupported() {
         let data = [0u8; 64];
-        let err = decode_float_surface(DdsPixelFormat::A8R8G8B8, 1, 1, &data).unwrap_err();
+        let err = decode_float_surface(SurfaceFormat::A8R8G8B8, 1, 1, &data).unwrap_err();
         assert!(matches!(err, DdsError::Unsupported(_)));
     }
 
@@ -1625,7 +1610,7 @@ mod tests {
     fn r16_uint_single_channel_row_major() {
         // 2x1 R16_UINT: little-endian words 0x0102, 0xfffe.
         let data = [0x02u8, 0x01, 0xfe, 0xff];
-        let out = decode_uint16_surface(DdsPixelFormat::R16Uint, 2, 1, &data).unwrap();
+        let out = decode_uint16_surface(SurfaceFormat::R16Uint, 2, 1, &data).unwrap();
         assert_eq!(out, vec![0x0102, 0xfffe]);
     }
 
@@ -1633,7 +1618,7 @@ mod tests {
     fn r16g16_uint_two_channels() {
         // One pixel, R=0x1234, G=0x5678.
         let data = [0x34u8, 0x12, 0x78, 0x56];
-        let out = decode_uint16_surface(DdsPixelFormat::R16G16Uint, 1, 1, &data).unwrap();
+        let out = decode_uint16_surface(SurfaceFormat::R16G16Uint, 1, 1, &data).unwrap();
         assert_eq!(out, vec![0x1234, 0x5678]);
     }
 
@@ -1644,7 +1629,7 @@ mod tests {
         for v in [1u16, 2, 3, 4, 5, 6, 7, 8] {
             data.extend_from_slice(&v.to_le_bytes());
         }
-        let out = decode_uint16_surface(DdsPixelFormat::R16G16B16A16Uint, 2, 1, &data).unwrap();
+        let out = decode_uint16_surface(SurfaceFormat::R16G16B16A16Uint, 2, 1, &data).unwrap();
         assert_eq!(out, vec![1, 2, 3, 4, 5, 6, 7, 8]);
     }
 
@@ -1652,7 +1637,7 @@ mod tests {
     fn r16_sint_sign_interpretation() {
         // 0xffff -> -1, 0x8000 -> i16::MIN, 0x7fff -> i16::MAX.
         let data = [0xffu8, 0xff, 0x00, 0x80, 0xff, 0x7f];
-        let out = decode_sint16_surface(DdsPixelFormat::R16Sint, 3, 1, &data).unwrap();
+        let out = decode_sint16_surface(SurfaceFormat::R16Sint, 3, 1, &data).unwrap();
         assert_eq!(out, vec![-1, i16::MIN, i16::MAX]);
     }
 
@@ -1663,24 +1648,24 @@ mod tests {
         for v in [-2i16, 2, i16::MIN, i16::MAX] {
             data.extend_from_slice(&v.to_le_bytes());
         }
-        let out = decode_sint16_surface(DdsPixelFormat::R16G16B16A16Sint, 1, 1, &data).unwrap();
+        let out = decode_sint16_surface(SurfaceFormat::R16G16B16A16Sint, 1, 1, &data).unwrap();
         assert_eq!(out, vec![-2, 2, i16::MIN, i16::MAX]);
     }
 
     #[test]
     fn uint16_rejects_non_uint_format() {
         let data = [0u8; 8];
-        let err = decode_uint16_surface(DdsPixelFormat::R16Sint, 1, 1, &data).unwrap_err();
+        let err = decode_uint16_surface(SurfaceFormat::R16Sint, 1, 1, &data).unwrap_err();
         assert!(matches!(err, DdsError::Unsupported(_)));
         // A float format is likewise rejected.
-        let err = decode_uint16_surface(DdsPixelFormat::R16Float, 1, 1, &data).unwrap_err();
+        let err = decode_uint16_surface(SurfaceFormat::R16Float, 1, 1, &data).unwrap_err();
         assert!(matches!(err, DdsError::Unsupported(_)));
     }
 
     #[test]
     fn sint16_rejects_non_sint_format() {
         let data = [0u8; 8];
-        let err = decode_sint16_surface(DdsPixelFormat::R16Uint, 1, 1, &data).unwrap_err();
+        let err = decode_sint16_surface(SurfaceFormat::R16Uint, 1, 1, &data).unwrap_err();
         assert!(matches!(err, DdsError::Unsupported(_)));
     }
 
@@ -1688,7 +1673,7 @@ mod tests {
     fn uint16_truncated_input_is_invalid() {
         // 2x2 R16G16B16A16_UINT needs 4 px * 4 ch * 2 = 32 bytes; give 31.
         let data = [0u8; 31];
-        let err = decode_uint16_surface(DdsPixelFormat::R16G16B16A16Uint, 2, 2, &data).unwrap_err();
+        let err = decode_uint16_surface(SurfaceFormat::R16G16B16A16Uint, 2, 2, &data).unwrap_err();
         assert!(matches!(err, DdsError::InvalidData(_)));
     }
 
@@ -1698,7 +1683,7 @@ mod tests {
     fn r8_uint_single_channel_row_major() {
         // 3x1 R8_UINT: bytes 1, 200, 255.
         let data = [1u8, 200, 255];
-        let out = decode_uint8_surface(DdsPixelFormat::R8Uint, 3, 1, &data).unwrap();
+        let out = decode_uint8_surface(SurfaceFormat::R8Uint, 3, 1, &data).unwrap();
         assert_eq!(out, vec![1, 200, 255]);
     }
 
@@ -1706,7 +1691,7 @@ mod tests {
     fn r8g8_uint_two_channels() {
         // One pixel, R=0x12, G=0x34.
         let data = [0x12u8, 0x34];
-        let out = decode_uint8_surface(DdsPixelFormat::R8G8Uint, 1, 1, &data).unwrap();
+        let out = decode_uint8_surface(SurfaceFormat::R8G8Uint, 1, 1, &data).unwrap();
         assert_eq!(out, vec![0x12, 0x34]);
     }
 
@@ -1714,7 +1699,7 @@ mod tests {
     fn r8g8b8a8_uint_four_channels_row_major() {
         // Two pixels: (1,2,3,4) then (5,6,7,8).
         let data = [1u8, 2, 3, 4, 5, 6, 7, 8];
-        let out = decode_uint8_surface(DdsPixelFormat::R8G8B8A8Uint, 2, 1, &data).unwrap();
+        let out = decode_uint8_surface(SurfaceFormat::R8G8B8A8Uint, 2, 1, &data).unwrap();
         assert_eq!(out, vec![1, 2, 3, 4, 5, 6, 7, 8]);
     }
 
@@ -1722,7 +1707,7 @@ mod tests {
     fn r8_sint_sign_interpretation() {
         // 0xff -> -1, 0x80 -> i8::MIN, 0x7f -> i8::MAX.
         let data = [0xffu8, 0x80, 0x7f];
-        let out = decode_sint8_surface(DdsPixelFormat::R8Sint, 3, 1, &data).unwrap();
+        let out = decode_sint8_surface(SurfaceFormat::R8Sint, 3, 1, &data).unwrap();
         assert_eq!(out, vec![-1, i8::MIN, i8::MAX]);
     }
 
@@ -1730,23 +1715,23 @@ mod tests {
     fn r8g8b8a8_sint_four_channels() {
         // One pixel: R=-2, G=2, B=-128, A=127.
         let data = [(-2i8) as u8, 2, (i8::MIN) as u8, (i8::MAX) as u8];
-        let out = decode_sint8_surface(DdsPixelFormat::R8G8B8A8Sint, 1, 1, &data).unwrap();
+        let out = decode_sint8_surface(SurfaceFormat::R8G8B8A8Sint, 1, 1, &data).unwrap();
         assert_eq!(out, vec![-2, 2, i8::MIN, i8::MAX]);
     }
 
     #[test]
     fn uint8_rejects_non_uint_format() {
         let data = [0u8; 8];
-        let err = decode_uint8_surface(DdsPixelFormat::R8Sint, 1, 1, &data).unwrap_err();
+        let err = decode_uint8_surface(SurfaceFormat::R8Sint, 1, 1, &data).unwrap_err();
         assert!(matches!(err, DdsError::Unsupported(_)));
-        let err = decode_uint8_surface(DdsPixelFormat::R16Uint, 1, 1, &data).unwrap_err();
+        let err = decode_uint8_surface(SurfaceFormat::R16Uint, 1, 1, &data).unwrap_err();
         assert!(matches!(err, DdsError::Unsupported(_)));
     }
 
     #[test]
     fn sint8_rejects_non_sint_format() {
         let data = [0u8; 8];
-        let err = decode_sint8_surface(DdsPixelFormat::R8Uint, 1, 1, &data).unwrap_err();
+        let err = decode_sint8_surface(SurfaceFormat::R8Uint, 1, 1, &data).unwrap_err();
         assert!(matches!(err, DdsError::Unsupported(_)));
     }
 
@@ -1754,7 +1739,7 @@ mod tests {
     fn uint8_truncated_input_is_invalid() {
         // 2x2 R8G8B8A8_UINT needs 4 px * 4 ch = 16 bytes; give 15.
         let data = [0u8; 15];
-        let err = decode_uint8_surface(DdsPixelFormat::R8G8B8A8Uint, 2, 2, &data).unwrap_err();
+        let err = decode_uint8_surface(SurfaceFormat::R8G8B8A8Uint, 2, 2, &data).unwrap_err();
         assert!(matches!(err, DdsError::InvalidData(_)));
     }
 
@@ -1767,7 +1752,7 @@ mod tests {
         for v in [0x0102_0304u32, 0xffff_fffe] {
             data.extend_from_slice(&v.to_le_bytes());
         }
-        let out = decode_uint32_surface(DdsPixelFormat::R32Uint, 2, 1, &data).unwrap();
+        let out = decode_uint32_surface(SurfaceFormat::R32Uint, 2, 1, &data).unwrap();
         assert_eq!(out, vec![0x0102_0304, 0xffff_fffe]);
     }
 
@@ -1778,7 +1763,7 @@ mod tests {
         for v in [0x1234_5678u32, 0x9abc_def0] {
             data.extend_from_slice(&v.to_le_bytes());
         }
-        let out = decode_uint32_surface(DdsPixelFormat::R32G32Uint, 1, 1, &data).unwrap();
+        let out = decode_uint32_surface(SurfaceFormat::R32G32Uint, 1, 1, &data).unwrap();
         assert_eq!(out, vec![0x1234_5678, 0x9abc_def0]);
     }
 
@@ -1790,7 +1775,7 @@ mod tests {
         for v in [1u32, 2, 3] {
             data.extend_from_slice(&v.to_le_bytes());
         }
-        let out = decode_uint32_surface(DdsPixelFormat::R32G32B32Uint, 1, 1, &data).unwrap();
+        let out = decode_uint32_surface(SurfaceFormat::R32G32B32Uint, 1, 1, &data).unwrap();
         assert_eq!(out, vec![1, 2, 3]);
     }
 
@@ -1801,7 +1786,7 @@ mod tests {
         for v in [1u32, 2, 3, 4, 5, 6, 7, 8] {
             data.extend_from_slice(&v.to_le_bytes());
         }
-        let out = decode_uint32_surface(DdsPixelFormat::R32G32B32A32Uint, 2, 1, &data).unwrap();
+        let out = decode_uint32_surface(SurfaceFormat::R32G32B32A32Uint, 2, 1, &data).unwrap();
         assert_eq!(out, vec![1, 2, 3, 4, 5, 6, 7, 8]);
     }
 
@@ -1812,7 +1797,7 @@ mod tests {
         for v in [0xffff_ffffu32, 0x8000_0000, 0x7fff_ffff] {
             data.extend_from_slice(&v.to_le_bytes());
         }
-        let out = decode_sint32_surface(DdsPixelFormat::R32Sint, 3, 1, &data).unwrap();
+        let out = decode_sint32_surface(SurfaceFormat::R32Sint, 3, 1, &data).unwrap();
         assert_eq!(out, vec![-1, i32::MIN, i32::MAX]);
     }
 
@@ -1823,7 +1808,7 @@ mod tests {
         for v in [-2i32, 2, i32::MIN, i32::MAX] {
             data.extend_from_slice(&v.to_le_bytes());
         }
-        let out = decode_sint32_surface(DdsPixelFormat::R32G32B32A32Sint, 1, 1, &data).unwrap();
+        let out = decode_sint32_surface(SurfaceFormat::R32G32B32A32Sint, 1, 1, &data).unwrap();
         assert_eq!(out, vec![-2, 2, i32::MIN, i32::MAX]);
     }
 
@@ -1834,23 +1819,23 @@ mod tests {
         for v in [-1i32, 0, i32::MAX] {
             data.extend_from_slice(&v.to_le_bytes());
         }
-        let out = decode_sint32_surface(DdsPixelFormat::R32G32B32Sint, 1, 1, &data).unwrap();
+        let out = decode_sint32_surface(SurfaceFormat::R32G32B32Sint, 1, 1, &data).unwrap();
         assert_eq!(out, vec![-1, 0, i32::MAX]);
     }
 
     #[test]
     fn uint32_rejects_non_uint_format() {
         let data = [0u8; 16];
-        let err = decode_uint32_surface(DdsPixelFormat::R32Sint, 1, 1, &data).unwrap_err();
+        let err = decode_uint32_surface(SurfaceFormat::R32Sint, 1, 1, &data).unwrap_err();
         assert!(matches!(err, DdsError::Unsupported(_)));
-        let err = decode_uint32_surface(DdsPixelFormat::R32Float, 1, 1, &data).unwrap_err();
+        let err = decode_uint32_surface(SurfaceFormat::R32Float, 1, 1, &data).unwrap_err();
         assert!(matches!(err, DdsError::Unsupported(_)));
     }
 
     #[test]
     fn sint32_rejects_non_sint_format() {
         let data = [0u8; 16];
-        let err = decode_sint32_surface(DdsPixelFormat::R32Uint, 1, 1, &data).unwrap_err();
+        let err = decode_sint32_surface(SurfaceFormat::R32Uint, 1, 1, &data).unwrap_err();
         assert!(matches!(err, DdsError::Unsupported(_)));
     }
 
@@ -1858,7 +1843,7 @@ mod tests {
     fn uint32_truncated_input_is_invalid() {
         // 1x1 R32G32B32A32_UINT needs 4 ch * 4 = 16 bytes; give 15.
         let data = [0u8; 15];
-        let err = decode_uint32_surface(DdsPixelFormat::R32G32B32A32Uint, 1, 1, &data).unwrap_err();
+        let err = decode_uint32_surface(SurfaceFormat::R32G32B32A32Uint, 1, 1, &data).unwrap_err();
         assert!(matches!(err, DdsError::InvalidData(_)));
     }
 }

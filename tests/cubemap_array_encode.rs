@@ -1,7 +1,7 @@
 //! Round 375: uncompressed cubemap / texture-array encode round-trips.
 //!
 //! `encode_dds_uncompressed_cubemap_array` writes a cubemap or DX10
-//! texture array from a pre-populated `DdsImage::surfaces` list (in the
+//! texture array from a pre-populated `DdsFile::surfaces` list (in the
 //! mandated slice → face → mip order). Legacy-mask single cubemaps use
 //! the legacy header with all six face-presence bits; texture arrays and
 //! DX10-only formats use the `DDS_HEADER_DXT10` extension. Each path
@@ -12,8 +12,8 @@
 //! learn.microsoft.com. No external library source consulted.
 
 use oxideav_dds::{
-    encode_dds_uncompressed_cubemap_array, parse_dds, CubemapFace, DdsImage, DdsPixelFormat,
-    DdsPlane, DdsSurface, DxgiFormat,
+    encode_dds_uncompressed_cubemap_array, parse_dds, CubemapFace, DdsFile, DdsSurface, DxgiFormat,
+    Plane, SurfaceFormat,
 };
 
 /// Build per-(slice, face, mip) surfaces, each filled with a distinct
@@ -21,7 +21,7 @@ use oxideav_dds::{
 fn build_surfaces(
     width: u32,
     height: u32,
-    pix: DdsPixelFormat,
+    pix: SurfaceFormat,
     is_cubemap: bool,
     array_size: u32,
     mip_count: u32,
@@ -41,18 +41,12 @@ fn build_surfaces(
                 let mw = (width >> m).max(1);
                 let mh = (height >> m).max(1);
                 let data = vec![tag; (mw * mh * bpp) as usize];
-                surfaces.push(DdsSurface {
-                    width: mw,
-                    height: mh,
-                    mip_level: m,
-                    array_slice: slice,
-                    face,
-                    depth_slice: 0,
-                    plane: DdsPlane {
-                        stride: (mw * bpp) as usize,
-                        data,
-                    },
-                });
+                surfaces.push(
+                    DdsSurface::new(mw, mh, Plane::new((mw * bpp) as usize, data))
+                        .with_mip_level(m)
+                        .with_array_slice(slice)
+                        .with_face(face),
+                );
                 tag = tag.wrapping_add(1);
             }
         }
@@ -63,31 +57,22 @@ fn build_surfaces(
 fn make_image(
     width: u32,
     height: u32,
-    pix: DdsPixelFormat,
+    pix: SurfaceFormat,
     is_cubemap: bool,
     array_size: u32,
     mip_count: u32,
-) -> DdsImage {
+) -> DdsFile {
     let surfaces = build_surfaces(width, height, pix, is_cubemap, array_size, mip_count);
-    DdsImage {
-        width,
-        height,
-        pixel_format: pix,
-        planes: vec![surfaces[0].plane.clone()],
-        surfaces,
-        pts: None,
-        mip_map_count: mip_count,
-        has_dxt10_header: false,
-        dxgi_format: None,
-        is_cubemap,
-        array_size,
-        depth: 1,
-    }
+    DdsFile::new(width, height, pix, surfaces)
+        .unwrap()
+        .with_mip_map_count(mip_count)
+        .with_cubemap(is_cubemap)
+        .with_array_size(array_size)
 }
 
 #[test]
 fn roundtrip_legacy_cubemap_single_mip() {
-    let pix = DdsPixelFormat::A8R8G8B8;
+    let pix = SurfaceFormat::A8R8G8B8;
     let img = make_image(4, 4, pix, true, 1, 1);
     let orig = img.surfaces.clone();
 
@@ -107,7 +92,7 @@ fn roundtrip_legacy_cubemap_single_mip() {
 #[test]
 fn roundtrip_legacy_cubemap_with_mips() {
     // 8x8 cubemap, 4 mips → 6 faces × 4 mips = 24 surfaces.
-    let pix = DdsPixelFormat::A8R8G8B8;
+    let pix = SurfaceFormat::A8R8G8B8;
     let img = make_image(8, 8, pix, true, 1, 4);
     let orig = img.surfaces.clone();
     assert_eq!(orig.len(), 24);
@@ -130,7 +115,7 @@ fn roundtrip_legacy_cubemap_with_mips() {
 fn roundtrip_dx10_texture_array() {
     // 4x4 R8G8B8A8 array of 3 slices, single mip. array_size > 1 forces
     // the DX10 extension header.
-    let pix = DdsPixelFormat::A8B8G8R8;
+    let pix = SurfaceFormat::A8B8G8R8;
     let img = make_image(4, 4, pix, false, 3, 1);
     let orig = img.surfaces.clone();
 
@@ -151,7 +136,7 @@ fn roundtrip_dx10_texture_array() {
 fn roundtrip_dx10_only_format_cubemap() {
     // A DX10-only format (R16G16B16A16_FLOAT) cubemap → DX10 header with
     // TEXTURECUBE misc flag.
-    let pix = DdsPixelFormat::R16G16B16A16Float;
+    let pix = SurfaceFormat::R16G16B16A16Float;
     let img = make_image(4, 4, pix, true, 1, 1);
     let orig = img.surfaces.clone();
 
@@ -172,7 +157,7 @@ fn roundtrip_dx10_only_format_cubemap() {
 #[test]
 fn roundtrip_cube_array() {
     // Cube array: 2 cubes × 6 faces × 1 mip = 12 surfaces.
-    let pix = DdsPixelFormat::A8B8G8R8;
+    let pix = SurfaceFormat::A8B8G8R8;
     let img = make_image(4, 4, pix, true, 2, 1);
     let orig = img.surfaces.clone();
     assert_eq!(orig.len(), 12);
@@ -192,7 +177,7 @@ fn roundtrip_cube_array() {
 
 #[test]
 fn rejects_plain_2d() {
-    let pix = DdsPixelFormat::A8R8G8B8;
+    let pix = SurfaceFormat::A8R8G8B8;
     let img = make_image(4, 4, pix, false, 1, 1);
     assert!(
         encode_dds_uncompressed_cubemap_array(&img).is_err(),
@@ -202,8 +187,8 @@ fn rejects_plain_2d() {
 
 #[test]
 fn rejects_block_compressed() {
-    let mut img = make_image(4, 4, DdsPixelFormat::A8R8G8B8, true, 1, 1);
-    img.pixel_format = DdsPixelFormat::Bc1;
+    let mut img = make_image(4, 4, SurfaceFormat::A8R8G8B8, true, 1, 1);
+    img.pixel_format = SurfaceFormat::Bc1;
     assert!(
         encode_dds_uncompressed_cubemap_array(&img).is_err(),
         "BC format must be rejected"

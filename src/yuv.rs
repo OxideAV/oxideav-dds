@@ -61,7 +61,7 @@ fn read_u32_le(buf: &[u8], off: usize) -> u32 {
 }
 
 /// Chroma-subsampling family of a YUV DXGI format.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum YuvSampling {
     /// 4:4:4 — chroma sampled at full resolution (one U/V per pixel).
     S444,
@@ -98,7 +98,7 @@ impl YuvSampling {
 }
 
 /// The set of YUV DXGI formats this module decodes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum YuvFormat {
     /// `DXGI_FORMAT_AYUV` (100): 8-bit 4:4:4 packed, V→R8 U→G8 Y→B8 A→A8.
     Ayuv,

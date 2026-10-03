@@ -16,7 +16,7 @@ use oxideav_dds::types::{
 };
 use oxideav_dds::{
     decode_bc1, decode_bc2, decode_bc3, decode_bc4_unorm, decode_bc5_unorm, parse_dds,
-    DdsPixelFormat,
+    SurfaceFormat,
 };
 
 /// Build a minimal legacy DDS file with a `DDPF_FOURCC` pixel format
@@ -59,7 +59,7 @@ fn bc1_decompress_solid_white_4x4() {
     let block: [u8; 8] = [0xff, 0xff, 0x00, 0x00, 0, 0, 0, 0];
     let bytes = build_fourcc_dds(FOURCC_DXT1, 4, 4, &block);
     let img = parse_dds(&bytes).unwrap();
-    assert_eq!(img.pixel_format, DdsPixelFormat::Bc1);
+    assert_eq!(img.pixel_format, SurfaceFormat::Bc1);
     assert_eq!(img.surfaces.len(), 1);
 
     let mut rgba = vec![0u8; 4 * 4 * 4];
@@ -114,7 +114,7 @@ fn bc2_decompress_explicit_alpha_block() {
 
     let bytes = build_fourcc_dds(FOURCC_DXT3, 4, 4, &payload);
     let img = parse_dds(&bytes).unwrap();
-    assert_eq!(img.pixel_format, DdsPixelFormat::Bc2);
+    assert_eq!(img.pixel_format, SurfaceFormat::Bc2);
     let mut rgba = vec![0u8; 4 * 4 * 4];
     decode_bc2(&img.surfaces[0].plane.data, 4, 4, &mut rgba).unwrap();
     for (i, chunk) in rgba.chunks_exact(4).enumerate() {
@@ -132,7 +132,7 @@ fn bc3_decompress_interpolated_alpha_block() {
 
     let bytes = build_fourcc_dds(FOURCC_DXT5, 4, 4, &payload);
     let img = parse_dds(&bytes).unwrap();
-    assert_eq!(img.pixel_format, DdsPixelFormat::Bc3);
+    assert_eq!(img.pixel_format, SurfaceFormat::Bc3);
     let mut rgba = vec![0u8; 4 * 4 * 4];
     decode_bc3(&img.surfaces[0].plane.data, 4, 4, &mut rgba).unwrap();
     for chunk in rgba.chunks_exact(4) {
@@ -146,7 +146,7 @@ fn bc4_decompress_solid_red_4x4() {
     let payload: [u8; 8] = [200, 100, 0, 0, 0, 0, 0, 0];
     let bytes = build_fourcc_dds(FOURCC_BC4U, 4, 4, &payload);
     let img = parse_dds(&bytes).unwrap();
-    assert_eq!(img.pixel_format, DdsPixelFormat::Bc4Unorm);
+    assert_eq!(img.pixel_format, SurfaceFormat::Bc4Unorm);
     let mut r = vec![0u8; 4 * 4];
     decode_bc4_unorm(&img.surfaces[0].plane.data, 4, 4, &mut r).unwrap();
     for &v in r.iter() {
@@ -162,7 +162,7 @@ fn bc5_decompress_two_channel_4x4() {
     payload.extend_from_slice(&[50, 25, 0, 0, 0, 0, 0, 0]); // G
     let bytes = build_fourcc_dds(FOURCC_BC5U, 4, 4, &payload);
     let img = parse_dds(&bytes).unwrap();
-    assert_eq!(img.pixel_format, DdsPixelFormat::Bc5Unorm);
+    assert_eq!(img.pixel_format, SurfaceFormat::Bc5Unorm);
     let mut rg = vec![0u8; 4 * 4 * 2];
     decode_bc5_unorm(&img.surfaces[0].plane.data, 4, 4, &mut rg).unwrap();
     for pair in rg.chunks_exact(2) {

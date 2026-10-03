@@ -3,7 +3,7 @@
 //! Each test builds a minimal DDS file with the relevant
 //! `caps2 / mip_map_count / array_size` combination, parses it via
 //! [`oxideav_dds::parse_dds`], and asserts the resulting
-//! [`oxideav_dds::DdsImage::surfaces`] vector has the right shape
+//! [`oxideav_dds::DdsFile::surfaces`] vector has the right shape
 //! (surface count, per-surface (mip_level, array_slice, face) tag,
 //! per-surface dimensions).
 
@@ -12,7 +12,7 @@ use oxideav_dds::types::{
     DDSD_REQUIRED, DDS_HEADER_SIZE, DDS_MAGIC, DDS_PIXELFORMAT_SIZE, DDS_RESOURCE_MISC_TEXTURECUBE,
     FOURCC_DX10, FOURCC_DXT1,
 };
-use oxideav_dds::{parse_dds, CubemapFace, DdsPixelFormat};
+use oxideav_dds::{parse_dds, CubemapFace, SurfaceFormat};
 
 fn push_pixel_format_a8r8g8b8(out: &mut Vec<u8>) {
     out.extend_from_slice(&(DDS_PIXELFORMAT_SIZE as u32).to_le_bytes());
@@ -319,5 +319,5 @@ fn no_mipmaps_no_cubemap_yields_single_surface() {
     assert_eq!(img.surfaces[0].array_slice, 0);
     assert!(img.surfaces[0].face.is_none());
     assert_eq!(img.surfaces[0].plane.data, img.planes[0].data);
-    assert_eq!(img.pixel_format, DdsPixelFormat::A8R8G8B8);
+    assert_eq!(img.pixel_format, SurfaceFormat::A8R8G8B8);
 }

@@ -15,11 +15,11 @@ use std::io::{Read, SeekFrom, Write};
 
 use oxideav_core::{
     CodecId, CodecParameters, CodecResolver, ContainerRegistry, Demuxer, Error, MediaType, Muxer,
-    Packet, PixelFormat, ProbeData, ProbeScore, ReadSeek, Result, StreamInfo, TimeBase, WriteSeek,
+    Packet, ProbeData, ProbeScore, ReadSeek, Result, StreamInfo, TimeBase, WriteSeek,
     MAX_PROBE_SCORE,
 };
 
-use crate::types::{DDPF_FOURCC, DDS_HEADER_SIZE, DDS_MAGIC, FOURCC_DX10};
+use crate::types::{DDS_HEADER_SIZE, DDS_MAGIC};
 use crate::CODEC_ID_STR;
 
 /// Register the `.dds` demuxer + muxer + probe + extension entries
@@ -82,25 +82,13 @@ pub fn open_demuxer(
     let height = u32::from_le_bytes([buf[12], buf[13], buf[14], buf[15]]);
     let width = u32::from_le_bytes([buf[16], buf[17], buf[18], buf[19]]);
 
-    // Sniff for DX10 extension to decide if we should advertise a more
-    // specific pixel format hint, but the framework-side StreamInfo
-    // only carries the codec-level pixel format; we leave that as
-    // `Rgba` (the closest core mapping) when the format is one the
-    // registry-side `pix_to_core` knows, or as `None` otherwise.
-    //
-    // DDS_PIXELFORMAT lives at header offset 0x48 = 72, i.e. file
-    // offset 4 + 72 = 76. Its layout is:
-    //   76..79  dwSize
-    //   80..83  dwFlags
-    //   84..87  dwFourCC
-    let pf_flags = u32::from_le_bytes([buf[80], buf[81], buf[82], buf[83]]);
-    let pf_fourcc = u32::from_le_bytes([buf[84], buf[85], buf[86], buf[87]]);
-    let _has_dx10 = pf_flags & DDPF_FOURCC != 0 && pf_fourcc == FOURCC_DX10;
-
-    // Default to Rgba; the actual pixel layout is exposed per-surface
-    // by the parser. CLI consumers that want to pick by PixelFormat use
-    // this field as a coarse hint.
-    let pixel_format = Some(PixelFormat::Rgba);
+    // Declare the contract layout the codec will emit for this file
+    // (header-only; `info` never touches the surface bytes). A stored
+    // layout without a contract layout leaves the hint empty — the
+    // decoder then fails the packet with `Unsupported`.
+    let pixel_format = crate::api::info(&buf)
+        .ok()
+        .map(|i| crate::registry::to_core_pixel_format(i.format));
 
     let mut params = CodecParameters::video(CodecId::new(CODEC_ID_STR));
     params.width = Some(width);
@@ -275,7 +263,7 @@ mod tests {
         let mut params = CodecParameters::video(CodecId::new(CODEC_ID_STR));
         params.width = Some(4);
         params.height = Some(4);
-        params.pixel_format = Some(PixelFormat::Rgba);
+        params.pixel_format = Some(oxideav_core::PixelFormat::Rgba);
         let stream = StreamInfo {
             index: 0,
             params,

@@ -14,7 +14,7 @@ use oxideav_dds::types::{
     DDPF_FOURCC, DDSCAPS_TEXTURE, DDSD_REQUIRED, DDS_DIMENSION_TEXTURE2D, DDS_HEADER_DXT10_SIZE,
     DDS_HEADER_SIZE, DDS_MAGIC, DDS_PIXELFORMAT_SIZE, FOURCC_DX10,
 };
-use oxideav_dds::{decode_bc1, decode_bc7, encode_bc1, parse_dds, DdsPixelFormat};
+use oxideav_dds::{decode_bc1, decode_bc7, encode_bc1, parse_dds, SurfaceFormat};
 
 fn build_fourcc_dds(four_cc: u32, w: u32, h: u32, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(4 + DDS_HEADER_SIZE + payload.len());
@@ -77,7 +77,7 @@ fn bc1_encode_then_dds_wrap_then_parse() {
     let four_cc_dxt1 = u32::from_le_bytes(*b"DXT1");
     let dds = build_fourcc_dds(four_cc_dxt1, 4, 4, &bc);
     let img = parse_dds(&dds).unwrap();
-    assert_eq!(img.pixel_format, DdsPixelFormat::Bc1);
+    assert_eq!(img.pixel_format, SurfaceFormat::Bc1);
     assert_eq!(img.surfaces.len(), 1);
     assert_eq!(&img.surfaces[0].plane.data, &bc);
 
@@ -161,7 +161,7 @@ fn bc7_dds_wrap_with_mode6_solid_white_block() {
 
     let dds = build_dx10_dds(98 /* BC7_UNORM */, 4, 4, &block);
     let img = parse_dds(&dds).unwrap();
-    assert_eq!(img.pixel_format, DdsPixelFormat::Bc7Unorm);
+    assert_eq!(img.pixel_format, SurfaceFormat::Bc7Unorm);
 
     let mut out = vec![0u8; 4 * 4 * 4];
     decode_bc7(&img.surfaces[0].plane.data, 4, 4, &mut out).unwrap();
