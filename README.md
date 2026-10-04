@@ -36,6 +36,7 @@ if oxideav_dds::probe(&bytes) {
     let out: Vec<u8> = oxideav_dds::encode_rgba8(w, h, &rgba, &opts)?;
     std::fs::write("out.dds", out)?;
 }
+# Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
 | Item | Signature |
@@ -77,11 +78,17 @@ With the default-on `registry` feature the crate plugs into the
 `oxideav-core` registry:
 
 ```rust
+# let img = oxideav_dds::DdsImage::from_rgba8(1, 1, vec![0; 4])?;
+# let mut params = oxideav_core::CodecParameters::video(oxideav_core::CodecId::new("dds"));
+# params.width = Some(1);
+# params.height = Some(1);
+# params.pixel_format = Some(oxideav_core::PixelFormat::Rgba);
 let mut ctx = oxideav_core::RuntimeContext::new();
 oxideav_dds::register(&mut ctx);                       // codec "dds" + the .dds container (probe / demuxer / muxer)
 let dec = oxideav_dds::make_decoder(&params)?;         // / make_encoder (options: surface_format, mip_levels, dx10_header)
 let frame: oxideav_core::VideoFrame = img.into();      // From<DdsImage>: one packed plane + colour signal when sRGB
 let back = oxideav_dds::DdsImage::from_video_frame(&frame, &params)?;
+# Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
 The trait-side `Decoder` / `Encoder` are thin adapters over the
