@@ -229,12 +229,12 @@ impl YuvFormat {
         }
         let wm = self.sampling().width_multiple();
         let hm = self.sampling().height_multiple();
-        if width % wm != 0 {
+        if !width.is_multiple_of(wm) {
             return Err(DdsError::invalid(format!(
                 "{self:?} requires width divisible by {wm}, got {width}"
             )));
         }
-        if height % hm != 0 {
+        if !height.is_multiple_of(hm) {
             return Err(DdsError::invalid(format!(
                 "{self:?} requires height divisible by {hm}, got {height}"
             )));
@@ -698,7 +698,9 @@ mod tests {
         let out = decode_nv11_surface(4, 1, &data).unwrap();
         assert_eq!(
             out,
-            vec![1, 50, 51, 0xff, 2, 50, 51, 0xff, 3, 50, 51, 0xff, 4, 50, 51, 0xff,]
+            vec![
+                1, 50, 51, 0xff, 2, 50, 51, 0xff, 3, 50, 51, 0xff, 4, 50, 51, 0xff,
+            ]
         );
     }
 

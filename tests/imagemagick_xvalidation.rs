@@ -14,7 +14,7 @@
 //! offline. Workspace policy bars in-tree DXTC reference library
 //! code, so we call out to a binary fixture instead.
 
-use oxideav_dds::{decode_bc1, parse_dds, SurfaceFormat};
+use oxideav_dds::{SurfaceFormat, decode_bc1, parse_dds};
 
 const RED16: &[u8] = include_bytes!("fixtures/red16.dds");
 const GRAD8: &[u8] = include_bytes!("fixtures/grad8.dds");
@@ -34,7 +34,7 @@ fn imagemagick_bc1_solid_red_16x16() {
     // ImageMagick reports every pixel as (255, 0, 0). BC1's RGB565
     // red endpoint 0xf800 expands to (255, 0, 0) under 5-bit
     // bit-replication ((31<<3)|(31>>2) = 248 + 7 = 255).
-    for (i, chunk) in rgba.chunks_exact(4).enumerate() {
+    for (i, chunk) in rgba.as_chunks::<4>().0.iter().enumerate() {
         assert_eq!(chunk, &[255, 0, 0, 255], "pixel {i}");
     }
 }

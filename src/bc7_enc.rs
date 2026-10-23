@@ -158,11 +158,7 @@ fn pick_p_for_endpoint(e: [u8; 4]) -> u32 {
     for c in 0..4 {
         sum += (e[c] & 1) as u32;
     }
-    if sum >= 2 {
-        1
-    } else {
-        0
-    }
+    if sum >= 2 { 1 } else { 0 }
 }
 
 /// Mode-1 / 3 / 7 channel quantiser: collapse an 8-bit value to
@@ -1908,7 +1904,7 @@ mod tests {
         encode_bc7(&input, 4, 4, &mut bc).unwrap();
         let mut decoded = vec![0u8; 4 * 4 * 4];
         decode_bc7(&bc, 4, 4, &mut decoded).unwrap();
-        for chunk in decoded.chunks_exact(4) {
+        for chunk in decoded.as_chunks::<4>().0.iter() {
             assert_eq!(chunk, &[255, 255, 255, 255]);
         }
     }
@@ -1919,7 +1915,7 @@ mod tests {
     #[test]
     fn bc7_encode_solid_black_roundtrip() {
         let mut input = vec![0u8; 4 * 4 * 4];
-        for chunk in input.chunks_exact_mut(4) {
+        for chunk in input.as_chunks_mut::<4>().0.iter_mut() {
             chunk[3] = 0xff;
         }
         let mut bc = vec![0u8; 16];
@@ -1928,7 +1924,7 @@ mod tests {
         decode_bc7(&bc, 4, 4, &mut decoded).unwrap();
         // Every pixel reconstructs to black ± 1 LSB on each channel
         // (mode-6's per-endpoint p-bit chooses the alpha-LSB majority).
-        for chunk in decoded.chunks_exact(4) {
+        for chunk in decoded.as_chunks::<4>().0.iter() {
             assert!(chunk[0] <= 1, "R = {}", chunk[0]);
             assert!(chunk[1] <= 1, "G = {}", chunk[1]);
             assert!(chunk[2] <= 1, "B = {}", chunk[2]);
@@ -1959,7 +1955,12 @@ mod tests {
 
         let mut sse: u64 = 0;
         let mut count: u64 = 0;
-        for (a, b) in input.chunks_exact(4).zip(decoded.chunks_exact(4)) {
+        for (a, b) in input
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(decoded.as_chunks::<4>().0.iter())
+        {
             for c in 0..3 {
                 let d = a[c] as i32 - b[c] as i32;
                 sse += (d * d) as u64;
@@ -2002,7 +2003,12 @@ mod tests {
 
         let mut sse: u64 = 0;
         let mut count: u64 = 0;
-        for (a, b) in input.chunks_exact(4).zip(decoded.chunks_exact(4)) {
+        for (a, b) in input
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(decoded.as_chunks::<4>().0.iter())
+        {
             for c in 0..3 {
                 let d = a[c] as i32 - b[c] as i32;
                 sse += (d * d) as u64;
@@ -2050,7 +2056,12 @@ mod tests {
 
         let mut sse: u64 = 0;
         let mut count: u64 = 0;
-        for (a, b) in input.chunks_exact(4).zip(decoded.chunks_exact(4)) {
+        for (a, b) in input
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(decoded.as_chunks::<4>().0.iter())
+        {
             for c in 0..3 {
                 let d = a[c] as i32 - b[c] as i32;
                 sse += (d * d) as u64;
@@ -2131,7 +2142,7 @@ mod tests {
         encode_bc7(&input, 5, 5, &mut bc).unwrap();
         let mut decoded = vec![0u8; 5 * 5 * 4];
         decode_bc7(&bc, 5, 5, &mut decoded).unwrap();
-        for chunk in decoded.chunks_exact(4) {
+        for chunk in decoded.as_chunks::<4>().0.iter() {
             assert_eq!(chunk, &[255, 255, 255, 255]);
         }
     }
@@ -2280,7 +2291,12 @@ mod tests {
         decode_bc7(&bc, 8, 8, &mut decoded).unwrap();
         let mut sse: u64 = 0;
         let mut count: u64 = 0;
-        for (a, b) in input.chunks_exact(4).zip(decoded.chunks_exact(4)) {
+        for (a, b) in input
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(decoded.as_chunks::<4>().0.iter())
+        {
             for c in 0..4 {
                 let d = a[c] as i32 - b[c] as i32;
                 sse += (d * d) as u64;

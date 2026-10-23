@@ -46,10 +46,10 @@ fuzz_target!(|data: &[u8]| {
         && !img.pixel_format.is_block_compressed()
         && img.pixel_format.astc_footprint().is_none()
     {
-        if let Ok(bytes) = encode_dds_uncompressed_cubemap_array(&img) {
-            if parse_dds(&bytes).is_err() {
-                panic!("cubemap/array re-encode failed to re-parse");
-            }
+        if let Ok(bytes) = encode_dds_uncompressed_cubemap_array(&img)
+            && parse_dds(&bytes).is_err()
+        {
+            panic!("cubemap/array re-encode failed to re-parse");
         }
         return;
     }
@@ -65,10 +65,10 @@ fuzz_target!(|data: &[u8]| {
         // The encoder rejects legacy-mask formats and zero dims; only a
         // success is asserted to round-trip. Either outcome must not
         // panic.
-        if let Ok(bytes) = encode_dds_uncompressed_dx10(&img) {
-            if parse_dds(&bytes).is_err() {
-                panic!("DX10 uncompressed re-encode failed to re-parse");
-            }
+        if let Ok(bytes) = encode_dds_uncompressed_dx10(&img)
+            && parse_dds(&bytes).is_err()
+        {
+            panic!("DX10 uncompressed re-encode failed to re-parse");
         }
     }
 });

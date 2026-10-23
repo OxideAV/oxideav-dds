@@ -8,11 +8,11 @@
 //! per-surface dimensions).
 
 use oxideav_dds::types::{
-    DDPF_FOURCC, DDPF_RGB, DDSCAPS2_CUBEMAP, DDSCAPS2_CUBEMAP_ALL_FACES, DDSD_MIPMAPCOUNT,
-    DDSD_REQUIRED, DDS_HEADER_SIZE, DDS_MAGIC, DDS_PIXELFORMAT_SIZE, DDS_RESOURCE_MISC_TEXTURECUBE,
-    FOURCC_DX10, FOURCC_DXT1,
+    DDPF_FOURCC, DDPF_RGB, DDS_HEADER_SIZE, DDS_MAGIC, DDS_PIXELFORMAT_SIZE,
+    DDS_RESOURCE_MISC_TEXTURECUBE, DDSCAPS2_CUBEMAP, DDSCAPS2_CUBEMAP_ALL_FACES, DDSD_MIPMAPCOUNT,
+    DDSD_REQUIRED, FOURCC_DX10, FOURCC_DXT1,
 };
-use oxideav_dds::{parse_dds, CubemapFace, SurfaceFormat};
+use oxideav_dds::{CubemapFace, SurfaceFormat, parse_dds};
 
 fn push_pixel_format_a8r8g8b8(out: &mut Vec<u8>) {
     out.extend_from_slice(&(DDS_PIXELFORMAT_SIZE as u32).to_le_bytes());
@@ -54,11 +54,11 @@ fn mipmap_chain_uncompressed_8x8_a8r8g8b8_4_levels() {
     // Total = 64*4 + 16*4 + 4*4 + 1*4 = 256 + 64 + 16 + 4 = 340 bytes.
     let mut data = Vec::new();
     // mip 0: 64 pixels of 0xaa
-    data.extend(std::iter::repeat(0xaa).take(64 * 4));
+    data.extend(std::iter::repeat_n(0xaa, 64 * 4));
     // mip 1: 16 pixels of 0xbb
-    data.extend(std::iter::repeat(0xbb).take(16 * 4));
+    data.extend(std::iter::repeat_n(0xbb, 16 * 4));
     // mip 2: 4 pixels of 0xcc
-    data.extend(std::iter::repeat(0xcc).take(4 * 4));
+    data.extend(std::iter::repeat_n(0xcc, 4 * 4));
     // mip 3: 1 pixel of 0xdd
     data.extend(std::iter::repeat_n(0xdd, 4));
 
@@ -116,7 +116,7 @@ fn cubemap_legacy_dxt1_4x4_six_faces() {
     // verify per-face ordering.
     let mut data = Vec::new();
     for face_byte in [0x10u8, 0x20, 0x30, 0x40, 0x50, 0x60] {
-        data.extend(std::iter::repeat(face_byte).take(8));
+        data.extend(std::iter::repeat_n(face_byte, 8));
     }
     let mut out = Vec::new();
     out.extend_from_slice(&DDS_MAGIC.to_le_bytes());
@@ -164,7 +164,7 @@ fn dx10_texture_array_three_slices() {
     // DX10 array_size = 3; each slice is one A8R8G8B8 surface 2x2 = 16 bytes.
     let mut data = Vec::new();
     for slice_byte in [0xa0u8, 0xb0, 0xc0] {
-        data.extend(std::iter::repeat(slice_byte).take(2 * 2 * 4));
+        data.extend(std::iter::repeat_n(slice_byte, 2 * 2 * 4));
     }
     let mut out = Vec::new();
     out.extend_from_slice(&DDS_MAGIC.to_le_bytes());
@@ -211,7 +211,7 @@ fn dx10_cubemap_misc_flag() {
     // surface count is 6 × 1 = 6.
     let mut data = Vec::new();
     for face_byte in [0x11u8, 0x22, 0x33, 0x44, 0x55, 0x66] {
-        data.extend(std::iter::repeat(face_byte).take(2 * 2 * 4));
+        data.extend(std::iter::repeat_n(face_byte, 2 * 2 * 4));
     }
     let mut out = Vec::new();
     out.extend_from_slice(&DDS_MAGIC.to_le_bytes());
@@ -253,7 +253,7 @@ fn cubemap_with_mipmaps_legacy() {
     let face_bytes = 8 + 8 + 8;
     let mut data = Vec::new();
     for face_byte in [0x01u8, 0x02, 0x03, 0x04, 0x05, 0x06] {
-        data.extend(std::iter::repeat(face_byte).take(face_bytes));
+        data.extend(std::iter::repeat_n(face_byte, face_bytes));
     }
     let mut out = Vec::new();
     out.extend_from_slice(&DDS_MAGIC.to_le_bytes());

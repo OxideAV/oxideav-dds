@@ -781,7 +781,7 @@ mod tests {
         encode_bc1(&input, 4, 4, false, &mut bc).unwrap();
         let mut decoded = vec![0u8; 4 * 4 * 4];
         decode_bc1(&bc, 4, 4, &mut decoded).unwrap();
-        for chunk in decoded.chunks_exact(4) {
+        for chunk in decoded.as_chunks::<4>().0.iter() {
             assert_eq!(chunk, &[255, 255, 255, 255]);
         }
     }
@@ -790,14 +790,14 @@ mod tests {
     #[test]
     fn bc1_encode_solid_black_roundtrip() {
         let mut input = vec![0u8; 4 * 4 * 4];
-        for chunk in input.chunks_exact_mut(4) {
+        for chunk in input.as_chunks_mut::<4>().0.iter_mut() {
             chunk[3] = 0xff; // alpha
         }
         let mut bc = vec![0u8; 8];
         encode_bc1(&input, 4, 4, false, &mut bc).unwrap();
         let mut decoded = vec![0u8; 4 * 4 * 4];
         decode_bc1(&bc, 4, 4, &mut decoded).unwrap();
-        for chunk in decoded.chunks_exact(4) {
+        for chunk in decoded.as_chunks::<4>().0.iter() {
             assert_eq!(chunk, &[0, 0, 0, 255]);
         }
     }
@@ -888,7 +888,7 @@ mod tests {
         encode_bc1(&input, 5, 5, false, &mut bc).unwrap();
         let mut decoded = vec![0u8; 5 * 5 * 4];
         decode_bc1(&bc, 5, 5, &mut decoded).unwrap();
-        for chunk in decoded.chunks_exact(4) {
+        for chunk in decoded.as_chunks::<4>().0.iter() {
             assert_eq!(chunk, &[255, 255, 255, 255]);
         }
     }
@@ -941,7 +941,7 @@ mod tests {
         encode_bc2(&input, 4, 4, &mut bc).unwrap();
         let mut decoded = vec![0u8; 4 * 4 * 4];
         decode_bc2(&bc, 4, 4, &mut decoded).unwrap();
-        for chunk in decoded.chunks_exact(4) {
+        for chunk in decoded.as_chunks::<4>().0.iter() {
             assert_eq!(chunk, &[255, 255, 255, 255]);
         }
     }
@@ -952,7 +952,7 @@ mod tests {
     fn bc2_encode_alpha_quantises_to_top_nibble() {
         let mut input = vec![0xffu8; 4 * 4 * 4];
         // Set alpha values to 0x10..0x1f (low nibble varies, top = 1).
-        for (i, chunk) in input.chunks_exact_mut(4).enumerate() {
+        for (i, chunk) in input.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             chunk[3] = 0x10 + i as u8;
         }
         let mut bc = vec![0u8; 16];
@@ -960,7 +960,7 @@ mod tests {
         let mut decoded = vec![0u8; 4 * 4 * 4];
         decode_bc2(&bc, 4, 4, &mut decoded).unwrap();
         // Alpha: top-nibble 1 → expand_to_8 = 0x11. Low nibble dropped.
-        for chunk in decoded.chunks_exact(4) {
+        for chunk in decoded.as_chunks::<4>().0.iter() {
             assert_eq!(chunk[3], 0x11, "BC2 alpha quantised to top nibble");
         }
     }
@@ -969,7 +969,7 @@ mod tests {
     #[test]
     fn bc3_encode_solid_red_roundtrip() {
         let mut input = vec![0u8; 4 * 4 * 4];
-        for chunk in input.chunks_exact_mut(4) {
+        for chunk in input.as_chunks_mut::<4>().0.iter_mut() {
             chunk[0] = 0xff;
             chunk[3] = 0xff;
         }
@@ -977,7 +977,7 @@ mod tests {
         encode_bc3(&input, 4, 4, &mut bc).unwrap();
         let mut decoded = vec![0u8; 4 * 4 * 4];
         decode_bc3(&bc, 4, 4, &mut decoded).unwrap();
-        for chunk in decoded.chunks_exact(4) {
+        for chunk in decoded.as_chunks::<4>().0.iter() {
             assert_eq!(chunk, &[0xff, 0, 0, 0xff]);
         }
     }
@@ -987,7 +987,7 @@ mod tests {
     #[test]
     fn bc3_encode_alpha_gradient_psnr() {
         let mut input = vec![0u8; 4 * 4 * 4];
-        for (i, chunk) in input.chunks_exact_mut(4).enumerate() {
+        for (i, chunk) in input.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             chunk[0] = 128;
             chunk[1] = 128;
             chunk[2] = 128;
@@ -1011,7 +1011,7 @@ mod tests {
     #[test]
     fn bc5_encode_solid_roundtrip() {
         let mut input = vec![0u8; 4 * 4 * 2];
-        for pair in input.chunks_exact_mut(2) {
+        for pair in input.as_chunks_mut::<2>().0.iter_mut() {
             pair[0] = 120;
             pair[1] = 80;
         }
@@ -1019,7 +1019,7 @@ mod tests {
         encode_bc5_unorm(&input, 4, 4, &mut bc).unwrap();
         let mut decoded = vec![0u8; 4 * 4 * 2];
         decode_bc5_unorm(&bc, 4, 4, &mut decoded).unwrap();
-        for pair in decoded.chunks_exact(2) {
+        for pair in decoded.as_chunks::<2>().0.iter() {
             assert_eq!(pair[0], 120);
             assert_eq!(pair[1], 80);
         }
@@ -1225,7 +1225,7 @@ mod tests {
     #[test]
     fn bc5_snorm_encode_independent_channels() {
         let mut input = vec![0u8; 4 * 4 * 2];
-        for (i, pair) in input.chunks_exact_mut(2).enumerate() {
+        for (i, pair) in input.as_chunks_mut::<2>().0.iter_mut().enumerate() {
             // R alternates ±50, G constant +20.
             pair[0] = if i & 1 == 0 { 50u8 } else { (-50i8) as u8 };
             pair[1] = 20u8;
@@ -1234,7 +1234,7 @@ mod tests {
         encode_bc5_snorm(&input, 4, 4, &mut bc).unwrap();
         let mut decoded = vec![0u8; 4 * 4 * 2];
         decode_bc5_snorm(&bc, 4, 4, &mut decoded).unwrap();
-        for (i, pair) in decoded.chunks_exact(2).enumerate() {
+        for (i, pair) in decoded.as_chunks::<2>().0.iter().enumerate() {
             let r_expected = if i & 1 == 0 { 50i8 } else { -50i8 };
             assert_eq!(pair[0] as i8, r_expected, "R pixel {i}");
             assert_eq!(pair[1] as i8, 20, "G pixel {i}");

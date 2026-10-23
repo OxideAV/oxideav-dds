@@ -18,12 +18,12 @@
 //! external library source was consulted.
 
 use oxideav_dds::types::{
-    DDPF_ALPHAPIXELS, DDPF_RGB, DDSCAPS_TEXTURE, DDSD_REQUIRED, DDS_HEADER_SIZE, DDS_MAGIC,
-    DDS_PIXELFORMAT_SIZE,
+    DDPF_ALPHAPIXELS, DDPF_RGB, DDS_HEADER_SIZE, DDS_MAGIC, DDS_PIXELFORMAT_SIZE, DDSCAPS_TEXTURE,
+    DDSD_REQUIRED,
 };
 use oxideav_dds::{
-    decode_a2r10g10b10_surface, decode_a8r3g3b2_surface, encode_dds_uncompressed, parse_dds,
-    DdsFile, Plane, SurfaceFormat,
+    DdsFile, Plane, SurfaceFormat, decode_a2r10g10b10_surface, decode_a8r3g3b2_surface,
+    encode_dds_uncompressed, parse_dds,
 };
 
 /// Build a legacy (non-DX10) uncompressed DDS file from explicit

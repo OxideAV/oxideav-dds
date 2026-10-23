@@ -12,8 +12,8 @@
 //! library source consulted.
 
 use oxideav_dds::{
-    decode_a4b4g4r4_unorm_surface, encode_dds_uncompressed_dx10, parse_dds, DdsFile, DdsSurface,
-    DxgiFormat, Plane, SurfaceFormat,
+    DdsFile, DdsSurface, DxgiFormat, Plane, SurfaceFormat, decode_a4b4g4r4_unorm_surface,
+    encode_dds_uncompressed_dx10, parse_dds,
 };
 
 /// Build a single-plane DX10 image with a pseudo-random byte payload.

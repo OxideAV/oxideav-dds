@@ -972,11 +972,7 @@ fn sign_extend(value: i32, bits: u32) -> i32 {
     let sign_bit = 1i32 << (bits - 1);
     let mask = (1i32 << bits) - 1;
     let v = value & mask;
-    if (v & sign_bit) != 0 {
-        v | !mask
-    } else {
-        v
-    }
+    if (v & sign_bit) != 0 { v | !mask } else { v }
 }
 
 fn unquantize(comp: i32, bits: u32, signed: bool) -> i32 {
@@ -1005,11 +1001,7 @@ fn unquantize(comp: i32, bits: u32, signed: bool) -> i32 {
             ((c << 15) + 0x4000) >> (bits - 1)
         };
         c = unq;
-        if s {
-            -c
-        } else {
-            c
-        }
+        if s { -c } else { c }
     }
 }
 
@@ -1352,7 +1344,7 @@ mod tests {
         fields.push((0x3ff, 10)); // rx = 0x3ff
         fields.push((0x3ff, 10)); // gx = 0x3ff
         fields.push((0x3ff, 10)); // bx = 0x3ff
-                                  // Pixel 0: 3-bit anchor index = 7 (max 3-bit). Pixels 1..15: 4-bit = 15.
+        // Pixel 0: 3-bit anchor index = 7 (max 3-bit). Pixels 1..15: 4-bit = 15.
         fields.push((7, 3));
         for _ in 1..16 {
             fields.push((15, 4));
@@ -1500,7 +1492,7 @@ mod tests {
         block[0] = 0b10011;
         let mut out = vec![0u8; 4 * 4 * 8];
         decode_bc6h(&block, 4, 4, false, &mut out).expect("reserved decodes to zero");
-        for chunk in out.chunks_exact(8) {
+        for chunk in out.as_chunks::<8>().0.iter() {
             let r = u16::from_le_bytes([chunk[0], chunk[1]]);
             let g = u16::from_le_bytes([chunk[2], chunk[3]]);
             let b = u16::from_le_bytes([chunk[4], chunk[5]]);

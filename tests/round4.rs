@@ -37,7 +37,7 @@ fn make_rgba8_8x8() -> Vec<u8> {
 fn psnr_rgb(a: &[u8], b: &[u8]) -> f64 {
     let mut sse: u64 = 0;
     let mut count: u64 = 0;
-    for (chunk_a, chunk_b) in a.chunks_exact(4).zip(b.chunks_exact(4)) {
+    for (chunk_a, chunk_b) in a.as_chunks::<4>().0.iter().zip(b.as_chunks::<4>().0.iter()) {
         for c in 0..3 {
             let d = chunk_a[c] as i32 - chunk_b[c] as i32;
             sse += (d * d) as u64;
@@ -176,7 +176,7 @@ fn bc6h_all_modes_decode_without_error() {
     let mut out = vec![0u8; 4 * 4 * 8];
     decode_bc6h(&block, 4, 4, false, &mut out).expect("mode 0 decodes");
     // Every R/G/B should be zero (endpoints zero, indices zero).
-    for chunk in out.chunks_exact(8) {
+    for chunk in out.as_chunks::<8>().0 {
         assert_eq!(u16::from_le_bytes([chunk[0], chunk[1]]), 0);
         assert_eq!(u16::from_le_bytes([chunk[2], chunk[3]]), 0);
         assert_eq!(u16::from_le_bytes([chunk[4], chunk[5]]), 0);
@@ -188,7 +188,7 @@ fn bc6h_all_modes_decode_without_error() {
     rblock[0] = 0b10011;
     let mut rout = vec![0u8; 4 * 4 * 8];
     decode_bc6h(&rblock, 4, 4, false, &mut rout).expect("reserved decodes to zero");
-    for chunk in rout.chunks_exact(8) {
+    for chunk in rout.as_chunks::<8>().0 {
         assert_eq!(u16::from_le_bytes([chunk[0], chunk[1]]), 0);
         assert_eq!(u16::from_le_bytes([chunk[6], chunk[7]]), 0x3c00);
     }

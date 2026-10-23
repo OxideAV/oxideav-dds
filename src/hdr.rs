@@ -197,7 +197,7 @@ pub fn decode_float_surface(
             return Err(DdsError::unsupported(format!(
                 "decode_float_surface: {} is not a floating-point format",
                 pix.name()
-            )))
+            )));
         }
     };
 
@@ -1126,7 +1126,7 @@ fn decode_packed_subsampled_rgb(
     b_off: usize,
     what: &str,
 ) -> Result<Vec<u8>> {
-    if width % 2 != 0 {
+    if !width.is_multiple_of(2) {
         return Err(DdsError::invalid(format!(
             "{what}: width must be even (sub-sampled pixel pairs), got {width}"
         )));

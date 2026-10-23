@@ -14,7 +14,7 @@
 //! crate's integration tests.
 
 use libfuzzer_sys::fuzz_target;
-use oxideav_dds::{encode_dds_uncompressed, parse_dds, SurfaceFormat};
+use oxideav_dds::{SurfaceFormat, encode_dds_uncompressed, parse_dds};
 
 fuzz_target!(|data: &[u8]| {
     let Ok(img) = parse_dds(data) else {

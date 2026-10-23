@@ -9,14 +9,15 @@
 //! decoded channel values.
 
 use oxideav_dds::types::{
-    DDPF_ALPHAPIXELS, DDPF_FOURCC, DDPF_RGB, DDSD_PIXELFORMAT, DDSD_REQUIRED, DDS_HEADER_SIZE,
-    DDS_MAGIC, DDS_PIXELFORMAT_SIZE, FOURCC_DX10,
+    DDPF_ALPHAPIXELS, DDPF_FOURCC, DDPF_RGB, DDS_HEADER_SIZE, DDS_MAGIC, DDS_PIXELFORMAT_SIZE,
+    DDSD_PIXELFORMAT, DDSD_REQUIRED, FOURCC_DX10,
 };
 use oxideav_dds::{
-    decode_float_surface, decode_r10g10b10a2_uint_surface, decode_r10g10b10a2_unorm_surface,
-    decode_rgba16_snorm_surface, decode_rgba16_unorm_surface, decode_sint16_surface,
-    decode_sint32_surface, decode_sint8_surface, decode_snorm_surface, decode_uint16_surface,
-    decode_uint32_surface, decode_uint8_surface, decode_unorm_surface, parse_dds, SurfaceFormat,
+    SurfaceFormat, decode_float_surface, decode_r10g10b10a2_uint_surface,
+    decode_r10g10b10a2_unorm_surface, decode_rgba16_snorm_surface, decode_rgba16_unorm_surface,
+    decode_sint8_surface, decode_sint16_surface, decode_sint32_surface, decode_snorm_surface,
+    decode_uint8_surface, decode_uint16_surface, decode_uint32_surface, decode_unorm_surface,
+    parse_dds,
 };
 
 const CAPS_TEXTURE: u32 = 0x0000_1000;

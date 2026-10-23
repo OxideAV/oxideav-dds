@@ -782,7 +782,7 @@ mod tests {
         input.extend_from_slice(&block);
         let mut out = vec![0u8; 8 * 4 * 4];
         decode_bc1(&input, 8, 4, &mut out).unwrap();
-        for chunk in out.chunks_exact(4) {
+        for chunk in out.as_chunks::<4>().0.iter() {
             assert_eq!(chunk, &[255, 255, 255, 255]);
         }
     }
@@ -797,7 +797,7 @@ mod tests {
         }
         let mut out = vec![0u8; 5 * 5 * 4];
         decode_bc1(&input, 5, 5, &mut out).unwrap();
-        for chunk in out.chunks_exact(4) {
+        for chunk in out.as_chunks::<4>().0.iter() {
             assert_eq!(chunk, &[255, 255, 255, 255]);
         }
     }
@@ -819,7 +819,7 @@ mod tests {
         input.extend_from_slice(&[0xff, 0xff, 0x00, 0x00, 0, 0, 0, 0]); // colour
         let mut out = vec![0u8; 4 * 4 * 4];
         decode_bc2(&input, 4, 4, &mut out).unwrap();
-        for chunk in out.chunks_exact(4) {
+        for chunk in out.as_chunks::<4>().0.iter() {
             assert_eq!(chunk, &[255, 255, 255, 255]);
         }
     }
@@ -830,7 +830,7 @@ mod tests {
         input.extend_from_slice(&[0xff, 0xff, 0x00, 0x00, 0, 0, 0, 0]); // colour
         let mut out = vec![0u8; 4 * 4 * 4];
         decode_bc3(&input, 4, 4, &mut out).unwrap();
-        for chunk in out.chunks_exact(4) {
+        for chunk in out.as_chunks::<4>().0.iter() {
             assert_eq!(chunk, &[255, 255, 255, 255]);
         }
     }
@@ -854,7 +854,7 @@ mod tests {
         input.extend_from_slice(&g_block);
         let mut out = vec![0u8; 4 * 4 * 2];
         decode_bc5_unorm(&input, 4, 4, &mut out).unwrap();
-        for pair in out.chunks_exact(2) {
+        for pair in out.as_chunks::<2>().0.iter() {
             assert_eq!(pair, &[200, 50]);
         }
     }
@@ -883,7 +883,7 @@ mod tests {
         input.extend_from_slice(&r_block);
         input.extend_from_slice(&g_block);
         let out = decode_bc5_snorm_i8(&input, 4, 4).unwrap();
-        for pair in out.chunks_exact(2) {
+        for pair in out.as_chunks::<2>().0.iter() {
             assert_eq!(pair, &[-100, 20]);
         }
     }

@@ -26,18 +26,18 @@
 //! from the header alone.
 
 use oxideav_core::{
-    parse_options, CodecCapabilities, CodecId, CodecInfo, CodecOptionsStruct, CodecParameters,
-    CodecRegistry, ColorPrimaries, ColorSignal, ContainerRegistry, Decoder, Encoder, Frame,
-    MatrixCoefficients, OptionField, OptionKind, OptionValue, Packet, PixelFormat, RuntimeContext,
-    TimeBase, TransferCharacteristics, VideoFrame, VideoPlane,
+    CodecCapabilities, CodecId, CodecInfo, CodecOptionsStruct, CodecParameters, CodecRegistry,
+    ColorPrimaries, ColorSignal, ContainerRegistry, Decoder, Encoder, Frame, MatrixCoefficients,
+    OptionField, OptionKind, OptionValue, Packet, PixelFormat, RuntimeContext, TimeBase,
+    TransferCharacteristics, VideoFrame, VideoPlane, parse_options,
 };
 
+use crate::CODEC_ID_STR;
 use crate::container;
 use crate::error::DdsError;
 use crate::image::{ColorInfo, ColorRange, DdsImage, DdsPixelFormat, Plane};
 use crate::options::{DecodeOptions, EncodeOptions};
 use crate::surface::SurfaceFormat;
-use crate::CODEC_ID_STR;
 
 /// Convert a [`DdsError`] into the framework-shared `oxideav_core::Error`
 /// so trait impls in this crate can use `?` on errors returned by the
@@ -91,7 +91,7 @@ pub fn from_core_pixel_format(pf: PixelFormat) -> Result<DdsPixelFormat, DdsErro
         other => {
             return Err(DdsError::unsupported(format!(
                 "DDS: pixel format {other:?} not supported"
-            )))
+            )));
         }
     })
 }
@@ -369,7 +369,7 @@ impl Encoder for DdsEncoder {
             _ => {
                 return Err(oxideav_core::Error::invalid(
                     "DDS encoder: video frames only",
-                ))
+                ));
             }
         };
         let image = DdsImage::from_video_frame(vf, &self.out_params)?;

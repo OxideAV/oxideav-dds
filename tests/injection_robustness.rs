@@ -16,14 +16,14 @@
 //! Reference: Microsoft's public "DDS file layout for textures" guide.
 
 use oxideav_dds::types::{
-    DDPF_ALPHAPIXELS, DDPF_FOURCC, DDPF_RGB, DDSCAPS2_VOLUME, DDSCAPS_COMPLEX, DDSCAPS_TEXTURE,
-    DDSD_CAPS, DDSD_DEPTH, DDSD_HEIGHT, DDSD_MIPMAPCOUNT, DDSD_PIXELFORMAT, DDSD_WIDTH,
-    DDS_DIMENSION_TEXTURE3D, DDS_HEADER_SIZE, DDS_MAGIC, DDS_RESOURCE_MISC_TEXTURECUBE,
-    FOURCC_DX10, FOURCC_DXT1,
+    DDPF_ALPHAPIXELS, DDPF_FOURCC, DDPF_RGB, DDS_DIMENSION_TEXTURE3D, DDS_HEADER_SIZE, DDS_MAGIC,
+    DDS_RESOURCE_MISC_TEXTURECUBE, DDSCAPS_COMPLEX, DDSCAPS_TEXTURE, DDSCAPS2_VOLUME, DDSD_CAPS,
+    DDSD_DEPTH, DDSD_HEIGHT, DDSD_MIPMAPCOUNT, DDSD_PIXELFORMAT, DDSD_WIDTH, FOURCC_DX10,
+    FOURCC_DXT1,
 };
 use oxideav_dds::{
-    decode_bc1, decode_bc2, decode_bc3, decode_bc4_snorm, decode_bc4_unorm, decode_bc5_snorm,
-    decode_bc5_unorm, decode_bc6h, decode_bc7, parse_dds, DxgiFormat,
+    DxgiFormat, decode_bc1, decode_bc2, decode_bc3, decode_bc4_snorm, decode_bc4_unorm,
+    decode_bc5_snorm, decode_bc5_unorm, decode_bc6h, decode_bc7, parse_dds,
 };
 
 // ---------------------------------------------------------------------------
@@ -221,7 +221,7 @@ fn dx10_fourcc_without_extension_errors() {
     bytes[76..80].copy_from_slice(&32u32.to_le_bytes()); // pixfmt size
     bytes[80..84].copy_from_slice(&DDPF_FOURCC.to_le_bytes()); // pixfmt flags
     bytes[84..88].copy_from_slice(&FOURCC_DX10.to_le_bytes()); // pixfmt fourCC
-                                                               // Trim everything past the legacy header so the DX10 extension is missing.
+    // Trim everything past the legacy header so the DX10 extension is missing.
     bytes.truncate(4 + DDS_HEADER_SIZE);
     let err = parse_dds(&bytes).expect_err("missing DX10 extension must error");
     assert!(format!("{err}").contains("DDS_HEADER_DXT10"));

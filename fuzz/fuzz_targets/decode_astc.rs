@@ -25,7 +25,7 @@
 //! truncated) and as the multi-block surface payload.
 
 use libfuzzer_sys::fuzz_target;
-use oxideav_dds::{decode_astc_ldr, decode_astc_ldr_block, LDR_BLOCK_FOOTPRINTS};
+use oxideav_dds::{LDR_BLOCK_FOOTPRINTS, decode_astc_ldr, decode_astc_ldr_block};
 
 // Cap the surface dimensions so `width * height * 4` stays a small
 // allocation in the harness. The decoders themselves tolerate larger

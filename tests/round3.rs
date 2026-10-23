@@ -11,10 +11,10 @@
 //!   the round-2 extension-only registration).
 
 use oxideav_dds::types::{
-    DDPF_FOURCC, DDSCAPS_TEXTURE, DDSD_REQUIRED, DDS_DIMENSION_TEXTURE2D, DDS_HEADER_DXT10_SIZE,
-    DDS_HEADER_SIZE, DDS_MAGIC, DDS_PIXELFORMAT_SIZE, FOURCC_DX10,
+    DDPF_FOURCC, DDS_DIMENSION_TEXTURE2D, DDS_HEADER_DXT10_SIZE, DDS_HEADER_SIZE, DDS_MAGIC,
+    DDS_PIXELFORMAT_SIZE, DDSCAPS_TEXTURE, DDSD_REQUIRED, FOURCC_DX10,
 };
-use oxideav_dds::{decode_bc1, decode_bc7, encode_bc1, parse_dds, SurfaceFormat};
+use oxideav_dds::{SurfaceFormat, decode_bc1, decode_bc7, encode_bc1, parse_dds};
 
 fn build_fourcc_dds(four_cc: u32, w: u32, h: u32, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(4 + DDS_HEADER_SIZE + payload.len());
@@ -49,7 +49,7 @@ fn build_fourcc_dds(four_cc: u32, w: u32, h: u32, payload: &[u8]) -> Vec<u8> {
 fn bc1_encode_solid_block_then_decode_matches() {
     // Solid red 4x4 RGBA8.
     let mut input = vec![0u8; 4 * 4 * 4];
-    for chunk in input.chunks_exact_mut(4) {
+    for chunk in input.as_chunks_mut::<4>().0 {
         chunk[0] = 0xff;
         chunk[3] = 0xff;
     }
@@ -60,7 +60,7 @@ fn bc1_encode_solid_block_then_decode_matches() {
     // (255, 0, 0) per Microsoft's bit-replication rule.
     let mut out = vec![0u8; 4 * 4 * 4];
     decode_bc1(&bc, 4, 4, &mut out).expect("decode_bc1");
-    for chunk in out.chunks_exact(4) {
+    for chunk in out.as_chunks::<4>().0 {
         assert_eq!(chunk, &[255, 0, 0, 255]);
     }
 }
@@ -84,7 +84,7 @@ fn bc1_encode_then_dds_wrap_then_parse() {
     // Decode and assert white.
     let mut out = vec![0u8; 4 * 4 * 4];
     decode_bc1(&img.surfaces[0].plane.data, 4, 4, &mut out).unwrap();
-    for chunk in out.chunks_exact(4) {
+    for chunk in out.as_chunks::<4>().0 {
         assert_eq!(chunk, &[255, 255, 255, 255]);
     }
 }
@@ -165,7 +165,7 @@ fn bc7_dds_wrap_with_mode6_solid_white_block() {
 
     let mut out = vec![0u8; 4 * 4 * 4];
     decode_bc7(&img.surfaces[0].plane.data, 4, 4, &mut out).unwrap();
-    for chunk in out.chunks_exact(4) {
+    for chunk in out.as_chunks::<4>().0 {
         assert_eq!(chunk, &[255, 255, 255, 255]);
     }
 }
@@ -178,15 +178,15 @@ mod container_tests {
     use std::io::Cursor;
 
     use oxideav_core::{
-        ContainerRegistry, NullCodecResolver, ProbeData, ReadSeek, MAX_PROBE_SCORE,
+        ContainerRegistry, MAX_PROBE_SCORE, NullCodecResolver, ProbeData, ReadSeek,
     };
 
     use oxideav_dds::registry::register_containers;
 
     fn build_dds_a8r8g8b8(w: u32, h: u32) -> Vec<u8> {
         use oxideav_dds::types::{
-            DDPF_ALPHAPIXELS, DDPF_RGB, DDSCAPS_TEXTURE, DDSD_PITCH, DDSD_REQUIRED,
-            DDS_HEADER_SIZE, DDS_MAGIC, DDS_PIXELFORMAT_SIZE,
+            DDPF_ALPHAPIXELS, DDPF_RGB, DDS_HEADER_SIZE, DDS_MAGIC, DDS_PIXELFORMAT_SIZE,
+            DDSCAPS_TEXTURE, DDSD_PITCH, DDSD_REQUIRED,
         };
         let pitch = w * 4;
         let data_len = (pitch as usize) * (h as usize);

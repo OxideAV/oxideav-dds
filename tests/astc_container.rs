@@ -7,7 +7,7 @@
 //! tooling is consulted.
 
 use oxideav_dds::{
-    decode_astc_ldr_surface, parse_dds, DxgiFormat, SurfaceFormat, DDS_HEADER_SIZE, DDS_MAGIC,
+    DDS_HEADER_SIZE, DDS_MAGIC, DxgiFormat, SurfaceFormat, decode_astc_ldr_surface, parse_dds,
 };
 
 /// Build a minimal DX10 DDS file: magic + DDS_HEADER + DDS_HEADER_DXT10
@@ -22,12 +22,12 @@ fn build_dx10_dds(width: u32, height: u32, dxgi: u32, payload: &[u8]) -> Vec<u8>
         h[off..off + 4].copy_from_slice(&val.to_le_bytes());
     };
     put(&mut h, 0, DDS_HEADER_SIZE as u32); // dwSize
-                                            // flags: caps|height|width|pixelformat|linearsize
+    // flags: caps|height|width|pixelformat|linearsize
     put(&mut h, 4, 0x1 | 0x2 | 0x4 | 0x1000 | 0x0008_0000);
     put(&mut h, 8, height); // dwHeight
     put(&mut h, 12, width); // dwWidth
     put(&mut h, 16, payload.len() as u32); // dwPitchOrLinearSize
-                                           // DDS_PIXELFORMAT at offset 72 within the header.
+    // DDS_PIXELFORMAT at offset 72 within the header.
     put(&mut h, 72, 32); // ddspf.dwSize
     put(&mut h, 76, 0x4); // ddspf.flags = DDPF_FOURCC
     put(&mut h, 80, u32::from_le_bytes(*b"DX10")); // four_cc = "DX10"
@@ -147,8 +147,8 @@ fn decode_astc_surface_through_format() {
     };
     let rgba = decode_astc_ldr_surface(pix, &block, 4, 4).expect("astc decode");
     assert_eq!(rgba.len(), 4 * 4 * 4);
-    for px in rgba.chunks_exact(4) {
-        assert_eq!(px, [0x12, 0x34, 0x56, 0xFF]);
+    for px in rgba.as_chunks::<4>().0.iter() {
+        assert_eq!(*px, [0x12, 0x34, 0x56, 0xFF]);
     }
     // A non-ASTC format returns None.
     assert!(decode_astc_ldr_surface(SurfaceFormat::Bc1, &block, 4, 4).is_none());

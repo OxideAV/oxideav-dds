@@ -19,7 +19,7 @@
 //! bytes. Dimensions are capped so allocations stay small.
 
 use libfuzzer_sys::fuzz_target;
-use oxideav_dds::{decode_astc_ldr, encode_astc_ldr, encode_astc_ldr_block, LDR_BLOCK_FOOTPRINTS};
+use oxideav_dds::{LDR_BLOCK_FOOTPRINTS, decode_astc_ldr, encode_astc_ldr, encode_astc_ldr_block};
 
 const MAX_DIM: u32 = 48;
 
@@ -49,9 +49,9 @@ fuzz_target!(|data: &[u8]| {
         // Build texels from the byte stream (cycled / zero-padded).
         let mut texels = vec![[0u8; 4]; count];
         for (i, t) in texels.iter_mut().enumerate() {
-            for c in 0..4 {
+            for (c, slot) in t.iter_mut().enumerate() {
                 let idx = i * 4 + c;
-                t[c] = rest.get(idx % rest.len().max(1)).copied().unwrap_or(0);
+                *slot = rest.get(idx % rest.len().max(1)).copied().unwrap_or(0);
             }
         }
         let block = encode_astc_ldr_block(&texels, bw, bh);

@@ -8,8 +8,8 @@
 //! (`docs/image/dds/`); no external DDS / ASTC tooling is consulted.
 
 use oxideav_dds::{
-    decode_astc_ldr_block, decode_astc_ldr_surface, encode_astc_ldr_block, encode_dds_astc,
-    parse_dds, DxgiFormat, SurfaceFormat,
+    DxgiFormat, SurfaceFormat, decode_astc_ldr_block, decode_astc_ldr_surface,
+    encode_astc_ldr_block, encode_dds_astc, parse_dds,
 };
 
 fn astc_fmt(bw: u32, bh: u32) -> SurfaceFormat {
@@ -43,7 +43,7 @@ fn solid_surface_roundtrips_exact_all_footprints() {
     let color = [12u8, 240, 77, 255];
     let (w, h) = (37u32, 19u32); // deliberately not block-aligned
     let mut rgba = vec![0u8; (w * h * 4) as usize];
-    for px in rgba.chunks_exact_mut(4) {
+    for px in rgba.as_chunks_mut::<4>().0.iter_mut() {
         px.copy_from_slice(&color);
     }
     for (bw, bh) in footprints {
@@ -54,8 +54,8 @@ fn solid_surface_roundtrips_exact_all_footprints() {
         assert_eq!(img.pixel_format.astc_footprint(), Some((bw, bh)));
         let dec =
             decode_astc_ldr_surface(img.pixel_format, &img.surfaces[0].plane.data, w, h).unwrap();
-        for px in dec.chunks_exact(4) {
-            assert_eq!(px, color, "{bw}x{bh} solid not exact");
+        for px in dec.as_chunks::<4>().0.iter() {
+            assert_eq!(*px, color, "{bw}x{bh} solid not exact");
         }
     }
 }
@@ -97,7 +97,7 @@ fn luma_ramp_roundtrips_within_tolerance() {
 fn dx10_header_and_mip_chain() {
     let (w, h) = (16u32, 16u32);
     let mut rgba = vec![0u8; (w * h * 4) as usize];
-    for (i, px) in rgba.chunks_exact_mut(4).enumerate() {
+    for (i, px) in rgba.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         px.copy_from_slice(&[(i as u8), 100, 200, 255]);
     }
     let file = encode_dds_astc(&rgba, w, h, astc_fmt(4, 4), 5).unwrap();

@@ -11,8 +11,8 @@
 //! external ASTC tooling is consulted.
 
 use oxideav_dds::{
-    decode_astc_ldr, decode_astc_ldr_block, decode_astc_ldr_surface, SurfaceFormat,
-    ASTC_ERROR_COLOR, LDR_BLOCK_FOOTPRINTS,
+    ASTC_ERROR_COLOR, LDR_BLOCK_FOOTPRINTS, SurfaceFormat, decode_astc_ldr, decode_astc_ldr_block,
+    decode_astc_ldr_surface,
 };
 
 /// A small xorshift PRNG so the sweep is deterministic and dependency-free.
@@ -95,8 +95,8 @@ fn missing_blocks_decode_to_error_colour() {
     // trailing blocks must decode to the error colour, never OOB.
     let out = decode_astc_ldr(&[], 8, 8, 4, 4);
     assert_eq!(out.len(), 8 * 8 * 4);
-    for px in out.chunks_exact(4) {
-        assert_eq!(px, ASTC_ERROR_COLOR);
+    for px in out.as_chunks::<4>().0.iter() {
+        assert_eq!(*px, ASTC_ERROR_COLOR);
     }
 }
 

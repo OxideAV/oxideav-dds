@@ -165,7 +165,7 @@ fn decode_ise_sequence(block: &Block128, start: u32, count: u32, range: IseRange
             //   m0(n) T0..1(2) m1(n) T2..3(2) m2(n) T4(1) m3(n) T5..6(2) m4(n) T7(1)
             let mut m = [0u32; 5];
             let mut packed = 0u32; // T7..T0
-                                   // value 0 low bits
+            // value 0 low bits
             m[0] = read_at(block, &mut pos, n);
             packed |= read_at(block, &mut pos, 2); // T1 T0
             m[1] = read_at(block, &mut pos, n);
@@ -1430,7 +1430,7 @@ pub fn decode_astc_ldr(
     let mut out = vec![0u8; (width as usize) * (height as usize) * 4];
     if !is_valid_footprint(block_w as u8, block_h as u8) || block_w == 0 || block_h == 0 {
         // Fill error colour.
-        for px in out.chunks_exact_mut(4) {
+        for px in out.as_chunks_mut::<4>().0 {
             px.copy_from_slice(&ERROR_COLOR);
         }
         return out;
@@ -1897,15 +1897,13 @@ pub fn encode_astc_ldr_block(texels: &[[u8; 4]], bw: u32, bh: u32) -> [u8; 16] {
     // Dual-plane candidate: only worthwhile when alpha varies (it can
     // then sit on its own interpolation axis, independent of RGB).
     let alpha_varies = texels.iter().any(|t| t[3] != first[3]);
-    if alpha_varies {
-        if let Some(cand) = encode_dual_plane(texels, bw, bh) {
-            let sad = block_sad(&cand, texels, bw, bh);
-            if sad < best_sad {
-                best_sad = sad;
-                best = cand;
-                if best_sad == 0 {
-                    return best;
-                }
+    if alpha_varies && let Some(cand) = encode_dual_plane(texels, bw, bh) {
+        let sad = block_sad(&cand, texels, bw, bh);
+        if sad < best_sad {
+            best_sad = sad;
+            best = cand;
+            if best_sad == 0 {
+                return best;
             }
         }
     }
@@ -2907,14 +2905,14 @@ mod tests {
         assert_eq!(weight_range(0b101, 0).unwrap().max, 4); // 0..4
         assert_eq!(weight_range(0b110, 0).unwrap().max, 5); // 0..5
         assert_eq!(weight_range(0b111, 0).unwrap().max, 7); // 0..7
-                                                            // P = 1 (high precision):
+        // P = 1 (high precision):
         assert_eq!(weight_range(0b000, 1), None);
         assert_eq!(weight_range(0b001, 1), None);
         assert_eq!(weight_range(0b010, 1).unwrap().max, 9); // 0..9
         assert_eq!(weight_range(0b011, 1).unwrap().max, 11); // 0..11
         assert_eq!(weight_range(0b100, 1).unwrap().max, 15); // 0..15
-                                                             // The 0..19 quint/2-bit entry (the one previously mis-coded as
-                                                             // 0..9 quint/1-bit).
+        // The 0..19 quint/2-bit entry (the one previously mis-coded as
+        // 0..9 quint/1-bit).
         let r = weight_range(0b101, 1).unwrap();
         assert_eq!(r.max, 19);
         assert!(r.quints && !r.trits && r.bits == 2);
@@ -3226,7 +3224,7 @@ mod tests {
         for i in 0..16u32 {
             let idx0 = (i * 2) * 2; // plane 0 value index *2 bits
             let idx1 = (i * 2 + 1) * 2; // plane 1
-                                        // plane0 weight = 0 (bits already 0)
+            // plane0 weight = 0 (bits already 0)
             let _ = idx0;
             // plane1 weight = 3
             for k in 0..2 {
@@ -3270,8 +3268,8 @@ mod tests {
         let data = vec![0u8; 8]; // not even one full block
         let out = decode_astc_ldr(&data, 4, 4, 4, 4);
         assert_eq!(out.len(), 4 * 4 * 4);
-        for px in out.chunks_exact(4) {
-            assert_eq!(px, ERROR_COLOR);
+        for px in out.as_chunks::<4>().0.iter() {
+            assert_eq!(*px, ERROR_COLOR);
         }
     }
 
@@ -3359,14 +3357,14 @@ mod tests {
         let (w, h) = (12u32, 12u32);
         let color = [90u8, 17, 240, 255];
         let mut rgba = vec![0u8; (w * h * 4) as usize];
-        for px in rgba.chunks_exact_mut(4) {
+        for px in rgba.as_chunks_mut::<4>().0.iter_mut() {
             px.copy_from_slice(&color);
         }
         for &(bw, bh) in &LDR_BLOCK_FOOTPRINTS {
             let enc = encode_astc_ldr(&rgba, w, h, bw as u32, bh as u32);
             let dec = decode_astc_ldr(&enc, w, h, bw as u32, bh as u32);
-            for px in dec.chunks_exact(4) {
-                assert_eq!(px, color, "{bw}x{bh} solid not exact");
+            for px in dec.as_chunks::<4>().0.iter() {
+                assert_eq!(*px, color, "{bw}x{bh} solid not exact");
             }
         }
     }
@@ -3406,7 +3404,12 @@ mod tests {
             let enc = encode_astc_ldr(&rgba, w, h, bw as u32, bh as u32);
             let dec = decode_astc_ldr(&enc, w, h, bw as u32, bh as u32);
             // No texel should be the error colour (a decodable block).
-            let err = dec.chunks_exact(4).filter(|p| *p == ERROR_COLOR).count();
+            let err = dec
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .filter(|p| **p == ERROR_COLOR)
+                .count();
             assert_eq!(err, 0, "{bw}x{bh} produced error-colour texels");
         }
     }

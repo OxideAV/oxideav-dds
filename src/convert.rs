@@ -26,11 +26,7 @@ use crate::surface::{DdsFile, DdsSurface, SurfaceFormat as S};
 
 #[inline]
 const fn expand1(v: u16) -> u8 {
-    if v != 0 {
-        0xFF
-    } else {
-        0
-    }
+    if v != 0 { 0xFF } else { 0 }
 }
 #[inline]
 const fn expand4(v: u16) -> u8 {
@@ -92,7 +88,9 @@ fn need(data: &[u8], want: usize, what: &str) -> Result<()> {
 
 /// Read `n` little-endian `u16` words.
 fn le_u16s(data: &[u8], n: usize) -> Vec<u16> {
-    data.chunks_exact(2)
+    data.as_chunks::<2>()
+        .0
+        .iter()
         .take(n)
         .map(|c| u16::from_le_bytes([c[0], c[1]]))
         .collect()
@@ -124,7 +122,7 @@ pub(crate) fn surface_to_image(file: &DdsFile, s: &DdsSurface) -> Result<DdsImag
         S::X8R8G8B8 | S::X8B8G8R8 => {
             need(data, n * 4, name)?;
             let mut v = data[..n * 4].to_vec();
-            for px in v.chunks_exact_mut(4) {
+            for px in v.as_chunks_mut::<4>().0 {
                 px[3] = 0xFF;
             }
             v
@@ -169,7 +167,7 @@ pub(crate) fn surface_to_image(file: &DdsFile, s: &DdsSurface) -> Result<DdsImag
         S::R16G16Unorm => {
             need(data, n * 4, name)?;
             let mut v = Vec::with_capacity(n * 8);
-            for px in data[..n * 4].chunks_exact(4) {
+            for px in data[..n * 4].as_chunks::<4>().0 {
                 v.extend_from_slice(px);
                 v.extend_from_slice(&[0, 0, 0xFF, 0xFF]);
             }
@@ -216,7 +214,7 @@ pub(crate) fn surface_to_image(file: &DdsFile, s: &DdsSurface) -> Result<DdsImag
                 crate::hdr::decode_a2r10g10b10_surface(w, h, data)?
             };
             let mut v = Vec::with_capacity(n * 8);
-            for px in codes.chunks_exact(4) {
+            for px in codes.as_chunks::<4>().0 {
                 for c in &px[..3] {
                     v.extend_from_slice(&expand10(*c).to_le_bytes());
                 }
@@ -244,7 +242,7 @@ pub(crate) fn surface_to_image(file: &DdsFile, s: &DdsSurface) -> Result<DdsImag
             let mut rg = vec![0u8; n * 2];
             crate::bcn::decode_bc5_unorm(data, w, h, &mut rg)?;
             let mut v = Vec::with_capacity(n * 4);
-            for p in rg.chunks_exact(2) {
+            for p in rg.as_chunks::<2>().0 {
                 v.extend_from_slice(&[p[0], p[1], 0, 0xFF]);
             }
             v
@@ -302,7 +300,7 @@ pub(crate) fn surface_to_image(file: &DdsFile, s: &DdsSurface) -> Result<DdsImag
             let mut half = vec![0u8; n * 8];
             crate::bc6h::decode_bc6h(data, w, h, pix == S::Bc6hSf16, &mut half)?;
             let mut v = Vec::with_capacity(n * 16);
-            for hw in half.chunks_exact(2) {
+            for hw in half.as_chunks::<2>().0 {
                 let f = crate::bc6h::half_to_f32(u16::from_le_bytes([hw[0], hw[1]]));
                 v.extend_from_slice(&f.to_le_bytes());
             }
@@ -311,7 +309,7 @@ pub(crate) fn surface_to_image(file: &DdsFile, s: &DdsSurface) -> Result<DdsImag
         _ => {
             return Err(DdsError::unsupported(format!(
                 "{name} surfaces have no contract layout"
-            )))
+            )));
         }
     };
 
@@ -332,7 +330,7 @@ fn widen_channels(samples: &[f32], ch: usize, n: usize) -> Vec<u8> {
         }
         2 => {
             let mut v = Vec::with_capacity(n * 16);
-            for p in samples.chunks_exact(2).take(n) {
+            for p in samples.as_chunks::<2>().0.iter().take(n) {
                 push_f32s(&mut v, &[p[0], p[1], 0.0, 1.0]);
             }
             v.resize(n * 16, 0);
@@ -375,7 +373,7 @@ fn to_rgba16(img: &DdsImage) -> Vec<u16> {
         P::Gray16Le => {
             for y in 0..img.height as usize {
                 let Some(row) = img.row(y) else { break };
-                for p in row.chunks_exact(2) {
+                for p in row.as_chunks::<2>().0 {
                     let v = u16::from_le_bytes([p[0], p[1]]);
                     out.extend_from_slice(&[v, v, v, 0xFFFF]);
                 }
@@ -384,7 +382,7 @@ fn to_rgba16(img: &DdsImage) -> Vec<u16> {
         P::Rgba64Le => {
             for y in 0..img.height as usize {
                 let Some(row) = img.row(y) else { break };
-                for p in row.chunks_exact(2) {
+                for p in row.as_chunks::<2>().0 {
                     out.push(u16::from_le_bytes([p[0], p[1]]));
                 }
             }
@@ -416,7 +414,7 @@ fn to_rgba_f32(img: &DdsImage) -> Vec<f32> {
         P::GrayF32Le => {
             for y in 0..img.height as usize {
                 let Some(row) = img.row(y) else { break };
-                for p in row.chunks_exact(4) {
+                for p in row.as_chunks::<4>().0 {
                     let v = rd(p);
                     out.extend_from_slice(&[v, v, v, 1.0]);
                 }
@@ -425,7 +423,7 @@ fn to_rgba_f32(img: &DdsImage) -> Vec<f32> {
         P::RgbF32Le => {
             for y in 0..img.height as usize {
                 let Some(row) = img.row(y) else { break };
-                for p in row.chunks_exact(12) {
+                for p in row.as_chunks::<12>().0 {
                     out.extend_from_slice(&[rd(&p[0..4]), rd(&p[4..8]), rd(&p[8..12]), 1.0]);
                 }
             }
@@ -433,7 +431,7 @@ fn to_rgba_f32(img: &DdsImage) -> Vec<f32> {
         P::RgbaF32Le => {
             for y in 0..img.height as usize {
                 let Some(row) = img.row(y) else { break };
-                for p in row.chunks_exact(4) {
+                for p in row.as_chunks::<4>().0 {
                     out.push(rd(p));
                 }
             }
@@ -494,7 +492,7 @@ pub(crate) fn image_to_surface(img: &DdsImage, target: S) -> Result<Vec<u8>> {
             let rgba = img.to_rgba8();
             let x = target == S::X8R8G8B8;
             let mut v = Vec::with_capacity(n * 4);
-            for p in rgba.chunks_exact(4) {
+            for p in rgba.as_chunks::<4>().0 {
                 v.extend_from_slice(&[p[2], p[1], p[0], if x { 0xFF } else { p[3] }]);
             }
             v
@@ -503,7 +501,7 @@ pub(crate) fn image_to_surface(img: &DdsImage, target: S) -> Result<Vec<u8>> {
         S::X8B8G8R8 => {
             // The unused byte is written as 0xFF, the value it reads back as.
             let mut v = img.to_rgba8();
-            for p in v.chunks_exact_mut(4) {
+            for p in v.as_chunks_mut::<4>().0 {
                 p[3] = 0xFF;
             }
             v
@@ -511,7 +509,7 @@ pub(crate) fn image_to_surface(img: &DdsImage, target: S) -> Result<Vec<u8>> {
         S::R8G8B8 => {
             let rgb = img.to_rgb8();
             let mut v = Vec::with_capacity(n * 3);
-            for p in rgb.chunks_exact(3) {
+            for p in rgb.as_chunks::<3>().0 {
                 v.extend_from_slice(&[p[2], p[1], p[0]]);
             }
             v
@@ -520,11 +518,19 @@ pub(crate) fn image_to_surface(img: &DdsImage, target: S) -> Result<Vec<u8>> {
             ((p[0] as u16 >> 3) << 11) | ((p[1] as u16 >> 2) << 5) | (p[2] as u16 >> 3)
         }),
         S::A1R5G5B5 | S::X1R5G5B5 => pack16(&img.to_rgba8(), |p| {
-            let a = if target == S::A1R5G5B5 && p[3] >= 0x80 { 0x8000 } else { 0 };
+            let a = if target == S::A1R5G5B5 && p[3] >= 0x80 {
+                0x8000
+            } else {
+                0
+            };
             a | ((p[0] as u16 >> 3) << 10) | ((p[1] as u16 >> 3) << 5) | (p[2] as u16 >> 3)
         }),
         S::A4R4G4B4 | S::X4R4G4B4 => pack16(&img.to_rgba8(), |p| {
-            let a = if target == S::A4R4G4B4 { (p[3] as u16 >> 4) << 12 } else { 0 };
+            let a = if target == S::A4R4G4B4 {
+                (p[3] as u16 >> 4) << 12
+            } else {
+                0
+            };
             a | ((p[0] as u16 >> 4) << 8) | ((p[1] as u16 >> 4) << 4) | (p[2] as u16 >> 4)
         }),
         S::A4B4G4R4Unorm => pack16(&img.to_rgba8(), |p| {
@@ -546,17 +552,27 @@ pub(crate) fn image_to_surface(img: &DdsImage, target: S) -> Result<Vec<u8>> {
                     img.format.name()
                 )));
             }
-            img.to_rgba8().chunks_exact(4).map(|p| p[3]).collect()
+            img.to_rgba8()
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|p| p[3])
+                .collect()
         }
         // Luminance layouts from grey images.
         S::L8 | S::R8Unorm => {
             grey_only(img, target)?;
-            img.to_rgba8().chunks_exact(4).map(|p| p[0]).collect()
+            img.to_rgba8()
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|p| p[0])
+                .collect()
         }
         S::A8L8 => {
             grey_only(img, target)?;
             let mut v = Vec::with_capacity(n * 2);
-            for p in img.to_rgba8().chunks_exact(4) {
+            for p in img.to_rgba8().as_chunks::<4>().0 {
                 v.extend_from_slice(&[p[0], p[3]]);
             }
             v
@@ -564,14 +580,16 @@ pub(crate) fn image_to_surface(img: &DdsImage, target: S) -> Result<Vec<u8>> {
         S::A4L4 => {
             grey_only(img, target)?;
             img.to_rgba8()
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|p| (p[0] >> 4) | (p[3] & 0xF0))
                 .collect()
         }
         S::L16 | S::R16Unorm => {
             grey_only(img, target)?;
             let mut v = Vec::with_capacity(n * 2);
-            for p in to_rgba16(img).chunks_exact(4) {
+            for p in to_rgba16(img).as_chunks::<4>().0 {
                 v.extend_from_slice(&p[0].to_le_bytes());
             }
             v
@@ -579,7 +597,7 @@ pub(crate) fn image_to_surface(img: &DdsImage, target: S) -> Result<Vec<u8>> {
         // 16-bit layouts.
         S::R16G16Unorm => {
             let mut v = Vec::with_capacity(n * 4);
-            for p in to_rgba16(img).chunks_exact(4) {
+            for p in to_rgba16(img).as_chunks::<4>().0 {
                 v.extend_from_slice(&p[0].to_le_bytes());
                 v.extend_from_slice(&p[1].to_le_bytes());
             }
@@ -594,7 +612,7 @@ pub(crate) fn image_to_surface(img: &DdsImage, target: S) -> Result<Vec<u8>> {
         }
         S::R10G10B10A2Unorm => {
             let mut v = Vec::with_capacity(n * 4);
-            for p in to_rgba16(img).chunks_exact(4) {
+            for p in to_rgba16(img).as_chunks::<4>().0 {
                 let word = (p[0] as u32 >> 6)
                     | ((p[1] as u32 >> 6) << 10)
                     | ((p[2] as u32 >> 6) << 20)
@@ -605,7 +623,7 @@ pub(crate) fn image_to_surface(img: &DdsImage, target: S) -> Result<Vec<u8>> {
         }
         S::A2R10G10B10 => {
             let mut v = Vec::with_capacity(n * 4);
-            for p in to_rgba16(img).chunks_exact(4) {
+            for p in to_rgba16(img).as_chunks::<4>().0 {
                 let word = ((p[0] as u32 >> 6) << 20)
                     | ((p[1] as u32 >> 6) << 10)
                     | (p[2] as u32 >> 6)
@@ -623,9 +641,9 @@ pub(crate) fn image_to_surface(img: &DdsImage, target: S) -> Result<Vec<u8>> {
             crate::encoder::encode_rgba8_to_bc_level(&rgba, w, h, target, &mut v)?;
             v
         }
-        S::Astc { block_w, block_h, .. } => {
-            crate::astc::encode_astc_ldr(&img.to_rgba8(), w, h, block_w, block_h)
-        }
+        S::Astc {
+            block_w, block_h, ..
+        } => crate::astc::encode_astc_ldr(&img.to_rgba8(), w, h, block_w, block_h),
         // Floating point.
         S::R16Float | S::R16G16Float | S::R16G16B16A16Float => {
             let ch = match target {
@@ -634,7 +652,7 @@ pub(crate) fn image_to_surface(img: &DdsImage, target: S) -> Result<Vec<u8>> {
                 _ => 4,
             };
             let mut v = Vec::with_capacity(n * 2 * ch);
-            for p in to_rgba_f32(img).chunks_exact(4) {
+            for p in to_rgba_f32(img).as_chunks::<4>().0 {
                 for c in &p[..ch] {
                     v.extend_from_slice(&crate::bc6h_enc::f32_to_half(*c).to_le_bytes());
                 }
@@ -648,14 +666,16 @@ pub(crate) fn image_to_surface(img: &DdsImage, target: S) -> Result<Vec<u8>> {
                 _ => 4,
             };
             let mut v = Vec::with_capacity(n * 4 * ch);
-            for p in to_rgba_f32(img).chunks_exact(4) {
+            for p in to_rgba_f32(img).as_chunks::<4>().0 {
                 push_f32s(&mut v, &p[..ch]);
             }
             v
         }
         S::Bc6hUf16 | S::Bc6hSf16 => {
             let rgb: Vec<f32> = to_rgba_f32(img)
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .flat_map(|p| [p[0], p[1], p[2]])
                 .collect();
             let bw = w.max(1).div_ceil(4) as usize;
@@ -676,7 +696,7 @@ pub(crate) fn image_to_surface(img: &DdsImage, target: S) -> Result<Vec<u8>> {
                 _ => 4,
             };
             let mut v = Vec::with_capacity(n * ch);
-            for p in to_rgba_f32(img).chunks_exact(4) {
+            for p in to_rgba_f32(img).as_chunks::<4>().0 {
                 for c in &p[..ch] {
                     v.push(snorm_q(*c, 8) as i8 as u8);
                 }
@@ -690,7 +710,7 @@ pub(crate) fn image_to_surface(img: &DdsImage, target: S) -> Result<Vec<u8>> {
                 _ => 4,
             };
             let mut v = Vec::with_capacity(n * 2 * ch);
-            for p in to_rgba_f32(img).chunks_exact(4) {
+            for p in to_rgba_f32(img).as_chunks::<4>().0 {
                 for c in &p[..ch] {
                     v.extend_from_slice(&(snorm_q(*c, 16) as i16).to_le_bytes());
                 }
@@ -700,7 +720,7 @@ pub(crate) fn image_to_surface(img: &DdsImage, target: S) -> Result<Vec<u8>> {
         S::Bc4Snorm | S::Bc5Snorm => {
             let ch = if target == S::Bc4Snorm { 1 } else { 2 };
             let mut q = Vec::with_capacity(n * ch);
-            for p in to_rgba_f32(img).chunks_exact(4) {
+            for p in to_rgba_f32(img).as_chunks::<4>().0 {
                 for c in &p[..ch] {
                     q.push(snorm_q(*c, 8) as i8 as u8);
                 }
@@ -719,20 +739,20 @@ pub(crate) fn image_to_surface(img: &DdsImage, target: S) -> Result<Vec<u8>> {
             return Err(DdsError::unsupported(format!(
                 "{} has no packer in this crate (decode only)",
                 target.name()
-            )))
+            )));
         }
         other => {
             return Err(DdsError::unsupported(format!(
                 "{} cannot be produced from a contract image (plain-integer, depth-stencil, typeless and YUV layouts are depth-API only)",
                 other.name()
-            )))
+            )));
         }
     })
 }
 
 fn pack16(rgba: &[u8], f: impl Fn(&[u8]) -> u16) -> Vec<u8> {
     let mut v = Vec::with_capacity(rgba.len() / 2);
-    for p in rgba.chunks_exact(4) {
+    for p in rgba.as_chunks::<4>().0 {
         v.extend_from_slice(&f(p).to_le_bytes());
     }
     v
@@ -921,7 +941,9 @@ mod tests {
         let vals: Vec<f32> = img
             .as_bytes()
             .unwrap()
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect();
         assert_eq!(vals, vec![0.25, 0.5, 0.0, 1.0]);
@@ -938,7 +960,9 @@ mod tests {
         let vals: Vec<f32> = img
             .as_bytes()
             .unwrap()
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect();
         assert_eq!(vals, vec![-1.0, -1.0, 1.0]);

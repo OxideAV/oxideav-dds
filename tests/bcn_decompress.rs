@@ -11,12 +11,12 @@
 //! external decoder source was consulted.
 
 use oxideav_dds::types::{
-    DDPF_FOURCC, DDSD_REQUIRED, DDS_HEADER_SIZE, DDS_MAGIC, DDS_PIXELFORMAT_SIZE, FOURCC_BC4U,
+    DDPF_FOURCC, DDS_HEADER_SIZE, DDS_MAGIC, DDS_PIXELFORMAT_SIZE, DDSD_REQUIRED, FOURCC_BC4U,
     FOURCC_BC5U, FOURCC_DXT1, FOURCC_DXT3, FOURCC_DXT5,
 };
 use oxideav_dds::{
-    decode_bc1, decode_bc2, decode_bc3, decode_bc4_unorm, decode_bc5_unorm, parse_dds,
-    SurfaceFormat,
+    SurfaceFormat, decode_bc1, decode_bc2, decode_bc3, decode_bc4_unorm, decode_bc5_unorm,
+    parse_dds,
 };
 
 /// Build a minimal legacy DDS file with a `DDPF_FOURCC` pixel format
@@ -64,7 +64,7 @@ fn bc1_decompress_solid_white_4x4() {
 
     let mut rgba = vec![0u8; 4 * 4 * 4];
     decode_bc1(&img.surfaces[0].plane.data, 4, 4, &mut rgba).unwrap();
-    for chunk in rgba.chunks_exact(4) {
+    for chunk in rgba.as_chunks::<4>().0 {
         assert_eq!(chunk, &[255, 255, 255, 255]);
     }
 }
@@ -117,7 +117,7 @@ fn bc2_decompress_explicit_alpha_block() {
     assert_eq!(img.pixel_format, SurfaceFormat::Bc2);
     let mut rgba = vec![0u8; 4 * 4 * 4];
     decode_bc2(&img.surfaces[0].plane.data, 4, 4, &mut rgba).unwrap();
-    for (i, chunk) in rgba.chunks_exact(4).enumerate() {
+    for (i, chunk) in rgba.as_chunks::<4>().0.iter().enumerate() {
         let want_a = ((i as u8) << 4) | (i as u8);
         assert_eq!(chunk, &[255, 255, 255, want_a], "pixel {i}");
     }
@@ -135,7 +135,7 @@ fn bc3_decompress_interpolated_alpha_block() {
     assert_eq!(img.pixel_format, SurfaceFormat::Bc3);
     let mut rgba = vec![0u8; 4 * 4 * 4];
     decode_bc3(&img.surfaces[0].plane.data, 4, 4, &mut rgba).unwrap();
-    for chunk in rgba.chunks_exact(4) {
+    for chunk in rgba.as_chunks::<4>().0 {
         assert_eq!(chunk, &[255, 255, 255, 255]);
     }
 }
@@ -165,7 +165,7 @@ fn bc5_decompress_two_channel_4x4() {
     assert_eq!(img.pixel_format, SurfaceFormat::Bc5Unorm);
     let mut rg = vec![0u8; 4 * 4 * 2];
     decode_bc5_unorm(&img.surfaces[0].plane.data, 4, 4, &mut rg).unwrap();
-    for pair in rg.chunks_exact(2) {
+    for pair in rg.as_chunks::<2>().0 {
         assert_eq!(pair, &[200, 50]);
     }
 }
@@ -181,7 +181,7 @@ fn bc1_handles_5x5_surface() {
     let img = parse_dds(&bytes).unwrap();
     let mut rgba = vec![0u8; 5 * 5 * 4];
     decode_bc1(&img.surfaces[0].plane.data, 5, 5, &mut rgba).unwrap();
-    for chunk in rgba.chunks_exact(4) {
+    for chunk in rgba.as_chunks::<4>().0 {
         assert_eq!(chunk, &[255, 255, 255, 255]);
     }
 }

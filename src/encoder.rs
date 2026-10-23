@@ -27,7 +27,7 @@
 //! Reference: Microsoft's public "DDS file layout for textures" page on
 //! learn.microsoft.com.
 
-use crate::decoder::{for_each_surface, Layout};
+use crate::decoder::{Layout, for_each_surface};
 use crate::error::{DdsError, Result};
 use crate::surface::{CubemapFace, DdsFile, DdsSurface, Plane, SurfaceFormat};
 use crate::types::*;
@@ -403,11 +403,7 @@ pub fn encode_dds_uncompressed(image: &DdsFile) -> Result<Vec<u8>> {
                 }
                 chain.push(&s.plane.data[..want]);
             }
-            if ok {
-                Some(chain)
-            } else {
-                None
-            }
+            if ok { Some(chain) } else { None }
         };
 
     let total_payload: usize = mip_dims
@@ -682,11 +678,7 @@ pub fn encode_dds_uncompressed_dx10(image: &DdsFile) -> Result<Vec<u8>> {
                 }
                 chain.push(&s.plane.data[..want]);
             }
-            if ok {
-                Some(chain)
-            } else {
-                None
-            }
+            if ok { Some(chain) } else { None }
         };
 
     let total_payload: usize = mip_dims
@@ -729,7 +721,7 @@ pub fn encode_dds_uncompressed_dx10(image: &DdsFile) -> Result<Vec<u8>> {
     push_u32(&mut out, 0); // caps3
     push_u32(&mut out, 0); // caps4
     push_u32(&mut out, 0); // reserved2
-                           // DDS_HEADER_DXT10.
+    // DDS_HEADER_DXT10.
     let dxgi = image.dxgi_format.map(|f| f.to_u32()).unwrap_or(dxgi);
     push_u32(&mut out, dxgi);
     push_u32(&mut out, DDS_DIMENSION_TEXTURE2D);
@@ -1221,7 +1213,7 @@ pub fn encode_dds_volume_block_compressed(image: &DdsFile) -> Result<Vec<u8>> {
     push_u32(&mut out, 0); // caps3
     push_u32(&mut out, 0); // caps4
     push_u32(&mut out, 0); // reserved2
-                           // DDS_HEADER_DXT10.
+    // DDS_HEADER_DXT10.
     let dxgi = image
         .dxgi_format
         .map(|f| f.to_u32())
@@ -1744,7 +1736,7 @@ pub fn encode_dds_astc(
     push_u32(&mut out, 0); // caps3
     push_u32(&mut out, 0); // caps4
     push_u32(&mut out, 0); // reserved2
-                           // DDS_HEADER_DXT10.
+    // DDS_HEADER_DXT10.
     push_u32(&mut out, dxgi);
     push_u32(&mut out, DDS_DIMENSION_TEXTURE2D);
     push_u32(&mut out, 0); // misc_flag
@@ -1769,13 +1761,13 @@ pub(crate) fn encode_rgba8_to_bc_level(
         SurfaceFormat::Bc3 => crate::bcn_enc::encode_bc3(rgba, width, height, output),
         SurfaceFormat::Bc4Unorm => {
             // BC4 takes a single channel. Extract R from RGBA.
-            let r_only: Vec<u8> = rgba.chunks_exact(4).map(|p| p[0]).collect();
+            let r_only: Vec<u8> = rgba.as_chunks::<4>().0.iter().map(|p| p[0]).collect();
             crate::bcn_enc::encode_bc4_unorm(&r_only, width, height, output)
         }
         SurfaceFormat::Bc5Unorm => {
             // BC5 takes two channels. Extract RG from RGBA.
             let mut rg = Vec::with_capacity(rgba.len() / 2);
-            for p in rgba.chunks_exact(4) {
+            for p in rgba.as_chunks::<4>().0 {
                 rg.push(p[0]);
                 rg.push(p[1]);
             }
@@ -2046,10 +2038,18 @@ pub fn write_dds_file(file: &DdsFile, force_dx10: bool) -> Result<Vec<u8>> {
         {
             return Err(DdsError::invalid(format!(
                 "surface {idx} is ({}x{} mip {} slice {} face {} z {}), expected ({}x{} mip {} slice {} face {} z {}) in on-disk order",
-                s.width, s.height, s.mip_level, s.array_slice,
-                s.face.map(|f| f.short_name()).unwrap_or("-"), s.depth_slice,
-                d.width, d.height, d.mip_level, d.array_slice,
-                d.face.map(|f| f.short_name()).unwrap_or("-"), d.depth_slice,
+                s.width,
+                s.height,
+                s.mip_level,
+                s.array_slice,
+                s.face.map(|f| f.short_name()).unwrap_or("-"),
+                s.depth_slice,
+                d.width,
+                d.height,
+                d.mip_level,
+                d.array_slice,
+                d.face.map(|f| f.short_name()).unwrap_or("-"),
+                d.depth_slice,
             )));
         }
         if s.plane.data.len() != d.bytes {

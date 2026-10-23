@@ -98,14 +98,14 @@ pub use encoder::write_dds_file;
 pub use surface::DdsPlane;
 pub use surface::{CubemapFace, DdsFile, DdsSurface, SurfaceFormat};
 pub use types::{
-    DdsHeader, DdsHeaderDxt10, DdsPixelFormatHeader, DxgiFormat, DDS_HEADER_DXT10_SIZE,
-    DDS_HEADER_SIZE, DDS_MAGIC, DDS_PIXELFORMAT_SIZE,
+    DDS_HEADER_DXT10_SIZE, DDS_HEADER_SIZE, DDS_MAGIC, DDS_PIXELFORMAT_SIZE, DdsHeader,
+    DdsHeaderDxt10, DdsPixelFormatHeader, DxgiFormat,
 };
 
 pub use astc::{
-    decode_astc_ldr, decode_astc_ldr_block, decode_astc_ldr_surface, encode_astc_ldr,
-    encode_astc_ldr_block, encode_astc_ldr_surface, is_valid_footprint,
-    ERROR_COLOR as ASTC_ERROR_COLOR, LDR_BLOCK_FOOTPRINTS,
+    ERROR_COLOR as ASTC_ERROR_COLOR, LDR_BLOCK_FOOTPRINTS, decode_astc_ldr, decode_astc_ldr_block,
+    decode_astc_ldr_surface, encode_astc_ldr, encode_astc_ldr_block, encode_astc_ldr_surface,
+    is_valid_footprint,
 };
 pub use bc6h::decode_bc6h;
 pub use bc6h_enc::{
@@ -122,10 +122,10 @@ pub use bcn_enc::{
     encode_bc5_unorm,
 };
 pub use depth::{
-    decode_depth_d16_surface, decode_depth_d24s8_surface, decode_depth_d32_surface,
+    DepthStencil, decode_depth_d16_surface, decode_depth_d24s8_surface, decode_depth_d32_surface,
     decode_depth_d32s8_surface, decode_depth_r24_unorm_x8_surface,
     decode_depth_r32_float_x8x24_surface, decode_depth_x24_g8_uint_surface,
-    decode_depth_x32_g8x24_uint_surface, DepthStencil,
+    decode_depth_x32_g8x24_uint_surface,
 };
 pub use encoder::{
     encode_dds_astc, encode_dds_block_compressed, encode_dds_block_compressed_from_rgba8,
@@ -134,27 +134,26 @@ pub use encoder::{
 };
 pub use hdr::{
     decode_a2r10g10b10_surface, decode_a4b4g4r4_unorm_surface, decode_a8r3g3b2_surface,
-    decode_float_surface, decode_g8r8_g8b8_unorm_surface, decode_r10g10b10a2_uint_surface,
-    decode_r10g10b10a2_unorm_surface, decode_r11g11b10_float_surface,
-    decode_r8g8_b8g8_unorm_surface, decode_r9g9b9e5_sharedexp_surface, decode_rgba16_snorm_surface,
-    decode_rgba16_unorm_surface, decode_sint16_surface, decode_sint32_surface,
-    decode_sint8_surface, decode_snorm_surface, decode_uint16_surface, decode_uint32_surface,
-    decode_uint8_surface, decode_unorm_surface,
+    decode_float_surface, decode_g8r8_g8b8_unorm_surface, decode_r8g8_b8g8_unorm_surface,
+    decode_r9g9b9e5_sharedexp_surface, decode_r10g10b10a2_uint_surface,
+    decode_r10g10b10a2_unorm_surface, decode_r11g11b10_float_surface, decode_rgba16_snorm_surface,
+    decode_rgba16_unorm_surface, decode_sint8_surface, decode_sint16_surface,
+    decode_sint32_surface, decode_snorm_surface, decode_uint8_surface, decode_uint16_surface,
+    decode_uint32_surface, decode_unorm_surface,
 };
 pub use yuv::{
-    decode_420_opaque_surface, decode_ayuv_surface, decode_nv11_surface, decode_nv12_surface,
-    decode_p010_surface, decode_p016_surface, decode_uyvy_surface, decode_y210_surface,
-    decode_y216_surface, decode_y410_surface, decode_y416_surface, decode_yuy2_surface, YuvFormat,
-    YuvSampling,
+    YuvFormat, YuvSampling, decode_420_opaque_surface, decode_ayuv_surface, decode_nv11_surface,
+    decode_nv12_surface, decode_p010_surface, decode_p016_surface, decode_uyvy_surface,
+    decode_y210_surface, decode_y216_surface, decode_y410_surface, decode_y416_surface,
+    decode_yuy2_surface,
 };
 
 // ---- Framework integration (`registry` feature) ----------------------------
 
 #[cfg(feature = "registry")]
 pub use registry::{
-    from_color_signal, from_core_pixel_format, make_decoder, make_encoder, register,
-    register_codecs, register_containers, to_color_signal, to_core_pixel_format, DdsDecoder,
-    DdsEncoder,
+    DdsDecoder, DdsEncoder, from_color_signal, from_core_pixel_format, make_decoder, make_encoder,
+    register, register_codecs, register_containers, to_color_signal, to_core_pixel_format,
 };
 
 #[cfg(feature = "registry")]

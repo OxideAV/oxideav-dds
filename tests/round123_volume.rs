@@ -10,8 +10,8 @@
 //! D3DX, NVTT, or squish source consulted.
 
 use oxideav_dds::{
-    encode_dds_volume, encode_dds_volume_block_compressed, parse_dds, DdsFile, DdsSurface,
-    DxgiFormat, Plane, SurfaceFormat,
+    DdsFile, DdsSurface, DxgiFormat, Plane, SurfaceFormat, encode_dds_volume,
+    encode_dds_volume_block_compressed, parse_dds,
 };
 
 // Header field constants (kept local so the test asserts the on-disk

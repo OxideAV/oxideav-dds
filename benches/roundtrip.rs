@@ -26,10 +26,10 @@
 //! Run with:
 //!     cargo bench -p oxideav-dds --bench roundtrip
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 
 use oxideav_dds::{
-    encode_dds_uncompressed, parse_dds, types::DxgiFormat, DdsFile, Plane, SurfaceFormat,
+    DdsFile, Plane, SurfaceFormat, encode_dds_uncompressed, parse_dds, types::DxgiFormat,
 };
 
 fn xorshift32(state: &mut u32) -> u32 {

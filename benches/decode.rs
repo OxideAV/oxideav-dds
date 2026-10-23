@@ -33,7 +33,7 @@
 //! Run with:
 //!     cargo bench -p oxideav-dds --bench decode
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 
 use oxideav_dds::{
     decode_bc1, decode_bc3, decode_bc4_unorm, decode_bc5_unorm, decode_bc6h, decode_bc7,

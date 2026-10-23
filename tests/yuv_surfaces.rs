@@ -13,14 +13,14 @@
 //! `DXGI_FORMAT` enumeration page staged under `docs/image/dds/`.
 
 use oxideav_dds::types::{
-    DDPF_FOURCC, DDSD_PIXELFORMAT, DDSD_REQUIRED, DDS_HEADER_SIZE, DDS_MAGIC, DDS_PIXELFORMAT_SIZE,
+    DDPF_FOURCC, DDS_HEADER_SIZE, DDS_MAGIC, DDS_PIXELFORMAT_SIZE, DDSD_PIXELFORMAT, DDSD_REQUIRED,
     FOURCC_DX10,
 };
 use oxideav_dds::yuv::YuvFormat;
 use oxideav_dds::{
-    decode_420_opaque_surface, decode_ayuv_surface, decode_nv11_surface, decode_nv12_surface,
-    decode_p010_surface, decode_p016_surface, decode_y210_surface, decode_y216_surface,
-    decode_y410_surface, decode_y416_surface, decode_yuy2_surface, parse_dds, SurfaceFormat,
+    SurfaceFormat, decode_420_opaque_surface, decode_ayuv_surface, decode_nv11_surface,
+    decode_nv12_surface, decode_p010_surface, decode_p016_surface, decode_y210_surface,
+    decode_y216_surface, decode_y410_surface, decode_y416_surface, decode_yuy2_surface, parse_dds,
 };
 
 const CAPS_TEXTURE: u32 = 0x0000_1000;
@@ -53,7 +53,7 @@ fn build_dx10_dds(dxgi_format: u32, width: u32, height: u32, pixel_data: &[u8]) 
     out.extend_from_slice(&0u32.to_le_bytes()); // caps3
     out.extend_from_slice(&0u32.to_le_bytes()); // caps4
     out.extend_from_slice(&0u32.to_le_bytes()); // reserved2
-                                                // DDS_HEADER_DXT10: dxgi_format, dimension (2D = 3), misc, array=1, misc2
+    // DDS_HEADER_DXT10: dxgi_format, dimension (2D = 3), misc, array=1, misc2
     out.extend_from_slice(&dxgi_format.to_le_bytes());
     out.extend_from_slice(&3u32.to_le_bytes());
     out.extend_from_slice(&0u32.to_le_bytes());
@@ -160,7 +160,9 @@ fn dx10_nv12_end_to_end() {
     let out = decode_nv12_surface(2, 2, &img.surfaces[0].plane.data).unwrap();
     assert_eq!(
         out,
-        vec![1, 200, 201, 0xff, 2, 200, 201, 0xff, 3, 200, 201, 0xff, 4, 200, 201, 0xff]
+        vec![
+            1, 200, 201, 0xff, 2, 200, 201, 0xff, 3, 200, 201, 0xff, 4, 200, 201, 0xff
+        ]
     );
 }
 
@@ -187,7 +189,9 @@ fn dx10_p010_end_to_end() {
     let out = decode_p010_surface(2, 2, &img.surfaces[0].plane.data).unwrap();
     assert_eq!(
         out,
-        vec![1, 500, 600, 0xffff, 2, 500, 600, 0xffff, 3, 500, 600, 0xffff, 4, 500, 600, 0xffff]
+        vec![
+            1, 500, 600, 0xffff, 2, 500, 600, 0xffff, 3, 500, 600, 0xffff, 4, 500, 600, 0xffff
+        ]
     );
 }
 
@@ -215,7 +219,9 @@ fn dx10_nv11_end_to_end() {
     let out = decode_nv11_surface(4, 1, &img.surfaces[0].plane.data).unwrap();
     assert_eq!(
         out,
-        vec![1, 50, 51, 0xff, 2, 50, 51, 0xff, 3, 50, 51, 0xff, 4, 50, 51, 0xff]
+        vec![
+            1, 50, 51, 0xff, 2, 50, 51, 0xff, 3, 50, 51, 0xff, 4, 50, 51, 0xff
+        ]
     );
 }
 

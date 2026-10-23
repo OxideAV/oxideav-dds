@@ -587,7 +587,7 @@ impl DdsImage {
         let h = self.height as usize;
         let mut out = vec![0u8; w.saturating_mul(h).saturating_mul(out_bpp)];
         if out_bpp == 4 && !self.format.has_alpha() {
-            for px in out.chunks_exact_mut(4) {
+            for px in out.as_chunks_mut::<4>().0 {
                 px[3] = 0xFF;
             }
         }
@@ -605,7 +605,10 @@ impl DdsImage {
                     }
                 }
                 PixelFormat::Ya8 => {
-                    for (d, s) in dst.chunks_exact_mut(out_bpp).zip(src.chunks_exact(2)) {
+                    for (d, s) in dst
+                        .chunks_exact_mut(out_bpp)
+                        .zip(src.as_chunks::<2>().0.iter())
+                    {
                         d[0] = s[0];
                         d[1] = s[0];
                         d[2] = s[0];
@@ -615,31 +618,46 @@ impl DdsImage {
                     }
                 }
                 PixelFormat::Gray16Le => {
-                    for (d, s) in dst.chunks_exact_mut(out_bpp).zip(src.chunks_exact(2)) {
+                    for (d, s) in dst
+                        .chunks_exact_mut(out_bpp)
+                        .zip(src.as_chunks::<2>().0.iter())
+                    {
                         d[0] = s[1];
                         d[1] = s[1];
                         d[2] = s[1];
                     }
                 }
                 PixelFormat::Rgb24 => {
-                    for (d, s) in dst.chunks_exact_mut(out_bpp).zip(src.chunks_exact(3)) {
+                    for (d, s) in dst
+                        .chunks_exact_mut(out_bpp)
+                        .zip(src.as_chunks::<3>().0.iter())
+                    {
                         d[..3].copy_from_slice(s);
                     }
                 }
                 PixelFormat::Bgr24 => {
-                    for (d, s) in dst.chunks_exact_mut(out_bpp).zip(src.chunks_exact(3)) {
+                    for (d, s) in dst
+                        .chunks_exact_mut(out_bpp)
+                        .zip(src.as_chunks::<3>().0.iter())
+                    {
                         d[0] = s[2];
                         d[1] = s[1];
                         d[2] = s[0];
                     }
                 }
                 PixelFormat::Rgba => {
-                    for (d, s) in dst.chunks_exact_mut(out_bpp).zip(src.chunks_exact(4)) {
+                    for (d, s) in dst
+                        .chunks_exact_mut(out_bpp)
+                        .zip(src.as_chunks::<4>().0.iter())
+                    {
                         d[..out_bpp].copy_from_slice(&s[..out_bpp]);
                     }
                 }
                 PixelFormat::Bgra => {
-                    for (d, s) in dst.chunks_exact_mut(out_bpp).zip(src.chunks_exact(4)) {
+                    for (d, s) in dst
+                        .chunks_exact_mut(out_bpp)
+                        .zip(src.as_chunks::<4>().0.iter())
+                    {
                         d[0] = s[2];
                         d[1] = s[1];
                         d[2] = s[0];
@@ -649,7 +667,10 @@ impl DdsImage {
                     }
                 }
                 PixelFormat::Rgba64Le => {
-                    for (d, s) in dst.chunks_exact_mut(out_bpp).zip(src.chunks_exact(8)) {
+                    for (d, s) in dst
+                        .chunks_exact_mut(out_bpp)
+                        .zip(src.as_chunks::<8>().0.iter())
+                    {
                         d[0] = s[1];
                         d[1] = s[3];
                         d[2] = s[5];
@@ -659,7 +680,10 @@ impl DdsImage {
                     }
                 }
                 PixelFormat::GrayF32Le => {
-                    for (d, s) in dst.chunks_exact_mut(out_bpp).zip(src.chunks_exact(4)) {
+                    for (d, s) in dst
+                        .chunks_exact_mut(out_bpp)
+                        .zip(src.as_chunks::<4>().0.iter())
+                    {
                         let v = float_to_u8(f32::from_le_bytes([s[0], s[1], s[2], s[3]]));
                         d[0] = v;
                         d[1] = v;
@@ -667,7 +691,10 @@ impl DdsImage {
                     }
                 }
                 PixelFormat::RgbF32Le => {
-                    for (d, s) in dst.chunks_exact_mut(out_bpp).zip(src.chunks_exact(12)) {
+                    for (d, s) in dst
+                        .chunks_exact_mut(out_bpp)
+                        .zip(src.as_chunks::<12>().0.iter())
+                    {
                         for c in 0..3 {
                             d[c] = float_to_u8(f32::from_le_bytes([
                                 s[c * 4],
@@ -679,7 +706,10 @@ impl DdsImage {
                     }
                 }
                 PixelFormat::RgbaF32Le => {
-                    for (d, s) in dst.chunks_exact_mut(out_bpp).zip(src.chunks_exact(16)) {
+                    for (d, s) in dst
+                        .chunks_exact_mut(out_bpp)
+                        .zip(src.as_chunks::<16>().0.iter())
+                    {
                         for c in 0..out_bpp {
                             d[c] = float_to_u8(f32::from_le_bytes([
                                 s[c * 4],

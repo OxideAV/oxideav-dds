@@ -35,7 +35,7 @@
 //! Run with:
 //!     cargo bench -p oxideav-dds --bench encode
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 
 use oxideav_dds::{
     encode_bc1, encode_bc3, encode_bc4_unorm, encode_bc5_unorm, encode_bc6h, encode_bc7,

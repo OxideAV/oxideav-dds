@@ -14,13 +14,13 @@
 use std::io::{Read, SeekFrom, Write};
 
 use oxideav_core::{
-    CodecId, CodecParameters, CodecResolver, ContainerRegistry, Demuxer, Error, MediaType, Muxer,
-    Packet, ProbeData, ProbeScore, ReadSeek, Result, StreamInfo, TimeBase, WriteSeek,
-    MAX_PROBE_SCORE,
+    CodecId, CodecParameters, CodecResolver, ContainerRegistry, Demuxer, Error, MAX_PROBE_SCORE,
+    MediaType, Muxer, Packet, ProbeData, ProbeScore, ReadSeek, Result, StreamInfo, TimeBase,
+    WriteSeek,
 };
 
-use crate::types::{DDS_HEADER_SIZE, DDS_MAGIC};
 use crate::CODEC_ID_STR;
+use crate::types::{DDS_HEADER_SIZE, DDS_MAGIC};
 
 /// Register the `.dds` demuxer + muxer + probe + extension entries
 /// against `reg`.
@@ -174,7 +174,7 @@ mod tests {
     use std::io::Cursor;
 
     use crate::types::{
-        DDPF_RGB, DDSCAPS_TEXTURE, DDSD_PITCH, DDSD_REQUIRED, DDS_PIXELFORMAT_SIZE,
+        DDPF_RGB, DDS_PIXELFORMAT_SIZE, DDSCAPS_TEXTURE, DDSD_PITCH, DDSD_REQUIRED,
     };
 
     fn build_minimal_dds(w: u32, h: u32) -> Vec<u8> {

@@ -880,7 +880,7 @@ mod tests {
         fields.push((0, 7)); // G1
         fields.push((0, 7)); // B0
         fields.push((0, 7)); // B1
-                             // Alpha endpoints: A0, A1 — 8 bits each.
+        // Alpha endpoints: A0, A1 — 8 bits each.
         fields.push((255, 8));
         fields.push((255, 8));
         // No p-bits.
@@ -926,7 +926,7 @@ mod tests {
         }
         let mut out = vec![0u8; 4 * 4 * 4];
         decode_bc7(&block, 4, 4, &mut out).unwrap();
-        for chunk in out.chunks_exact(4) {
+        for chunk in out.as_chunks::<4>().0.iter() {
             assert_eq!(chunk, &[255, 255, 255, 255]);
         }
     }

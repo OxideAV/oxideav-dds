@@ -92,19 +92,19 @@ impl DecodeOptions {
 
     /// Check the top-level geometry against the dimension / pixel limits.
     pub(crate) fn check_dimensions(&self, width: u32, height: u32) -> Result<()> {
-        if let Some(m) = self.max_width {
-            if width > m {
-                return Err(DdsError::limit(format!(
-                    "DDS: width {width} exceeds max_width {m}"
-                )));
-            }
+        if let Some(m) = self.max_width
+            && width > m
+        {
+            return Err(DdsError::limit(format!(
+                "DDS: width {width} exceeds max_width {m}"
+            )));
         }
-        if let Some(m) = self.max_height {
-            if height > m {
-                return Err(DdsError::limit(format!(
-                    "DDS: height {height} exceeds max_height {m}"
-                )));
-            }
+        if let Some(m) = self.max_height
+            && height > m
+        {
+            return Err(DdsError::limit(format!(
+                "DDS: height {height} exceeds max_height {m}"
+            )));
         }
         if let Some(m) = self.max_pixels {
             let px = width as u64 * height as u64;
@@ -119,12 +119,12 @@ impl DecodeOptions {
 
     /// Check a byte budget against `max_bytes`.
     pub(crate) fn check_bytes(&self, bytes: u64) -> Result<()> {
-        if let Some(m) = self.max_bytes {
-            if bytes > m {
-                return Err(DdsError::limit(format!(
-                    "DDS: decode would allocate {bytes} bytes, exceeding max_bytes {m}"
-                )));
-            }
+        if let Some(m) = self.max_bytes
+            && bytes > m
+        {
+            return Err(DdsError::limit(format!(
+                "DDS: decode would allocate {bytes} bytes, exceeding max_bytes {m}"
+            )));
         }
         Ok(())
     }

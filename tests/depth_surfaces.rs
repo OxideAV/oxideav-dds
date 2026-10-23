@@ -13,14 +13,14 @@
 //! `docs/image/dds/`.
 
 use oxideav_dds::types::{
-    DDPF_FOURCC, DDSD_PIXELFORMAT, DDSD_REQUIRED, DDS_HEADER_SIZE, DDS_MAGIC, DDS_PIXELFORMAT_SIZE,
+    DDPF_FOURCC, DDS_HEADER_SIZE, DDS_MAGIC, DDS_PIXELFORMAT_SIZE, DDSD_PIXELFORMAT, DDSD_REQUIRED,
     FOURCC_DX10,
 };
 use oxideav_dds::{
-    decode_depth_d16_surface, decode_depth_d24s8_surface, decode_depth_d32_surface,
+    SurfaceFormat, decode_depth_d16_surface, decode_depth_d24s8_surface, decode_depth_d32_surface,
     decode_depth_d32s8_surface, decode_depth_r24_unorm_x8_surface,
     decode_depth_r32_float_x8x24_surface, decode_depth_x24_g8_uint_surface,
-    decode_depth_x32_g8x24_uint_surface, parse_dds, SurfaceFormat,
+    decode_depth_x32_g8x24_uint_surface, parse_dds,
 };
 
 const CAPS_TEXTURE: u32 = 0x0000_1000;
@@ -53,7 +53,7 @@ fn build_dx10_dds(dxgi_format: u32, width: u32, height: u32, pixel_data: &[u8]) 
     out.extend_from_slice(&0u32.to_le_bytes()); // caps3
     out.extend_from_slice(&0u32.to_le_bytes()); // caps4
     out.extend_from_slice(&0u32.to_le_bytes()); // reserved2
-                                                // DDS_HEADER_DXT10
+    // DDS_HEADER_DXT10
     out.extend_from_slice(&dxgi_format.to_le_bytes());
     out.extend_from_slice(&3u32.to_le_bytes()); // dimension = 2D
     out.extend_from_slice(&0u32.to_le_bytes()); // misc

@@ -19,10 +19,10 @@
 //! external library source was consulted.
 
 use oxideav_dds::types::{
-    DDPF_FOURCC, DDSCAPS_TEXTURE, DDSD_REQUIRED, DDS_HEADER_SIZE, DDS_MAGIC, DDS_PIXELFORMAT_SIZE,
+    DDPF_FOURCC, DDS_HEADER_SIZE, DDS_MAGIC, DDS_PIXELFORMAT_SIZE, DDSCAPS_TEXTURE, DDSD_REQUIRED,
     FOURCC_GRGB, FOURCC_RGBG, FOURCC_UYVY, FOURCC_YUY2,
 };
-use oxideav_dds::{decode_uyvy_surface, decode_yuy2_surface, parse_dds, SurfaceFormat, YuvFormat};
+use oxideav_dds::{SurfaceFormat, YuvFormat, decode_uyvy_surface, decode_yuy2_surface, parse_dds};
 
 fn build_fourcc_dds(four_cc: u32, w: u32, h: u32, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(4 + DDS_HEADER_SIZE + payload.len());

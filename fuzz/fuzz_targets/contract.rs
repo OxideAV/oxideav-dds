@@ -10,7 +10,9 @@
 //! the `LimitExceeded` paths and the strict-mode checks.
 
 use libfuzzer_sys::fuzz_target;
-use oxideav_dds::{decode, decode_all_with, decode_with, encode, info_with, probe, DecodeOptions, EncodeOptions};
+use oxideav_dds::{
+    DecodeOptions, EncodeOptions, decode, decode_all_with, decode_with, encode, info_with, probe,
+};
 
 fuzz_target!(|data: &[u8]| {
     let Some((&sel, bytes)) = data.split_first() else {

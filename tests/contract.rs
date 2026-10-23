@@ -4,11 +4,12 @@
 //! contract writer and the pre-contract depth writers.
 
 use oxideav_dds::{
-    decode, decode_all, decode_all_with, decode_from, decode_rgb8, decode_rgba8, decode_with,
-    encode, encode_all, encode_dds_astc, encode_dds_block_compressed_from_rgba8,
-    encode_dds_uncompressed, encode_dds_uncompressed_cubemap_array, encode_dds_uncompressed_dx10,
-    encode_rgb8, encode_rgba8, encode_to, info, parse_dds, probe, ColorInfo, CubemapFace, DdsError,
-    DdsFile, DdsImage, DecodeOptions, EncodeOptions, Frame, PixelFormat, Plane, SurfaceFormat,
+    ColorInfo, CubemapFace, DdsError, DdsFile, DdsImage, DecodeOptions, EncodeOptions, Frame,
+    PixelFormat, Plane, SurfaceFormat, decode, decode_all, decode_all_with, decode_from,
+    decode_rgb8, decode_rgba8, decode_with, encode, encode_all, encode_dds_astc,
+    encode_dds_block_compressed_from_rgba8, encode_dds_uncompressed,
+    encode_dds_uncompressed_cubemap_array, encode_dds_uncompressed_dx10, encode_rgb8, encode_rgba8,
+    encode_to, info, parse_dds, probe,
 };
 
 const RED16: &[u8] = include_bytes!("fixtures/red16.dds");
@@ -30,7 +31,7 @@ fn image(w: u32, h: u32, f: PixelFormat, seed: u32) -> DdsImage {
     let mut data = pattern(w as usize * h as usize * f.bytes_per_pixel(), seed);
     if f.is_float() {
         // Finite, in-range floats so the float paths stay exact.
-        for (i, c) in data.chunks_exact_mut(4).enumerate() {
+        for (i, c) in data.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             c.copy_from_slice(&((i % 97) as f32 / 97.0).to_le_bytes());
         }
     }
@@ -75,10 +76,13 @@ fn info_describes_header_only() {
 fn fixtures_decode_to_rgba() {
     let img = decode(RED16).unwrap();
     assert_eq!(img.format, PixelFormat::Rgba);
-    assert!(img
-        .to_rgba8()
-        .chunks_exact(4)
-        .all(|p| p == [255, 0, 0, 255]));
+    assert!(
+        img.to_rgba8()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|p| *p == [255, 0, 0, 255])
+    );
     let rgb = decode_rgb8(GRAD8).unwrap();
     assert_eq!(rgb.data.len(), 8 * 8 * 3);
     assert_eq!(&rgb.data[..3], &[255, 255, 255]);

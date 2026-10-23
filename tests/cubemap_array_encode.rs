@@ -12,8 +12,8 @@
 //! learn.microsoft.com. No external library source consulted.
 
 use oxideav_dds::{
-    encode_dds_uncompressed_cubemap_array, parse_dds, CubemapFace, DdsFile, DdsSurface, DxgiFormat,
-    Plane, SurfaceFormat,
+    CubemapFace, DdsFile, DdsSurface, DxgiFormat, Plane, SurfaceFormat,
+    encode_dds_uncompressed_cubemap_array, parse_dds,
 };
 
 /// Build per-(slice, face, mip) surfaces, each filled with a distinct

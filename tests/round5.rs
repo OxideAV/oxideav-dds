@@ -12,9 +12,9 @@
 //!   fabricated by box-filter downsampling mip 0.
 
 use oxideav_dds::{
-    decode_bc1, decode_bc6h, decode_bc7, encode_bc1, encode_bc6h, encode_bc6h_from_f32, encode_bc7,
-    encode_dds_block_compressed, encode_dds_block_compressed_from_rgba8, encode_dds_uncompressed,
-    parse_dds, CubemapFace, DdsFile, DdsSurface, Plane, SurfaceFormat,
+    CubemapFace, DdsFile, DdsSurface, Plane, SurfaceFormat, decode_bc1, decode_bc6h, decode_bc7,
+    encode_bc1, encode_bc6h, encode_bc6h_from_f32, encode_bc7, encode_dds_block_compressed,
+    encode_dds_block_compressed_from_rgba8, encode_dds_uncompressed, parse_dds,
 };
 
 /// BC7 encoder + decoder roundtrip on a 4×4 solid-white opaque block.
@@ -25,7 +25,7 @@ fn bc7_encode_solid_white_roundtrip() {
     encode_bc7(&input, 4, 4, &mut bc).unwrap();
     let mut decoded = vec![0u8; 4 * 4 * 4];
     decode_bc7(&bc, 4, 4, &mut decoded).unwrap();
-    for chunk in decoded.chunks_exact(4) {
+    for chunk in decoded.as_chunks::<4>().0 {
         assert_eq!(chunk, &[255, 255, 255, 255]);
     }
 }
@@ -50,7 +50,12 @@ fn bc7_encode_8x8_grayscale_gradient_psnr() {
     decode_bc7(&bc, 8, 8, &mut decoded).unwrap();
     let mut sse: u64 = 0;
     let mut count: u64 = 0;
-    for (a, b) in input.chunks_exact(4).zip(decoded.chunks_exact(4)) {
+    for (a, b) in input
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(decoded.as_chunks::<4>().0.iter())
+    {
         for c in 0..3 {
             let d = a[c] as i32 - b[c] as i32;
             sse += (d * d) as u64;
@@ -84,7 +89,7 @@ fn bc6h_encode_solid_block_roundtrip() {
     let mut decoded = vec![0u8; 4 * 4 * 8];
     decode_bc6h(&bc, 4, 4, false, &mut decoded).unwrap();
     // Every pixel should decode close to half(0.5).
-    for chunk in decoded.chunks_exact(8) {
+    for chunk in decoded.as_chunks::<8>().0 {
         let r = u16::from_le_bytes([chunk[0], chunk[1]]);
         // Decoded R should be in the neighborhood of half(0.5)=0x3800.
         // Mode-10 quantisation gives ~10-bit precision; allow a band.
@@ -237,7 +242,7 @@ fn encode_bc1_mipmap_chain_via_block_compressed() {
     // and encode each level to BC1.
     let make_rgba_solid = |w: u32, h: u32| -> Vec<u8> {
         let mut v = vec![0u8; (w * h * 4) as usize];
-        for chunk in v.chunks_exact_mut(4) {
+        for chunk in v.as_chunks_mut::<4>().0 {
             chunk[0] = 0xff;
             chunk[1] = 0xff;
             chunk[2] = 0xff;
@@ -278,7 +283,7 @@ fn encode_bc1_mipmap_chain_via_block_compressed() {
     // Decode mip 0 back to RGBA to confirm round-trip correctness.
     let mut decoded = vec![0u8; 8 * 8 * 4];
     decode_bc1(&parsed.surfaces[0].plane.data, 8, 8, &mut decoded).unwrap();
-    for chunk in decoded.chunks_exact(4) {
+    for chunk in decoded.as_chunks::<4>().0 {
         assert_eq!(chunk, &[255, 255, 255, 255]);
     }
 }
@@ -294,7 +299,7 @@ fn encode_bc7_mipmap_chain_via_block_compressed() {
 
     let make_rgba_solid = |w: u32, h: u32| -> Vec<u8> {
         let mut v = vec![0u8; (w * h * 4) as usize];
-        for chunk in v.chunks_exact_mut(4) {
+        for chunk in v.as_chunks_mut::<4>().0 {
             chunk[0] = 0xff;
             chunk[1] = 0xff;
             chunk[2] = 0xff;
@@ -338,7 +343,7 @@ fn encode_bc7_mipmap_chain_via_block_compressed() {
     // Decode mip 0 back to RGBA.
     let mut decoded = vec![0u8; 8 * 8 * 4];
     decode_bc7(&parsed.surfaces[0].plane.data, 8, 8, &mut decoded).unwrap();
-    for chunk in decoded.chunks_exact(4) {
+    for chunk in decoded.as_chunks::<4>().0 {
         assert_eq!(chunk, &[255, 255, 255, 255]);
     }
 }
@@ -399,7 +404,7 @@ fn encode_bc1_mipmap_chain_from_rgba8() {
     // Decode mip 0 — should reproduce solid white.
     let mut decoded = vec![0u8; (w * h * 4) as usize];
     decode_bc1(&parsed.surfaces[0].plane.data, w, h, &mut decoded).unwrap();
-    for chunk in decoded.chunks_exact(4) {
+    for chunk in decoded.as_chunks::<4>().0 {
         assert_eq!(chunk, &[255, 255, 255, 255]);
     }
 }
@@ -443,7 +448,12 @@ fn encode_bc7_mipmap_chain_from_rgba8() {
     decode_bc7(&parsed.surfaces[0].plane.data, w, h, &mut decoded).unwrap();
     let mut sse: u64 = 0;
     let mut count: u64 = 0;
-    for (a, b) in rgba.chunks_exact(4).zip(decoded.chunks_exact(4)) {
+    for (a, b) in rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(decoded.as_chunks::<4>().0.iter())
+    {
         for c in 0..3 {
             let d = a[c] as i32 - b[c] as i32;
             sse += (d * d) as u64;
@@ -471,7 +481,10 @@ fn encode_bc1_cubemap_from_rgba8() {
     let mut rgba = vec![0u8; (face_count * w * h * 4) as usize];
     for f in 0..face_count {
         let face_off = (f * w * h * 4) as usize;
-        for chunk in rgba[face_off..face_off + (w * h * 4) as usize].chunks_exact_mut(4) {
+        for chunk in rgba[face_off..face_off + (w * h * 4) as usize]
+            .as_chunks_mut::<4>()
+            .0
+        {
             chunk[0] = (f as u8) * 40 + 10;
             chunk[1] = (f as u8) * 40 + 10;
             chunk[2] = (f as u8) * 40 + 10;
@@ -555,11 +568,11 @@ fn encode_bc7_dx10_array_from_rgba8() {
     // Two slices: slice 0 = pure red, slice 1 = pure blue.
     let mut rgba = vec![0u8; (array_size * face_count * w * h * 4) as usize];
     let stride = (w * h * 4) as usize;
-    for chunk in rgba[..stride].chunks_exact_mut(4) {
+    for chunk in rgba[..stride].as_chunks_mut::<4>().0 {
         chunk[0] = 0xff;
         chunk[3] = 0xff;
     }
-    for chunk in rgba[stride..2 * stride].chunks_exact_mut(4) {
+    for chunk in rgba[stride..2 * stride].as_chunks_mut::<4>().0 {
         chunk[2] = 0xff;
         chunk[3] = 0xff;
     }

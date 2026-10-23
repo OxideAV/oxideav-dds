@@ -44,7 +44,7 @@
 // clippy's preference for iterator-style code in this module.
 #![allow(clippy::needless_range_loop)]
 
-use crate::bc6h::{half_to_f32, mode_info, FieldBit, ModeInfo, ANCHOR_2_SUBSET_2, PART_2};
+use crate::bc6h::{ANCHOR_2_SUBSET_2, FieldBit, ModeInfo, PART_2, half_to_f32, mode_info};
 use crate::error::{DdsError, Result};
 
 /// Convert a positive `f32` to a finite IEEE-754 binary16 value (unsigned
@@ -1186,33 +1186,33 @@ fn encode_bc6h_block(pixels: &[[u16; 3]; 16]) -> [u8; 16] {
     let (mut best_block, mut best_sse) = encode_mode10(pixels);
 
     // Try delta-encoded 1-subset modes 11, 12, 13.
-    if let Some((b, sse)) = encode_mode_delta_1subset(pixels, 11, 0b00111, 10, 9) {
-        if sse < best_sse {
-            best_sse = sse;
-            best_block = b;
-        }
+    if let Some((b, sse)) = encode_mode_delta_1subset(pixels, 11, 0b00111, 10, 9)
+        && sse < best_sse
+    {
+        best_sse = sse;
+        best_block = b;
     }
-    if let Some((b, sse)) = encode_mode_delta_1subset(pixels, 12, 0b01011, 12, 8) {
-        if sse < best_sse {
-            best_sse = sse;
-            best_block = b;
-        }
+    if let Some((b, sse)) = encode_mode_delta_1subset(pixels, 12, 0b01011, 12, 8)
+        && sse < best_sse
+    {
+        best_sse = sse;
+        best_block = b;
     }
-    if let Some((b, sse)) = encode_mode_delta_1subset(pixels, 13, 0b01111, 16, 4) {
-        if sse < best_sse {
-            best_sse = sse;
-            best_block = b;
-        }
+    if let Some((b, sse)) = encode_mode_delta_1subset(pixels, 13, 0b01111, 16, 4)
+        && sse < best_sse
+    {
+        best_sse = sse;
+        best_block = b;
     }
 
     // Try 2-subset modes 0..9 across the 32-partition table.
     for spec in TWO_SUBSET_MODES {
         for partition in 0..32u32 {
-            if let Some((b, sse)) = try_2subset(pixels, spec, partition) {
-                if sse < best_sse {
-                    best_sse = sse;
-                    best_block = b;
-                }
+            if let Some((b, sse)) = try_2subset(pixels, spec, partition)
+                && sse < best_sse
+            {
+                best_sse = sse;
+                best_block = b;
             }
         }
     }
@@ -1354,11 +1354,7 @@ fn unquantize_sf16(comp: i32, bits: u32) -> i32 {
         ((c << 15) + 0x4000) >> (bits - 1)
     };
     c = unq;
-    if s {
-        -c
-    } else {
-        c
-    }
+    if s { -c } else { c }
 }
 
 #[inline]
@@ -1377,11 +1373,7 @@ fn finish_sf16(comp: i32) -> u16 {
 fn half_sf16_to_signed_magnitude(half_bits: u16) -> i32 {
     let s = (half_bits >> 15) & 1;
     let mag = (half_bits & 0x7fff) as i32;
-    if s == 1 {
-        -mag
-    } else {
-        mag
-    }
+    if s == 1 { -mag } else { mag }
 }
 
 /// Convert a signed magnitude back to a sign-magnitude half-float.
@@ -2017,33 +2009,33 @@ fn encode_bc6h_block_sf16(pixels: &[[u16; 3]; 16]) -> [u8; 16] {
     let (mut best_block, mut best_sse) = encode_mode10_signed(pixels);
 
     // Try delta-encoded 1-subset modes 11, 12, 13.
-    if let Some((b, sse)) = encode_mode_delta_1subset_signed(pixels, 11, 0b00111, 10, 9) {
-        if sse < best_sse {
-            best_sse = sse;
-            best_block = b;
-        }
+    if let Some((b, sse)) = encode_mode_delta_1subset_signed(pixels, 11, 0b00111, 10, 9)
+        && sse < best_sse
+    {
+        best_sse = sse;
+        best_block = b;
     }
-    if let Some((b, sse)) = encode_mode_delta_1subset_signed(pixels, 12, 0b01011, 12, 8) {
-        if sse < best_sse {
-            best_sse = sse;
-            best_block = b;
-        }
+    if let Some((b, sse)) = encode_mode_delta_1subset_signed(pixels, 12, 0b01011, 12, 8)
+        && sse < best_sse
+    {
+        best_sse = sse;
+        best_block = b;
     }
-    if let Some((b, sse)) = encode_mode_delta_1subset_signed(pixels, 13, 0b01111, 16, 4) {
-        if sse < best_sse {
-            best_sse = sse;
-            best_block = b;
-        }
+    if let Some((b, sse)) = encode_mode_delta_1subset_signed(pixels, 13, 0b01111, 16, 4)
+        && sse < best_sse
+    {
+        best_sse = sse;
+        best_block = b;
     }
 
     // Try 2-subset modes 0..9 across the 32-partition table.
     for spec in TWO_SUBSET_MODES {
         for partition in 0..32u32 {
-            if let Some((b, sse)) = try_2subset_signed(pixels, spec, partition) {
-                if sse < best_sse {
-                    best_sse = sse;
-                    best_block = b;
-                }
+            if let Some((b, sse)) = try_2subset_signed(pixels, spec, partition)
+                && sse < best_sse
+            {
+                best_sse = sse;
+                best_block = b;
             }
         }
     }

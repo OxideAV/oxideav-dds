@@ -8,11 +8,11 @@
 //! matches the source byte-for-byte.
 
 use oxideav_dds::types::{
-    DDPF_ALPHA, DDPF_ALPHAPIXELS, DDPF_FOURCC, DDPF_LUMINANCE, DDPF_RGB, DDSD_REQUIRED,
-    DDS_HEADER_SIZE, DDS_MAGIC, DDS_PIXELFORMAT_SIZE, FOURCC_BC4U, FOURCC_BC5U, FOURCC_DX10,
+    DDPF_ALPHA, DDPF_ALPHAPIXELS, DDPF_FOURCC, DDPF_LUMINANCE, DDPF_RGB, DDS_HEADER_SIZE,
+    DDS_MAGIC, DDS_PIXELFORMAT_SIZE, DDSD_REQUIRED, FOURCC_BC4U, FOURCC_BC5U, FOURCC_DX10,
     FOURCC_DXT1, FOURCC_DXT3, FOURCC_DXT5,
 };
-use oxideav_dds::{encode_dds_uncompressed, parse_dds, DdsFile, DxgiFormat, Plane, SurfaceFormat};
+use oxideav_dds::{DdsFile, DxgiFormat, Plane, SurfaceFormat, encode_dds_uncompressed, parse_dds};
 
 fn make_plane(pix: SurfaceFormat, w: u32, h: u32) -> Plane {
     let bpp = pix.bytes_per_pixel().expect("uncompressed only") as usize;
@@ -207,7 +207,7 @@ fn build_fourcc_dds(four_cc: u32, w: u32, h: u32, block_bytes: u32) -> Vec<u8> {
     out.extend_from_slice(&0u32.to_le_bytes()); // g_bit_mask
     out.extend_from_slice(&0u32.to_le_bytes()); // b_bit_mask
     out.extend_from_slice(&0u32.to_le_bytes()); // a_bit_mask
-                                                // caps + caps2..4 + reserved2 (5 × u32)
+    // caps + caps2..4 + reserved2 (5 × u32)
     out.extend_from_slice(&0x1000u32.to_le_bytes()); // DDSCAPS_TEXTURE
     out.extend_from_slice(&0u32.to_le_bytes());
     out.extend_from_slice(&0u32.to_le_bytes());
