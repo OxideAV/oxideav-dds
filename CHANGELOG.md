@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.8](https://github.com/OxideAV/oxideav-dds/compare/v0.0.7...v0.0.8) - 2026-11-07
+
+### Other
+
+- API hygiene: non_exhaustive DxgiFormat / YuvFormat / YuvSampling
+
 ### Changed
 
 - API hygiene: `DxgiFormat`, `YuvFormat` and `YuvSampling` are now `#[non_exhaustive]` so new formats can be added without a breaking change. The on-disk header mirrors (`DdsHeader`, `DdsPixelFormatHeader`, `DdsHeaderDxt10`) and `CubemapFace` stay exhaustive because their layout is fixed by the file format.
