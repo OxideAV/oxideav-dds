@@ -277,6 +277,7 @@ pub struct DdsHeaderDxt10 {
 /// `Unknown(u32)` value via [`DxgiFormat::from_u32`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
+#[non_exhaustive]
 #[allow(missing_docs)]
 pub enum DxgiFormat {
     /// `DXGI_FORMAT_UNKNOWN` (0) when the raw value is 0; otherwise
